@@ -11,6 +11,13 @@ The system currently supports four metadata fields:
 - **`location`** - Location/area (e.g., "manhattan", "downtown", "warehouse-a")
 - **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "egocentric", "general") — flows through S3 metadata only (not stored in VastDB)
 
+**Structured VLM output (stored in VastDB per segment):**
+
+- **`vlm_structured`** - JSON string with objects, actions, events, hazards
+- **`dense_caption`** - Short canonical text used for vector embedding (search index)
+- **`reasoning_content`** - Human-readable narrative for UI display
+- **`structured_parse_ok`** - Whether JSON parsing succeeded for this segment
+
 **Timeline and grouping (stored in VastDB per segment):**
 
 - **`segment_start_sec`** / **`segment_end_sec`** - Position within the parent video (seconds from start)

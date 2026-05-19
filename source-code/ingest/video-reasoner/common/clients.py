@@ -19,6 +19,7 @@ except ImportError:
     logging.warning("opencv-python not available. Nemotron frame extraction will fail.")
 
 from .prompts import get_prompt_for_scenario
+from .structured_output import process_vlm_response, wrap_prompt_with_structured_output
 
 
 def _safe_non_negative_int(value: Any) -> int:
@@ -224,9 +225,10 @@ class CosmosReasoningClient:
             scenario: Optional scenario name (overrides settings default, ignored if prompt is provided)
         """
         if prompt is None:
-            # Use scenario from parameter, or fall back to settings default
             scenario_to_use = scenario if scenario else self.settings.scenario
             prompt = get_prompt_for_scenario(scenario_to_use)
+        else:
+            prompt = wrap_prompt_with_structured_output(prompt)
         
         with self.tracer.start_as_current_span("Complete Video Analysis (Cosmos)") as span:
             scenario_used = scenario if scenario else self.settings.scenario
@@ -243,19 +245,25 @@ class CosmosReasoningClient:
             
             # Send base64-encoded video directly to API (no SFTP upload)
             reasoning_result = self.get_cosmos_reasoning(video_content, prompt)
+            structured = process_vlm_response(reasoning_result["reasoning_content"])
             
             result = {
                 "filename": filename,
-                "reasoning_content": reasoning_result["reasoning_content"],
+                "reasoning_content": structured["reasoning_content"],
+                "dense_caption": structured["dense_caption"],
+                "vlm_structured": structured["vlm_structured"],
+                "structured_parse_ok": structured["structured_parse_ok"],
                 "cosmos_model": reasoning_result["cosmos_model"],
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),
                 "processing_time": reasoning_result["processing_time"],
-                "video_url": ""  # Not used for hosted API, kept for backward compatibility
+                "video_url": "",
             }
 
             span.set_attributes({
                 "reasoning_content_length": len(result["reasoning_content"]),
+                "dense_caption_length": len(result["dense_caption"]),
+                "structured_parse_ok": result["structured_parse_ok"],
                 "total_tokens": result["tokens_used"],
                 "cached_prompt_tokens": result["cached_prompt_tokens"],
                 "total_processing_time": result["processing_time"]
@@ -511,9 +519,10 @@ class NemotronReasoningClient:
             scenario: Optional scenario name (overrides settings default, ignored if prompt is provided)
         """
         if prompt is None:
-            # Use scenario from parameter, or fall back to settings default
             scenario_to_use = scenario if scenario else self.settings.scenario
             prompt = get_prompt_for_scenario(scenario_to_use)
+        else:
+            prompt = wrap_prompt_with_structured_output(prompt)
         
         with self.tracer.start_as_current_span("Complete Video Analysis (Nemotron)") as span:
             scenario_used = scenario if scenario else self.settings.scenario
@@ -530,19 +539,25 @@ class NemotronReasoningClient:
                 raise ValueError(f"Video too large: {len(video_content)} > {max_size_bytes} bytes")
             
             reasoning_result = self.get_nemotron_reasoning(video_content, prompt)
+            structured = process_vlm_response(reasoning_result["reasoning_content"])
             
             result = {
                 "filename": filename,
-                "reasoning_content": reasoning_result["reasoning_content"],
+                "reasoning_content": structured["reasoning_content"],
+                "dense_caption": structured["dense_caption"],
+                "vlm_structured": structured["vlm_structured"],
+                "structured_parse_ok": structured["structured_parse_ok"],
                 "cosmos_model": reasoning_result["cosmos_model"],
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),
                 "processing_time": reasoning_result["processing_time"],
-                "video_url": "",  # Not used for Nemotron
+                "video_url": "",
             }
 
             span.set_attributes({
                 "reasoning_content_length": len(result["reasoning_content"]),
+                "dense_caption_length": len(result["dense_caption"]),
+                "structured_parse_ok": result["structured_parse_ok"],
                 "total_tokens": result["tokens_used"],
                 "cached_prompt_tokens": result["cached_prompt_tokens"],
                 "total_processing_time": result["processing_time"]

@@ -11,6 +11,9 @@ class VideoSearchResult(BaseModel):
     filename: str
     source: str
     reasoning_content: str
+    dense_caption: Optional[str] = None
+    vlm_structured: Optional[str] = None
+    structured_parse_ok: Optional[bool] = None
     video_url: str
     is_public: bool
     upload_timestamp: datetime

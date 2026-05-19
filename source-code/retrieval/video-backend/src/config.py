@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     embedding_host: str = Field(..., description="NVIDIA NIM embedding host")
     embedding_port: int = Field(default=80, description="NVIDIA NIM embedding port")
     embedding_http_scheme: str = Field(default="http", description="HTTP scheme")
-    embedding_model: str = Field(default="nvidia/nv-embedqa-e5-v5", description="Embedding model")
-    embedding_dimensions: int = Field(default=1024, description="Embedding dimensions")
+    embedding_model: str = Field(
+        default="nvidia/llama-3.2-nv-embedqa-1b-v2",
+        description="Embedding model",
+    )
+    embedding_dimensions: int = Field(default=2048, description="Embedding dimensions")
     nvidia_api_key: Optional[str] = Field(default="", description="NVIDIA API key (for cloud)")
     embedding_local_nim: bool = Field(default=False, description="True = use local NIM (embedding_host/port), False = NVIDIA Cloud")
     

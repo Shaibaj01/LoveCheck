@@ -56,6 +56,9 @@ class VideoReasoningResult(BaseModel):
     source: str
     filename: str
     reasoning_content: str
+    dense_caption: str = ""
+    vlm_structured: str = ""
+    structured_parse_ok: bool = False
     cosmos_model: str = ""  # For backward compatibility, also used for nemotron_model
     tokens_used: int
     processing_time: float

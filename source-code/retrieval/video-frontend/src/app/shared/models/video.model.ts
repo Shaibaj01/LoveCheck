@@ -2,6 +2,9 @@ export interface VideoSearchResult {
   filename: string;
   source: string;
   reasoning_content: string;
+  dense_caption?: string;
+  vlm_structured?: string;
+  structured_parse_ok?: boolean;
   video_url: string;
   is_public: boolean;
   upload_timestamp: string;

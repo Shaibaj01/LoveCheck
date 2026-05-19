@@ -49,6 +49,9 @@ class VastDBClient:
             ("segment_start_sec", pa.float64()),
             ("segment_end_sec", pa.float64()),
             ("reasoning_content", pa.utf8()),
+            ("dense_caption", pa.utf8()),
+            ("vlm_structured", pa.string()),
+            ("structured_parse_ok", pa.bool_()),
             ("vectors", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.settings.embeddingdimensions)),
             ("cosmos_model", pa.utf8()),
             ("embedding_model", pa.utf8()),
@@ -120,9 +123,12 @@ class VastDBClient:
             source = embedding_event.get("source", "")
             filename = embedding_event.get("filename", "")
             reasoning_content = embedding_event.get("reasoning_content", "")
+            dense_caption = (embedding_event.get("dense_caption") or "").strip()
+            vlm_structured = embedding_event.get("vlm_structured", "") or ""
+            structured_parse_ok = bool(embedding_event.get("structured_parse_ok", False))
             embedding = embedding_event.get("embedding", [])
             
-            if not reasoning_content:
+            if not reasoning_content and not dense_caption:
                 return True
             
             if not embedding:
@@ -197,6 +203,9 @@ class VastDBClient:
                 "segment_start_sec": segment_start_sec,
                 "segment_end_sec": segment_end_sec,
                 "reasoning_content": reasoning_content,
+                "dense_caption": dense_caption or reasoning_content,
+                "vlm_structured": vlm_structured if isinstance(vlm_structured, str) else str(vlm_structured),
+                "structured_parse_ok": structured_parse_ok,
                 "vectors": embedding,
                 "cosmos_model": embedding_event.get("cosmos_model", ""),
                 "embedding_model": embedding_event.get("embedding_model", ""),

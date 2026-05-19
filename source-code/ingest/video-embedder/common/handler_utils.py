@@ -15,30 +15,30 @@ def parse_reasoning_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
     logging.info(f"[PARSER] Parsing reasoning event: {event_data}")
     
     # Validate required fields
-    required_fields = ["source", "filename", "reasoning_content"]
+    required_fields = ["source", "filename"]
     for field in required_fields:
         if field not in event_data:
             raise ValueError(f"Missing required field '{field}' in reasoning event")
+
+    dense = (event_data.get("dense_caption") or "").strip()
+    reasoning = (event_data.get("reasoning_content") or "").strip()
+    if not dense and not reasoning:
+        raise ValueError("Missing dense_caption or reasoning_content in reasoning event")
     
-    logging.info(f"[PARSER] Parsed reasoning event - filename: {event_data['filename']}, content_length: {len(event_data.get('reasoning_content', ''))}")
+    logging.info(
+        f"[PARSER] Parsed reasoning event - filename: {event_data['filename']}, "
+        f"dense_caption={len(dense)} chars, reasoning={len(reasoning)} chars"
+    )
     
     return event_data
 
 
-def validate_reasoning_content(reasoning_content: str) -> bool:
-    """
-    Validate reasoning content is not empty
-    
-    Args:
-        reasoning_content: The reasoning text
-    
-    Returns:
-        True if valid, False otherwise
-    """
-    if not reasoning_content or len(reasoning_content.strip()) == 0:
-        logging.warning("[VALIDATOR] Reasoning content is empty")
+def validate_embed_text(dense_caption: str, reasoning_content: str) -> bool:
+    """Validate text available for embedding (prefer dense_caption)."""
+    text = (dense_caption or "").strip() or (reasoning_content or "").strip()
+    if not text:
+        logging.warning("[VALIDATOR] No dense_caption or reasoning_content to embed")
         return False
-    
-    logging.info(f"[VALIDATOR] Reasoning content is valid ({len(reasoning_content)} characters)")
+    logging.info(f"[VALIDATOR] Embed text valid ({len(text)} characters)")
     return True
 

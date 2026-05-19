@@ -83,6 +83,9 @@ async def search_videos(
                 results_dict = [
                     {
                         "summary": r.reasoning_content,
+                        "dense_caption": r.dense_caption,
+                        "vlm_structured": r.vlm_structured,
+                        "structured_parse_ok": r.structured_parse_ok,
                         "source": r.source,
                         "filename": r.filename,
                         "original_video": r.original_video,

@@ -29,8 +29,10 @@ class EmbeddingClient:
         payload = {
             "model": self.model,
             "input": texts,
-            "input_type": "passage"  # Use "passage" for documents, "query" for search queries
+            "input_type": "passage",  # Use "passage" for documents, "query" for search queries
         }
+        if self.dimensions:
+            payload["dimensions"] = self.dimensions
 
         logging.info(f"[EMBEDDING] Requesting embeddings for {len(texts)} texts using {'NVIDIA Cloud' if self.is_cloud else 'hosted NIM'}")
         

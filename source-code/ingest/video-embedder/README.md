@@ -17,7 +17,7 @@ Configure in `ingest/vss-video-ingest-secret-template.yaml`:
 |---------|-------------|
 | **`embedding_local_nim`** | `true` = local NIM (no API key), `false` = NVIDIA Cloud (sends API key) |
 | **`embeddinghost`** / **`embeddingport`** / **`embeddinghttpscheme`** | Endpoint to use (always required) |
-| **`embeddingmodel`** | Embedding model name (e.g., `nvidia/nv-embedqa-e5-v5`) |
+| **`embeddingmodel`** | Embedding model name (e.g., `nvidia/llama-3.2-nv-embedqa-1b-v2`) |
 | **`embeddingdimensions`** | Vector dimensions (must match model output) |
 | **`nvidia_api_key`** | Required when `embedding_local_nim: false` (NVIDIA Cloud) |
 

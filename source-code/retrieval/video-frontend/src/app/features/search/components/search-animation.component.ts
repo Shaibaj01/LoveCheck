@@ -18,7 +18,7 @@ import { MatIconModule } from '@angular/material/icon';
           <div class="phase-content">
             <h3>Generating Embedding</h3>
             <p>Converting query to vector using NVIDIA NIM</p>
-            <div class="model-info">Model: nvidia/nv-embedqa-e5-v5 (1024 dims)</div>
+            <div class="model-info">Model: nvidia/llama-3.2-nv-embedqa-1b-v2 (2048 dims)</div>
             @if (phase === 'embedding') {
               <div class="loader">
                 <div class="dot"></div>

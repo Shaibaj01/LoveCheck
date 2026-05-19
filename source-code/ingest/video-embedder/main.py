@@ -3,7 +3,7 @@ from vast_runtime.vast_event import VastEvent  # type: ignore
 
 from common.models import Settings, ReasoningEvent, EmbeddingResult
 from common.embedding_client import EmbeddingClient
-from common.handler_utils import parse_reasoning_event, validate_reasoning_content
+from common.handler_utils import parse_reasoning_event, validate_embed_text
 
 
 def init(ctx):
@@ -29,6 +29,10 @@ def handler(ctx, event: VastEvent):
                 source = reasoning_event.get("source", "")
                 filename = reasoning_event.get("filename", "")
                 reasoning_content = reasoning_event.get("reasoning_content", "")
+                dense_caption = reasoning_event.get("dense_caption", "")
+                vlm_structured = reasoning_event.get("vlm_structured", "")
+                structured_parse_ok = reasoning_event.get("structured_parse_ok", False)
+                text_to_embed = (dense_caption or "").strip() or reasoning_content
                 cosmos_model = reasoning_event.get("cosmos_model", "")
                 tokens_used = reasoning_event.get("tokens_used", 0)
                 cached_prompt_tokens = reasoning_event.get("cached_prompt_tokens", 0)
@@ -55,7 +59,10 @@ def handler(ctx, event: VastEvent):
                 
                 allowed_users_count = len(allowed_users.split(",")) if allowed_users else 0
                 
-                ctx.logger.info(f"[INPUT] {filename} | segment {segment_number}/{total_segments} | reasoning={len(reasoning_content)} chars")
+                ctx.logger.info(
+                    f"[INPUT] {filename} | segment {segment_number}/{total_segments} | "
+                    f"embed_text={len(text_to_embed)} chars | structured_ok={structured_parse_ok}"
+                )
                 
                 parse_span.set_attributes({
                     "source": source,
@@ -79,16 +86,16 @@ def handler(ctx, event: VastEvent):
                 })
 
             with ctx.tracer.start_as_current_span("Content Validation") as validation_span:
-                if not validate_reasoning_content(reasoning_content):
+                if not validate_embed_text(dense_caption, reasoning_content):
                     validation_span.set_attributes({"valid": False})
-                    ctx.logger.info(f"[SKIP] {filename} | no reasoning content to embed")
-                    return {"status": "skipped", "reason": "No reasoning content"}
+                    ctx.logger.info(f"[SKIP] {filename} | no text to embed")
+                    return {"status": "skipped", "reason": "No embed text"}
                 
                 validation_span.set_attributes({"valid": True})
 
             with ctx.tracer.start_as_current_span("Embedding Generation") as embed_span:
                 ctx.logger.info(f"[EMBED] Generating embedding via {ctx.settings.embeddingmodel}")
-                embeddings = ctx.embedding_client.get_embeddings([reasoning_content])
+                embeddings = ctx.embedding_client.get_embeddings([text_to_embed])
                 embedding = embeddings[0] if embeddings else []
                 
                 if not embedding:
@@ -105,6 +112,9 @@ def handler(ctx, event: VastEvent):
                 "source": source,
                 "filename": filename,
                 "reasoning_content": reasoning_content,
+                "dense_caption": dense_caption or text_to_embed,
+                "vlm_structured": vlm_structured,
+                "structured_parse_ok": structured_parse_ok,
                 "embedding": embedding,
                 "embedding_model": ctx.settings.embeddingmodel,
                 "embedding_dimensions": len(embedding),

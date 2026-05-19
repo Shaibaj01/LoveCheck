@@ -11,17 +11,16 @@ from src.config import get_settings
 
 
 # Fallback system prompt (only used if frontend doesn't send one)
-DEFAULT_SYSTEM_PROMPT = """Role: You are a witty, sharp-eyed Video Analyst. Your primary goal is to answer the user's specific question accurately using the video data.
+DEFAULT_SYSTEM_PROMPT = """Role: Video analyst answering from retrieved segment evidence only.
 
-The Rules:
+Rules:
+- Use only facts present in the segment summaries and structured JSON. If evidence is insufficient, say so clearly.
+- Cite in-video time using the provided segment time range (e.g. 1:25–1:30 in video) when referencing events.
+- Direct answer first, then brief supporting detail.
+- Do not invent objects, people, actions, or timestamps that are not in the evidence.
+- If segments conflict, note the uncertainty.
 
-Use Relevant Emojis to make the answer more user-friendly.
-
-Direct Answer First: Start immediately with a clear, direct answer to the user's question. No fluff. add a timestamp.
-
-Human Commentary: Be opinionated but brief. If a driver is being aggressive or a logo is distinct, call it out. ALWAYS !
-
-TL;DR: One punchy sentence which is addressing the user query simply and right away."""
+You may use a concise, readable tone, but accuracy and grounding take priority over style."""
 
 
 class LLMService:
@@ -91,10 +90,10 @@ class LLMService:
         # Custom system prompt from frontend is the single source of synthesis style/rules.
         user_message = f"""User Query: {query}
 
-Video Segment Summaries:
+Video Segment Evidence (summaries and structured JSON when available):
 {summaries_text}
 
-Please synthesize this information to answer the user's query."""
+Answer using only this evidence. Cite in-video times when relevant."""
         
         try:
             # Call NVIDIA API with the effective system prompt
@@ -173,6 +172,8 @@ Please synthesize this information to answer the user's query."""
         formatted = []
         for i, result in enumerate(results, 1):
             summary = result.get("summary", "No summary available")
+            structured = (result.get("vlm_structured") or "").strip()
+            dense = (result.get("dense_caption") or "").strip()
             original_video = result.get("original_video", "Unknown video")
             parent_label = self._parent_video_label(original_video)
             segment_num = result.get("segment_number", "?")
@@ -203,7 +204,12 @@ Please synthesize this information to answer the user's query."""
                 f"Segment {i}: {parent_label} (segment {segment_num}/{total_segments}, {video_time}) "
                 f"[match: {score:.1%}] | Uploaded: {ts_str}"
             )
-            formatted.append(f"{header}\n{summary}")
+            body_parts = [summary]
+            if dense and dense != summary:
+                body_parts.append(f"Dense caption: {dense}")
+            if structured:
+                body_parts.append(f"Structured JSON: {structured}")
+            formatted.append(f"{header}\n" + "\n".join(body_parts))
         return "\n\n".join(formatted)
     
     def _call_llm_api(self, user_message: str, system_prompt: Optional[str] = None) -> Dict:

@@ -73,8 +73,10 @@ class EmbeddingService:
                 "input": texts,
                 "model": self.model,
                 "encoding_format": "float",
-                "input_type": input_type  # Required for asymmetric models
+                "input_type": input_type,  # Required for asymmetric models
             }
+            if self.dimensions:
+                payload["dimensions"] = self.dimensions
             
             logger.debug(f"Requesting embeddings for {len(texts)} texts")
             logger.debug(f"URL: {self.embedding_url}")
