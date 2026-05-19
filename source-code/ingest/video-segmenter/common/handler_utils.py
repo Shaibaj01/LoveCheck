@@ -69,7 +69,10 @@ def prepare_metadata(
     segment_number: int,
     total_segments: int,
     duration: float,
-    original_filename: str
+    parent_video_source: str,
+    segment_start_sec: float,
+    segment_end_sec: float,
+    segment_step_sec: float,
 ) -> Dict[str, str]:
     """Prepare metadata for a video segment, preserving original S3 metadata."""
     metadata = {}
@@ -80,7 +83,11 @@ def prepare_metadata(
     metadata["segment_number"] = str(segment_number)
     metadata["total_segments"] = str(total_segments)
     metadata["segment_duration"] = f"{duration:.2f}"
-    metadata["original_video"] = original_filename
+    # Canonical parent video key for grouping (full S3 URI of source upload)
+    metadata["original_video"] = parent_video_source
+    metadata["segment_start_sec"] = f"{segment_start_sec:.3f}"
+    metadata["segment_end_sec"] = f"{segment_end_sec:.3f}"
+    metadata["segment_step_sec"] = f"{segment_step_sec:.3f}"
     metadata["segment_type"] = "video_segment"
     
     return metadata

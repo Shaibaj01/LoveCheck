@@ -8,6 +8,8 @@ export interface VideoSearchResult {
   duration: number;
   segment_number: number;
   total_segments: number;
+  segment_start_sec: number;
+  segment_end_sec: number;
   original_video: string;
   tags: string[];
   similarity_score: number;

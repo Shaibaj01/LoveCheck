@@ -104,7 +104,10 @@ Please synthesize this information to answer the user's query."""
             
             # Extract segment names for reference
             segment_names = [
-                f"{r.get('original_video', 'Unknown')} (segment {r.get('segment_number', '?')})"
+                f"{self._parent_video_label(r.get('original_video', 'Unknown'))} "
+                f"(segment {r.get('segment_number', '?')}, "
+                f"{self._format_media_time(r.get('segment_start_sec'))}–"
+                f"{self._format_media_time(r.get('segment_end_sec'))})"
                 for r in top_results[:top_n]
             ]
             
@@ -125,7 +128,10 @@ Please synthesize this information to answer the user's query."""
             
             # Extract segment names even on error
             segment_names = [
-                f"{r.get('original_video', 'Unknown')} (segment {r.get('segment_number', '?')})"
+                f"{self._parent_video_label(r.get('original_video', 'Unknown'))} "
+                f"(segment {r.get('segment_number', '?')}, "
+                f"{self._format_media_time(r.get('segment_start_sec'))}–"
+                f"{self._format_media_time(r.get('segment_end_sec'))})"
                 for r in top_results[:top_n]
             ]
             
@@ -139,16 +145,48 @@ Please synthesize this information to answer the user's query."""
                 "error": error_msg
             }
     
+    @staticmethod
+    def _format_media_time(seconds: float) -> str:
+        """Format seconds as M:SS or H:MM:SS for in-video timeline references."""
+        if seconds is None:
+            return "?"
+        try:
+            total = int(float(seconds))
+        except (TypeError, ValueError):
+            return "?"
+        if total < 0:
+            return "?"
+        minutes, secs = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes}:{secs:02d}"
+
+    @staticmethod
+    def _parent_video_label(original_video: str) -> str:
+        if original_video.startswith("s3://"):
+            return original_video.rsplit("/", 1)[-1]
+        return original_video
+
     def _format_summaries(self, results: List[Dict]) -> str:
         """Format video summaries for LLM input with timestamps and segment information so the LLM can reference real times."""
         formatted = []
         for i, result in enumerate(results, 1):
             summary = result.get("summary", "No summary available")
             original_video = result.get("original_video", "Unknown video")
+            parent_label = self._parent_video_label(original_video)
             segment_num = result.get("segment_number", "?")
             total_segments = result.get("total_segments", "?")
             filename = result.get("filename", result.get("source", "Unknown").split('/')[-1])
             score = result.get("similarity_score", 0)
+            start_sec = result.get("segment_start_sec")
+            end_sec = result.get("segment_end_sec")
+            if start_sec is not None and end_sec is not None:
+                video_time = (
+                    f"{self._format_media_time(start_sec)}–{self._format_media_time(end_sec)} in video"
+                )
+            else:
+                video_time = "unknown position in video"
             # Human-readable timestamp so the LLM can say "At 14:32" or "22 Feb 2025 14:32"
             upload_ts = result.get("upload_timestamp")
             if upload_ts is not None:
@@ -162,8 +200,8 @@ Please synthesize this information to answer the user's query."""
             else:
                 ts_str = "?"
             header = (
-                f"Segment {i}: {original_video} (segment {segment_num}/{total_segments}) "
-                f"[match: {score:.1%}] | Timestamp: {ts_str}"
+                f"Segment {i}: {parent_label} (segment {segment_num}/{total_segments}, {video_time}) "
+                f"[match: {score:.1%}] | Uploaded: {ts_str}"
             )
             formatted.append(f"{header}\n{summary}")
         return "\n\n".join(formatted)

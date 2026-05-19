@@ -93,6 +93,9 @@ def handler(ctx, event: VastEvent):
                     segment_number_str = s3_metadata.get("segment_number", "0")
                     total_segments_str = s3_metadata.get("total_segments", "1")
                     segment_duration_str = s3_metadata.get("segment_duration", "5.0")
+                    segment_start_str = s3_metadata.get("segment_start_sec", "")
+                    segment_end_str = s3_metadata.get("segment_end_sec", "")
+                    segment_step_str = s3_metadata.get("segment_step_sec", "5.0")
                     original_video = s3_metadata.get("original_video", filename)
                     
                     camera_id = s3_metadata.get("camera-id", "")
@@ -111,6 +114,14 @@ def handler(ctx, event: VastEvent):
                     segment_number = int(segment_number_str) if segment_number_str else 0
                     total_segments = int(total_segments_str) if total_segments_str else 1
                     segment_duration = float(segment_duration_str) if segment_duration_str else 5.0
+                    segment_step_sec = float(segment_step_str) if segment_step_str else 5.0
+                    if segment_start_str and segment_end_str:
+                        segment_start_sec = float(segment_start_str)
+                        segment_end_sec = float(segment_end_str)
+                    else:
+                        sn = segment_number if segment_number > 0 else 1
+                        segment_start_sec = (sn - 1) * segment_step_sec
+                        segment_end_sec = segment_start_sec + segment_duration
                     
                     prompt_info = f"custom_prompt=set ({len(custom_prompt)} chars)" if custom_prompt else f"scenario={scenario}"
                     ctx.logger.info(f"[METADATA] segment {segment_number}/{total_segments} | camera={camera_id or 'none'} | type={capture_type or 'none'} | area={location or 'none'} | {prompt_info}")
@@ -135,6 +146,9 @@ def handler(ctx, event: VastEvent):
                     segment_number = 0
                     total_segments = 1
                     segment_duration = 5.0
+                    segment_start_sec = 0.0
+                    segment_end_sec = 5.0
+                    segment_step_sec = 5.0
                     original_video = filename
                     camera_id = ""
                     capture_type = ""
@@ -203,6 +217,9 @@ def handler(ctx, event: VastEvent):
                 "segment_number": segment_number,
                 "total_segments": total_segments,
                 "segment_duration": segment_duration,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_step_sec": segment_step_sec,
                 "original_video": original_video,
                 "camera_id": camera_id,
                 "capture_type": capture_type,

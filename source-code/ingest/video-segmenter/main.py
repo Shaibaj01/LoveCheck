@@ -118,7 +118,14 @@ def handler(ctx, event: VastEvent):
                 
                 segment_key = get_segment_key(original_filename, segment_number, total_segments)
                 segment_metadata = prepare_metadata(
-                    original_metadata, segment_number, total_segments, duration, original_filename
+                    original_metadata,
+                    segment_number,
+                    total_segments,
+                    duration,
+                    source,
+                    start_time,
+                    end_time,
+                    float(ctx.processor.segment_duration),
                 )
                 
                 if is_public and not allowed_users:
@@ -149,7 +156,7 @@ def handler(ctx, event: VastEvent):
 
             result = {
                 "source": source,
-                "original_video": filename,
+                "original_video": source,
                 "file_type": file_extension,
                 "segments_created": total_segments,
                 "successful_uploads": successful_uploads,

@@ -35,7 +35,7 @@ async def get_metadata_schema(
             # Primary key and vectors
             'pk', 'vectors',
             # Source/file identifiers
-            'source', 'segment_source', 'filename',
+            'source', 'filename',
             # Content fields (too large for filters)
             'reasoning_content', 'video_url', 'extra_metadata',
             # Processing metadata
@@ -43,7 +43,7 @@ async def get_metadata_schema(
             # Timestamps (use time picker instead)
             'timestamp', 'upload_timestamp', 'duration',
             # Segment info
-            'segment_number', 'total_segments', 'original_video',
+            'segment_number', 'total_segments', 'segment_start_sec', 'segment_end_sec', 'original_video',
             # Permission fields
             'tags', 'allowed_users', 'is_public'
         }
@@ -127,11 +127,11 @@ async def get_field_values(
         
         # Columns to EXCLUDE from value lookup (same as schema discovery)
         excluded_columns = {
-            'pk', 'vectors', 'source', 'segment_source', 'filename',
+            'pk', 'vectors', 'source', 'filename',
             'reasoning_content', 'video_url', 'extra_metadata',
             'cosmos_model', 'embedding_model', 'tokens_used', 'cached_prompt_tokens', 'processing_time',
             'timestamp', 'upload_timestamp', 'duration',
-            'segment_number', 'total_segments', 'original_video',
+            'segment_number', 'total_segments', 'segment_start_sec', 'segment_end_sec', 'original_video',
             'tags', 'allowed_users', 'is_public'
         }
         

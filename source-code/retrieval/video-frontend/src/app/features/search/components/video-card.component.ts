@@ -49,9 +49,13 @@ import { VideoService } from '../../../shared/services/video.service';
             <mat-icon>movie</mat-icon>
             Segment {{ video.segment_number }}/{{ video.total_segments }}
           </span>
-          <span class="metadata-item">
+          <span class="metadata-item" [matTooltip]="video.original_video">
             <mat-icon>schedule</mat-icon>
-            {{ video.duration }}s
+            @if (video.segment_start_sec != null && video.segment_end_sec != null) {
+              {{ formatVideoTime(video.segment_start_sec) }}–{{ formatVideoTime(video.segment_end_sec) }}
+            } @else {
+              {{ video.duration }}s
+            }
           </span>
           @if (video.is_public) {
             <span class="metadata-item public">
@@ -370,6 +374,21 @@ export class VideoCardComponent implements OnInit {
   toggleExpand(event: Event) {
     event.stopPropagation(); // Prevent card click
     this.isExpanded = !this.isExpanded;
+  }
+
+  formatVideoTime(seconds: number): string {
+    if (seconds == null || Number.isNaN(seconds)) {
+      return '?';
+    }
+    const total = Math.floor(seconds);
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    const hours = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    if (hours > 0) {
+      return `${hours}:${remMins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 
   onVideoLoaded() {

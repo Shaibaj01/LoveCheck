@@ -43,6 +43,9 @@ def handler(ctx, event: VastEvent):
                 segment_number = reasoning_event.get("segment_number", 0)
                 total_segments = reasoning_event.get("total_segments", 1)
                 segment_duration = reasoning_event.get("segment_duration", 5.0)
+                segment_start_sec = reasoning_event.get("segment_start_sec")
+                segment_end_sec = reasoning_event.get("segment_end_sec")
+                segment_step_sec = reasoning_event.get("segment_step_sec")
                 original_video = reasoning_event.get("original_video", filename)
                 
                 camera_id = reasoning_event.get("camera_id", "")
@@ -118,6 +121,9 @@ def handler(ctx, event: VastEvent):
                 "segment_number": segment_number,
                 "total_segments": total_segments,
                 "segment_duration": segment_duration,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_step_sec": segment_step_sec,
                 "original_video": original_video,
                 "camera_id": camera_id,
                 "capture_type": capture_type,

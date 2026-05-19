@@ -9,7 +9,13 @@ The system currently supports four metadata fields:
 - **`camera_id`** - Camera identifier (e.g., "cam-01", "intersection-5th-ave")
 - **`capture_type`** - Type of capture (e.g., "traffic", "streets", "crowds", "malls")
 - **`location`** - Location/area (e.g., "manhattan", "downtown", "warehouse-a")
-- **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "egocentric", "general")
+- **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "egocentric", "general") — flows through S3 metadata only (not stored in VastDB)
+
+**Timeline and grouping (stored in VastDB per segment):**
+
+- **`segment_start_sec`** / **`segment_end_sec`** - Position within the parent video (seconds from start)
+- **`original_video`** - Canonical parent video S3 URI (`s3://bucket/key` of the source upload), used to group all segments from one ingest
+- **`source`** - Segment clip S3 URI (unique per row)
 
 ## How It Works
 

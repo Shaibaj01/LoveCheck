@@ -49,6 +49,8 @@ class EmbeddingEvent(BaseModel):
     segment_number: int | None = None
     total_segments: int | None = None
     segment_duration: float | None = None
+    segment_start_sec: float | None = None
+    segment_end_sec: float | None = None
     original_video: str | None = None
 
     # Stream capture metadata (from video-streaming service)

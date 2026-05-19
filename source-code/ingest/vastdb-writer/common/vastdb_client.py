@@ -2,8 +2,34 @@ import logging
 import hashlib
 import vastdb
 import pyarrow as pa
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 from datetime import datetime
+
+
+def _resolve_segment_times(
+    embedding_event: Dict[str, Any],
+    segment_number: int,
+    segment_duration: float,
+) -> Tuple[float, float]:
+    """Resolve timeline position in parent video from pipeline metadata or derive."""
+    start_raw = embedding_event.get("segment_start_sec")
+    end_raw = embedding_event.get("segment_end_sec")
+    if start_raw is not None and end_raw is not None:
+        try:
+            return float(start_raw), float(end_raw)
+        except (TypeError, ValueError):
+            pass
+
+    step = embedding_event.get("segment_step_sec")
+    try:
+        step_sec = float(step) if step is not None else 5.0
+    except (TypeError, ValueError):
+        step_sec = 5.0
+
+    sn = segment_number if segment_number > 0 else 1
+    start = (sn - 1) * step_sec
+    end = start + segment_duration
+    return start, end
 
 
 class VastDBClient:
@@ -18,9 +44,10 @@ class VastDBClient:
         self.schema_columns = pa.schema([
             ("pk", pa.utf8()),
             ("source", pa.utf8()),
-            ("segment_source", pa.utf8()),
             ("filename", pa.utf8()),
             ("segment_number", pa.uint32()),
+            ("segment_start_sec", pa.float64()),
+            ("segment_end_sec", pa.float64()),
             ("reasoning_content", pa.utf8()),
             ("vectors", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.settings.embeddingdimensions)),
             ("cosmos_model", pa.utf8()),
@@ -145,6 +172,9 @@ class VastDBClient:
                         pass
             
             segment_duration = float(segment_duration_event) if segment_duration_event else 5.0
+            segment_start_sec, segment_end_sec = _resolve_segment_times(
+                embedding_event, segment_number, segment_duration
+            )
             
             if upload_timestamp_str:
                 try:
@@ -162,9 +192,10 @@ class VastDBClient:
             record = {
                 "pk": pk,
                 "source": source,
-                "segment_source": source,
                 "filename": filename,
                 "segment_number": segment_number,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
                 "reasoning_content": reasoning_content,
                 "vectors": embedding,
                 "cosmos_model": embedding_event.get("cosmos_model", ""),

@@ -88,6 +88,8 @@ async def search_videos(
                         "original_video": r.original_video,
                         "segment_number": r.segment_number,
                         "total_segments": r.total_segments,
+                        "segment_start_sec": r.segment_start_sec,
+                        "segment_end_sec": r.segment_end_sec,
                         "similarity_score": r.similarity_score,
                         "upload_timestamp": r.upload_timestamp,
                     }

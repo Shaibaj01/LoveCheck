@@ -17,6 +17,8 @@ class VideoSearchResult(BaseModel):
     duration: float
     segment_number: int
     total_segments: int
+    segment_start_sec: float = 0.0
+    segment_end_sec: float = 0.0
     original_video: str
     tags: List[str]
     similarity_score: float
