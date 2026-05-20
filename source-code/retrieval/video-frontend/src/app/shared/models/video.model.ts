@@ -41,6 +41,7 @@ export interface SearchRequest {
   metadata_filters?: Record<string, any>;  // Dynamic metadata filters
   min_similarity?: number;  // Minimum similarity score threshold (0.1 - 0.8)
   llm_top_n?: number;  // Number of results to send to LLM for analysis
+  hybrid_text_weight?: number;
 }
 
 export interface LLMSynthesis {

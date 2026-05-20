@@ -6,20 +6,44 @@ from pydantic import BaseModel
 
 class Settings(BaseModel):
     """Configuration settings for reasoning embedder"""
-    # Embedding settings (NVIDIA NIM)
+    # S3 (segment download for visual embeddings)
+    s3accesskey: str
+    s3secretkey: str
+    s3endpoint: str
+
+    # Text embedding: openai_compat (Llama embed NIM) or cosmos_embed1 (Cosmos-Embed1 NIM)
+    embedding_provider: str = ""
     embeddinghost: str
     embeddingport: int
     embeddinghttpscheme: str = "http"
     embedding_local_nim: bool = False
     embeddingmodel: str
     embeddingdimensions: int
-    nvidia_api_key: Optional[str] = None  # Optional NVIDIA Cloud API key
+    nvidia_api_key: Optional[str] = None
+
+    # Visual embedding settings (multimodal NIM)
+    visual_embedding_enabled: bool = True
+    visual_embedding_model: str = "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1"
+    visual_embedding_dimensions: int = 256
+    visual_embedding_host: str = ""
+    visual_embedding_port: int = 0
+    visual_embedding_httpscheme: str = ""
+    visual_embedding_local_nim: bool = False
+    visual_embedding_num_frames: int = 3
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':
         """Load settings from runtime context secrets (uses model defaults for missing optional fields)"""
         raw = secrets["videoreasonsecret"]
         config = {field: raw[field] for field in cls.__annotations__.keys() if field in raw}
+        if not config.get("visual_embedding_host"):
+            config["visual_embedding_host"] = config.get("embeddinghost", "")
+        if not config.get("visual_embedding_port"):
+            config["visual_embedding_port"] = config.get("embeddingport", 443)
+        if not config.get("visual_embedding_httpscheme"):
+            config["visual_embedding_httpscheme"] = config.get("embeddinghttpscheme", "https")
+        if "visual_embedding_local_nim" not in config and "embedding_local_nim" in config:
+            config["visual_embedding_local_nim"] = config["embedding_local_nim"]
         return cls(**config)
 
 
@@ -58,6 +82,21 @@ class ReasoningEvent(BaseModel):
     # Analysis scenario metadata
     scenario: str | None = None
 
+    perception_json: str | None = None
+    object_classes: str | None = None
+    object_counts: str | None = None
+    max_detection_conf: float | None = None
+    perception_ok: bool = False
+    row_kind: str = "segment"
+
+    # Perception lite
+    perception_json: str | None = None
+    object_classes: str | None = None
+    object_counts: str | None = None
+    max_detection_conf: float | None = None
+    perception_ok: bool = False
+    row_kind: str = "segment"
+
 
 class EmbeddingResult(BaseModel):
     """Result from embedding generation"""
@@ -70,6 +109,10 @@ class EmbeddingResult(BaseModel):
     embedding: List[float]
     embedding_model: str
     embedding_dimensions: int
+    visual_embedding: List[float] = []
+    visual_embedding_model: str = ""
+    visual_embedding_dimensions: int = 0
+    visual_embedding_ok: bool = False
     cosmos_model: str
     tokens_used: int
     cached_prompt_tokens: int = 0
@@ -96,4 +139,11 @@ class EmbeddingResult(BaseModel):
     
     # Analysis scenario metadata
     scenario: str | None = None
+
+    perception_json: str | None = None
+    object_classes: str | None = None
+    object_counts: str | None = None
+    max_detection_conf: float | None = None
+    perception_ok: bool = False
+    row_kind: str = "segment"
 

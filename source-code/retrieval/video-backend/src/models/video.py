@@ -36,3 +36,12 @@ class VideoSearchResult(BaseModel):
     capture_type: Optional[str] = None
     location: Optional[str] = None
 
+    perception_json: Optional[str] = None
+    object_classes: Optional[str] = None
+    object_counts: Optional[str] = None
+    max_detection_conf: Optional[float] = None
+    perception_ok: Optional[bool] = None
+    row_kind: Optional[str] = None
+    video_summary_json: Optional[str] = None
+    video_events_json: Optional[str] = None
+

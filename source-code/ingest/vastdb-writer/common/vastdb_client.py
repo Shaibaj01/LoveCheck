@@ -40,6 +40,11 @@ class VastDBClient:
         self.table_name = settings.vdbcollection
         self.bucket = settings.vdbbucket
         self.schema_name = settings.vdbschema
+        self.visual_dim = (
+            settings.visual_embedding_dimensions
+            if getattr(settings, "visual_embedding_dimensions", 0) > 0
+            else settings.embeddingdimensions
+        )
 
         self.schema_columns = pa.schema([
             ("pk", pa.utf8()),
@@ -52,9 +57,19 @@ class VastDBClient:
             ("dense_caption", pa.utf8()),
             ("vlm_structured", pa.string()),
             ("structured_parse_ok", pa.bool_()),
+            ("perception_json", pa.string()),
+            ("object_classes", pa.utf8()),
+            ("object_counts", pa.utf8()),
+            ("max_detection_conf", pa.float32()),
+            ("perception_ok", pa.bool_()),
+            ("row_kind", pa.utf8()),
+            ("video_summary_json", pa.string()),
+            ("video_events_json", pa.string()),
             ("vectors", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.settings.embeddingdimensions)),
+            ("vectors_visual", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.visual_dim)),
             ("cosmos_model", pa.utf8()),
             ("embedding_model", pa.utf8()),
+            ("visual_embedding_model", pa.utf8()),
             ("tokens_used", pa.int32()),
             # usage.prompt_tokens_details.cached_tokens (vLLM). Add column on existing tables before deploy.
             ("cached_prompt_tokens", pa.int32()),
@@ -127,6 +142,9 @@ class VastDBClient:
             vlm_structured = embedding_event.get("vlm_structured", "") or ""
             structured_parse_ok = bool(embedding_event.get("structured_parse_ok", False))
             embedding = embedding_event.get("embedding", [])
+            visual_embedding = embedding_event.get("visual_embedding") or []
+            visual_embedding_ok = bool(embedding_event.get("visual_embedding_ok", False))
+            visual_embedding_model = embedding_event.get("visual_embedding_model", "") or ""
             
             if not reasoning_content and not dense_caption:
                 return True
@@ -190,9 +208,14 @@ class VastDBClient:
             else:
                 upload_timestamp = datetime.utcnow()
             
+            if not visual_embedding or len(visual_embedding) != self.visual_dim:
+                visual_embedding = [0.0] * self.visual_dim
+
             extra_metadata = {
                 "status": embedding_event.get("status", "success"),
-                "embedding_dimensions": embedding_event.get("embedding_dimensions", 0)
+                "embedding_dimensions": embedding_event.get("embedding_dimensions", 0),
+                "visual_embedding_dimensions": len(visual_embedding),
+                "visual_embedding_ok": visual_embedding_ok,
             }
             
             record = {
@@ -206,9 +229,19 @@ class VastDBClient:
                 "dense_caption": dense_caption or reasoning_content,
                 "vlm_structured": vlm_structured if isinstance(vlm_structured, str) else str(vlm_structured),
                 "structured_parse_ok": structured_parse_ok,
+                "perception_json": embedding_event.get("perception_json", "") or "",
+                "object_classes": embedding_event.get("object_classes", "") or "",
+                "object_counts": embedding_event.get("object_counts", "{}") or "{}",
+                "max_detection_conf": float(embedding_event.get("max_detection_conf") or 0.0),
+                "perception_ok": bool(embedding_event.get("perception_ok", False)),
+                "row_kind": embedding_event.get("row_kind", "segment") or "segment",
+                "video_summary_json": embedding_event.get("video_summary_json", "") or "",
+                "video_events_json": embedding_event.get("video_events_json", "") or "",
                 "vectors": embedding,
+                "vectors_visual": visual_embedding,
                 "cosmos_model": embedding_event.get("cosmos_model", ""),
                 "embedding_model": embedding_event.get("embedding_model", ""),
+                "visual_embedding_model": visual_embedding_model,
                 "tokens_used": embedding_event.get("tokens_used", 0),
                 "cached_prompt_tokens": int(embedding_event.get("cached_prompt_tokens") or 0),
                 "processing_time": embedding_event.get("processing_time", 0.0),

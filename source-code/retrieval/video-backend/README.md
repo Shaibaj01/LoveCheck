@@ -8,6 +8,7 @@ REST API service for video search, authentication, and management.
 - [Local NIM vs NVIDIA Cloud](#local-nim-vs-nvidia-cloud)
 - [GUI Settings](#gui-settings)
 - [Custom AI Prompts](#custom-ai-prompts)
+- [Agent & rollup APIs](#agent--rollup-apis)
 
 ---
 
@@ -86,3 +87,18 @@ When uploading videos, check **"Use custom prompt"** to provide a custom AI reas
 - Max 800 characters
 - Overrides scenario selection
 - Available in: Manual Upload, Streaming, Batch Sync dialogs
+
+---
+
+## Agent & rollup APIs
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/videos/summarize?original_video=s3://...` | Merge segment JSON into `row_kind=video_summary` |
+| `GET /api/v1/videos/summary?original_video=s3://...` | Fetch existing video summary row |
+| `GET /api/v1/tools/segments?original_video=s3://...` | List segments for a parent video |
+| `GET /api/v1/tools/segment?source=s3://...` | Get one segment row |
+| `POST /api/v1/tools/search` | Same body as `/api/v1/search` (hybrid/text/visual) |
+| `POST /api/v1/agent/ask` | Ask a question (global search or video-specific with `original_video`) |
+
+Search is **always hybrid** (caption + video vectors). ACL, time filters, tags, and metadata filters still apply on both VastDB branches. Segments only by default (`row_kind=segment`).

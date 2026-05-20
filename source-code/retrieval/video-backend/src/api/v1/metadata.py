@@ -33,11 +33,12 @@ async def get_metadata_schema(
         # Columns to EXCLUDE from Advanced Filters (internal/system columns)
         excluded_columns = {
             # Primary key and vectors
-            'pk', 'vectors',
+            'pk', 'vectors', 'vectors_visual',
             # Source/file identifiers
             'source', 'filename',
             # Content fields (too large for filters)
             'reasoning_content', 'dense_caption', 'vlm_structured', 'structured_parse_ok',
+            'perception_json', 'video_summary_json', 'video_events_json',
             'video_url', 'extra_metadata',
             # Processing metadata
             'cosmos_model', 'embedding_model', 'tokens_used', 'cached_prompt_tokens', 'processing_time',
@@ -128,8 +129,9 @@ async def get_field_values(
         
         # Columns to EXCLUDE from value lookup (same as schema discovery)
         excluded_columns = {
-            'pk', 'vectors', 'source', 'filename',
+            'pk', 'vectors', 'vectors_visual', 'source', 'filename',
             'reasoning_content', 'dense_caption', 'vlm_structured', 'structured_parse_ok',
+            'perception_json', 'video_summary_json', 'video_events_json',
             'video_url', 'extra_metadata',
             'cosmos_model', 'embedding_model', 'tokens_used', 'cached_prompt_tokens', 'processing_time',
             'timestamp', 'upload_timestamp', 'duration',

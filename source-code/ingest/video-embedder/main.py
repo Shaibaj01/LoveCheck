@@ -3,6 +3,9 @@ from vast_runtime.vast_event import VastEvent  # type: ignore
 
 from common.models import Settings, ReasoningEvent, EmbeddingResult
 from common.embedding_client import EmbeddingClient
+from common.visual_embedding_client import VisualEmbeddingClient
+from common.s3_client import S3Client
+from common.frame_utils import extract_frames_from_video
 from common.handler_utils import parse_reasoning_event, validate_embed_text
 
 
@@ -12,6 +15,10 @@ def init(ctx):
         settings = Settings.from_ctx_secrets(ctx.secrets)
         ctx.embedding_client = EmbeddingClient(settings)
         ctx.settings = settings
+        ctx.s3_client = S3Client(settings)
+        ctx.visual_embedding_client = (
+            VisualEmbeddingClient(settings) if settings.visual_embedding_enabled else None
+        )
 
 
 def handler(ctx, event: VastEvent):
@@ -56,6 +63,12 @@ def handler(ctx, event: VastEvent):
                 capture_type = reasoning_event.get("capture_type", "")
                 location = reasoning_event.get("location", "")
                 scenario = reasoning_event.get("scenario", "")
+                perception_json = reasoning_event.get("perception_json", "")
+                object_classes = reasoning_event.get("object_classes", "")
+                object_counts = reasoning_event.get("object_counts", "{}")
+                max_detection_conf = reasoning_event.get("max_detection_conf", 0.0)
+                perception_ok = bool(reasoning_event.get("perception_ok", False))
+                row_kind = reasoning_event.get("row_kind", "segment")
                 
                 allowed_users_count = len(allowed_users.split(",")) if allowed_users else 0
                 
@@ -108,6 +121,37 @@ def handler(ctx, event: VastEvent):
                     "embedding_model": ctx.settings.embeddingmodel
                 })
 
+            visual_embedding: list[float] = []
+            visual_embedding_ok = False
+            if ctx.visual_embedding_client and source.startswith("s3://"):
+                with ctx.tracer.start_as_current_span("Visual Embedding Generation") as visual_span:
+                    try:
+                        ctx.logger.info(
+                            f"[VISUAL_EMBED] Generating visual embedding via "
+                            f"{ctx.settings.visual_embedding_model}"
+                        )
+                        video_bytes = ctx.s3_client.download_from_uri(source)
+                        if getattr(ctx.visual_embedding_client, "_cosmos", None):
+                            visual_embedding = ctx.visual_embedding_client.embed_segment_video(
+                                video_bytes
+                            )
+                        else:
+                            frames = extract_frames_from_video(
+                                video_bytes,
+                                num_frames=ctx.settings.visual_embedding_num_frames,
+                            )
+                            visual_embedding = ctx.visual_embedding_client.embed_frame_pngs(frames)
+                        visual_embedding_ok = len(visual_embedding) > 0
+                        visual_span.set_attributes({
+                            "visual_embedding_dimensions": len(visual_embedding),
+                            "visual_embedding_model": ctx.settings.visual_embedding_model,
+                            "frames_used": len(frames),
+                        })
+                        ctx.logger.info(f"[VISUAL_EMBED] Complete | {len(visual_embedding)} dimensions")
+                    except Exception as visual_error:
+                        ctx.logger.warning(f"[VISUAL_EMBED] Failed (continuing with text only): {visual_error}")
+                        visual_span.set_attributes({"visual_embedding_error": str(visual_error)})
+
             result = {
                 "source": source,
                 "filename": filename,
@@ -118,6 +162,10 @@ def handler(ctx, event: VastEvent):
                 "embedding": embedding,
                 "embedding_model": ctx.settings.embeddingmodel,
                 "embedding_dimensions": len(embedding),
+                "visual_embedding": visual_embedding,
+                "visual_embedding_model": ctx.settings.visual_embedding_model if visual_embedding_ok else "",
+                "visual_embedding_dimensions": len(visual_embedding),
+                "visual_embedding_ok": visual_embedding_ok,
                 "cosmos_model": cosmos_model,
                 "tokens_used": tokens_used,
                 "cached_prompt_tokens": cached_prompt_tokens,
@@ -138,7 +186,13 @@ def handler(ctx, event: VastEvent):
                 "camera_id": camera_id,
                 "capture_type": capture_type,
                 "location": location,
-                "scenario": scenario
+                "scenario": scenario,
+                "perception_json": perception_json,
+                "object_classes": object_classes,
+                "object_counts": object_counts,
+                "max_detection_conf": max_detection_conf,
+                "perception_ok": perception_ok,
+                "row_kind": row_kind,
             }
             
             ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments} | {len(embedding)} dims | metadata: camera={camera_id or 'none'}, type={capture_type or 'none'}")

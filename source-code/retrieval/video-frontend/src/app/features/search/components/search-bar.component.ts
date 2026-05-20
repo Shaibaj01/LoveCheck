@@ -1189,7 +1189,7 @@ export class SearchBarComponent {
       use_llm: formValue.useLlm || false,
       time_filter: formValue.timeFilter || 'all',
       min_similarity: llmSettings.minSimilarityScore,
-      llm_top_n: llmSettings.llmTopNSummaries
+      llm_top_n: llmSettings.llmTopNSummaries,
     };
 
     if (request.use_llm) {

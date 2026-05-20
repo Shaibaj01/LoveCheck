@@ -36,6 +36,10 @@ class Settings(BaseModel):
     # Scenario for prompt selection
     # Options: surveillance, traffic, nhl, sports, retail, warehouse, general
     scenario: str = "general"
+
+    # Perception lite (short VLM object pass before main reasoning)
+    perception_enabled: bool = False
+    perception_max_tokens: int = 512
     
     @computed_field
     @property

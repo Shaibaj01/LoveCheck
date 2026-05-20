@@ -5,6 +5,7 @@ from urllib.parse import unquote
 from common.models import Settings, VideoReasoningResult
 from common.clients import S3Client, CosmosReasoningClient, NemotronReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event
+from common.perception import run_perception_lite, format_perception_context
 
 
 def init(ctx):
@@ -156,6 +157,29 @@ def handler(ctx, event: VastEvent):
                     scenario = ctx.settings.scenario  # Fall back to default from settings
                     custom_prompt = ""  # No custom prompt on error
 
+            perception_result = {
+                "perception_json": "",
+                "object_classes": "",
+                "object_counts": "{}",
+                "max_detection_conf": 0.0,
+                "perception_ok": False,
+            }
+            if ctx.settings.perception_enabled:
+                with ctx.tracer.start_as_current_span("Perception Lite") as perception_span:
+                    perception_result = run_perception_lite(
+                        ctx.reasoning_client, video_content, ctx.settings
+                    )
+                    perception_span.set_attributes({
+                        "perception_ok": perception_result.get("perception_ok", False),
+                        "object_classes": perception_result.get("object_classes", ""),
+                    })
+                    ctx.logger.info(
+                        f"[PERCEPTION] ok={perception_result.get('perception_ok')} | "
+                        f"classes={perception_result.get('object_classes') or 'none'}"
+                    )
+
+            perception_context = format_perception_context(perception_result)
+
             with ctx.tracer.start_as_current_span("Video Reasoning Analysis") as reasoning_span:
                 provider = ctx.settings.reasoning_provider.lower()
                 provider_name = "NEMOTRON" if provider == "nemotron" else "COSMOS"
@@ -172,7 +196,8 @@ def handler(ctx, event: VastEvent):
                     video_content, 
                     filename, 
                     prompt=custom_prompt if custom_prompt else None,
-                    scenario=scenario
+                    scenario=scenario,
+                    perception_context=perception_context or None,
                 )
                 
                 content_length = len(reasoning_result.get("reasoning_content", ""))
@@ -227,7 +252,13 @@ def handler(ctx, event: VastEvent):
                 "camera_id": camera_id,
                 "capture_type": capture_type,
                 "location": location,
-                "scenario": scenario
+                "scenario": scenario,
+                "perception_json": perception_result.get("perception_json", ""),
+                "object_classes": perception_result.get("object_classes", ""),
+                "object_counts": perception_result.get("object_counts", "{}"),
+                "max_detection_conf": perception_result.get("max_detection_conf", 0.0),
+                "perception_ok": perception_result.get("perception_ok", False),
+                "row_kind": "segment",
             }
             
             video_url_info = f" | video_url={reasoning_result.get('video_url', 'N/A')}" if reasoning_result.get("video_url") else ""

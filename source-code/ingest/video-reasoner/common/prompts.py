@@ -50,3 +50,15 @@ def get_prompt_for_scenario(scenario: str) -> str:
 def get_available_scenarios() -> list[str]:
     """Return list of all available scenario keys"""
     return list(SCENARIO_PROMPTS.keys())
+
+
+PERCEPTION_OBJECT_PROMPT = """List visible objects in this video clip. Respond with JSON only (no markdown):
+{
+  "summary": "short phrase e.g. 2 people, 1 forklift",
+  "detections": [
+    {"class": "person", "count": 2, "confidence": 0.9},
+    {"class": "forklift", "count": 1, "confidence": 0.85}
+  ]
+}
+Use common COCO-style class names (person, car, truck, forklift, bicycle, dog, etc.).
+Only include objects you can clearly see. confidence is 0.0-1.0."""

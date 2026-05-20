@@ -43,7 +43,7 @@ vim vss-gui-secret-file-template.yaml
 |---------|--------------|
 | **S3** | `s3accesskey`, `s3secretkey`, `s3endpoint` |
 | **Reasoning** | `reasoning_provider` (cosmos/nemotron), endpoint settings |
-| **Embedding** | `embedding_local_nim`, `embeddinghost`/`embeddingport`, `nvidia_api_key` |
+| **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
 | **Processing** | `segment_duration`, `scenario` |
 
@@ -101,7 +101,7 @@ vim vss-cli-secret-file-template.yaml
 |---------|--------------|
 | **S3** | `s3accesskey`, `s3secretkey`, `s3endpoint` |
 | **Reasoning** | `reasoning_provider` (cosmos/nemotron), endpoint settings |
-| **Embedding** | `embedding_local_nim`, `embeddinghost`/`embeddingport`, `nvidia_api_key` |
+| **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
 | **Processing** | `segment_duration`, `scenario` |
 

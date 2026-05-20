@@ -98,7 +98,12 @@ class CosmosReasoningClient:
         # Initialize tracer
         self.tracer = trace.get_tracer(__name__)
 
-    def get_cosmos_reasoning(self, video_content: bytes, prompt: str = "Describe the main events in this clip.") -> Dict[str, Any]:
+    def get_cosmos_reasoning(
+        self,
+        video_content: bytes,
+        prompt: str = "Describe the main events in this clip.",
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Get reasoning content from Cosmos API using base64-encoded video"""
         with self.tracer.start_as_current_span("Cosmos Reasoning API Call") as span:
             span.set_attributes({
@@ -139,7 +144,7 @@ class CosmosReasoningClient:
                     "role": "user",
                     "content": content
                 }],
-                "max_tokens": self.settings.cosmos_max_tokens,
+                "max_tokens": max_tokens if max_tokens is not None else self.settings.cosmos_max_tokens,
                 "temperature": self.settings.cosmos_temperature
             }
             
@@ -215,7 +220,14 @@ class CosmosReasoningClient:
                 "raw_response": response_data
             }
 
-    def analyze_video(self, video_content: bytes, filename: str, prompt: Optional[str] = None, scenario: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_video(
+        self,
+        video_content: bytes,
+        filename: str,
+        prompt: Optional[str] = None,
+        scenario: Optional[str] = None,
+        perception_context: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Complete video analysis pipeline using Cosmos reasoning.
         
         Args:
@@ -223,12 +235,15 @@ class CosmosReasoningClient:
             filename: Name of the video file
             prompt: Optional custom prompt (overrides scenario)
             scenario: Optional scenario name (overrides settings default, ignored if prompt is provided)
+            perception_context: Optional verified object summary prepended to the prompt
         """
         if prompt is None:
             scenario_to_use = scenario if scenario else self.settings.scenario
             prompt = get_prompt_for_scenario(scenario_to_use)
         else:
             prompt = wrap_prompt_with_structured_output(prompt)
+        if perception_context:
+            prompt = perception_context + prompt
         
         with self.tracer.start_as_current_span("Complete Video Analysis (Cosmos)") as span:
             scenario_used = scenario if scenario else self.settings.scenario
@@ -377,7 +392,12 @@ class NemotronReasoningClient:
         if not self.api_key:
             raise ValueError("nvidia_api_key is required for Nemotron provider")
 
-    def get_nemotron_reasoning(self, video_content: bytes, prompt: str = "Describe the main events in this clip.") -> Dict[str, Any]:
+    def get_nemotron_reasoning(
+        self,
+        video_content: bytes,
+        prompt: str = "Describe the main events in this clip.",
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Get reasoning content from Nemotron API using extracted frames"""
         with self.tracer.start_as_current_span("Nemotron Reasoning API Call") as span:
             span.set_attributes({
@@ -428,7 +448,7 @@ class NemotronReasoningClient:
                     "role": "user",
                     "content": content
                 }],
-                "max_tokens": self.settings.nemotron_max_tokens,
+                "max_tokens": max_tokens if max_tokens is not None else self.settings.nemotron_max_tokens,
                 "temperature": self.settings.nemotron_temperature,
                 "top_p": self.settings.nemotron_top_p
             }
@@ -509,7 +529,14 @@ class NemotronReasoningClient:
                 "raw_response": response_data
             }
 
-    def analyze_video(self, video_content: bytes, filename: str, prompt: Optional[str] = None, scenario: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_video(
+        self,
+        video_content: bytes,
+        filename: str,
+        prompt: Optional[str] = None,
+        scenario: Optional[str] = None,
+        perception_context: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Complete video analysis pipeline using Nemotron reasoning.
         
         Args:
@@ -517,12 +544,15 @@ class NemotronReasoningClient:
             filename: Name of the video file
             prompt: Optional custom prompt (overrides scenario)
             scenario: Optional scenario name (overrides settings default, ignored if prompt is provided)
+            perception_context: Optional verified object summary prepended to the prompt
         """
         if prompt is None:
             scenario_to_use = scenario if scenario else self.settings.scenario
             prompt = get_prompt_for_scenario(scenario_to_use)
         else:
             prompt = wrap_prompt_with_structured_output(prompt)
+        if perception_context:
+            prompt = perception_context + prompt
         
         with self.tracer.start_as_current_span("Complete Video Analysis (Nemotron)") as span:
             scenario_used = scenario if scenario else self.settings.scenario

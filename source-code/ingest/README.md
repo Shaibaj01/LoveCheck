@@ -2,6 +2,19 @@
 
 The system supports customizable metadata fields that flow through the entire pipeline, enabling powerful filtering and organization of video content.
 
+## VSS roadmap (implementation status)
+
+| Step | Capability | Status |
+|------|------------|--------|
+| 1 | Timeline + `original_video` grouping | Done |
+| 2 | Structured VLM + `dense_caption` + 2048 text embed | Done |
+| 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
+| 4 | Perception lite → conditions VLM (`perception_enabled` in secret) | Done |
+| 5 | Video rollup (`row_kind=video_summary`, `POST /api/v1/videos/summarize`) | Done |
+| 6 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
+
+Recreate the VastDB collection after schema changes (new columns). Enable `perception_enabled: true` in `vss-gui-secret-file-template.yaml` when ready (adds one short VLM call per segment).
+
 ## Current Metadata Fields
 
 The system currently supports four metadata fields:
@@ -10,6 +23,13 @@ The system currently supports four metadata fields:
 - **`capture_type`** - Type of capture (e.g., "traffic", "streets", "crowds", "malls")
 - **`location`** - Location/area (e.g., "manhattan", "downtown", "warehouse-a")
 - **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "egocentric", "general") — flows through S3 metadata only (not stored in VastDB)
+
+**Dual embeddings (stored in VastDB per segment):**
+
+- **`vectors`** — Text embedding of `dense_caption` (Cosmos-Embed1: **256-dim**, `nvidia/cosmos-embed1`)
+- **`vectors_visual`** — Video embedding of segment MP4 (same Cosmos-Embed1 NIM, **256-dim**)
+
+Local stack guide: `docs/COSMOS_LOCAL_STACK.md` (Reason2 :8001, Embed1 :8002).
 
 **Structured VLM output (stored in VastDB per segment):**
 

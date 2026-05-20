@@ -37,13 +37,29 @@ class Settings(BaseSettings):
     embedding_host: str = Field(..., description="NVIDIA NIM embedding host")
     embedding_port: int = Field(default=80, description="NVIDIA NIM embedding port")
     embedding_http_scheme: str = Field(default="http", description="HTTP scheme")
+    embedding_provider: str = Field(
+        default="",
+        description="cosmos_embed1 for Cosmos-Embed1 NIM; leave empty for OpenAI-style embed API",
+    )
     embedding_model: str = Field(
-        default="nvidia/llama-3.2-nv-embedqa-1b-v2",
+        default="nvidia/cosmos-embed1",
         description="Embedding model",
     )
-    embedding_dimensions: int = Field(default=2048, description="Embedding dimensions")
+    embedding_dimensions: int = Field(default=256, description="Embedding dimensions (256 for Cosmos-Embed1)")
     nvidia_api_key: Optional[str] = Field(default="", description="NVIDIA API key (for cloud)")
     embedding_local_nim: bool = Field(default=False, description="True = use local NIM (embedding_host/port), False = NVIDIA Cloud")
+
+    # Visual / multimodal embedding (hybrid search)
+    visual_embedding_model: str = Field(
+        default="nvidia/cosmos-embed1",
+        description="Visual/video embedding model (Cosmos-Embed1 uses segment MP4)",
+    )
+    visual_embedding_dimensions: int = Field(default=256, description="Visual embedding dimensions")
+    visual_embedding_host: str = Field(default="", description="Visual NIM host (defaults to embedding_host)")
+    visual_embedding_port: int = Field(default=0, description="Visual NIM port (defaults to embedding_port)")
+    visual_embedding_http_scheme: str = Field(default="", description="Visual NIM scheme (defaults to embedding scheme)")
+    visual_embedding_local_nim: bool = Field(default=False, description="Use local NIM for visual embeddings")
+    hybrid_text_weight: float = Field(default=0.6, ge=0.0, le=1.0, description="Hybrid search weight for text vs visual")
     
     # Upload Settings
     max_upload_size_mb: int = Field(default=25, description="Maximum upload size in MB")
