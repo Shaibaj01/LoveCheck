@@ -225,9 +225,10 @@ class VastDBService:
             return merged, text_ms + visual_ms, max(text_perm, visual_perm), formatted_sql
 
         if mode == "visual":
-            if not query_visual_embedding:
-                raise ValueError("query_visual_embedding is required for visual search")
-            query_embedding = query_visual_embedding
+            if query_visual_embedding is not None:
+                query_embedding = query_visual_embedding
+            elif not query_embedding:
+                raise ValueError("query_embedding is required for visual search")
             vector_column = "vectors_visual"
         else:
             vector_column = "vectors"
@@ -492,8 +493,8 @@ class VastDBService:
                                 is_public=is_public_bool,
                                 upload_timestamp=row['upload_timestamp'],
                                 duration=row.get('duration'),
-                                segment_number=int(row['segment_number']) if pd.notna(row.get('segment_number')) else None,
-                                total_segments=int(row['total_segments']) if pd.notna(row.get('total_segments')) else None,
+                                segment_number=int(row['segment_number']) if pd.notna(row.get('segment_number')) else 0,
+                                total_segments=int(row['total_segments']) if pd.notna(row.get('total_segments')) else 0,
                                 segment_start_sec=float(row['segment_start_sec']) if pd.notna(row.get('segment_start_sec')) else 0.0,
                                 segment_end_sec=float(row['segment_end_sec']) if pd.notna(row.get('segment_end_sec')) else 0.0,
                                 original_video=str(row['original_video']) if pd.notna(row.get('original_video')) else '',

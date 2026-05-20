@@ -89,14 +89,6 @@ class ReasoningEvent(BaseModel):
     perception_ok: bool = False
     row_kind: str = "segment"
 
-    # Perception lite
-    perception_json: str | None = None
-    object_classes: str | None = None
-    object_counts: str | None = None
-    max_detection_conf: float | None = None
-    perception_ok: bool = False
-    row_kind: str = "segment"
-
 
 class EmbeddingResult(BaseModel):
     """Result from embedding generation"""

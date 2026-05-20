@@ -131,21 +131,24 @@ def handler(ctx, event: VastEvent):
                             f"{ctx.settings.visual_embedding_model}"
                         )
                         video_bytes = ctx.s3_client.download_from_uri(source)
+                        frames_used = 0
                         if getattr(ctx.visual_embedding_client, "_cosmos", None):
                             visual_embedding = ctx.visual_embedding_client.embed_segment_video(
                                 video_bytes
                             )
+                            frames_used = 0  # full MP4 embed (Cosmos-Embed1)
                         else:
                             frames = extract_frames_from_video(
                                 video_bytes,
                                 num_frames=ctx.settings.visual_embedding_num_frames,
                             )
+                            frames_used = len(frames)
                             visual_embedding = ctx.visual_embedding_client.embed_frame_pngs(frames)
                         visual_embedding_ok = len(visual_embedding) > 0
                         visual_span.set_attributes({
                             "visual_embedding_dimensions": len(visual_embedding),
                             "visual_embedding_model": ctx.settings.visual_embedding_model,
-                            "frames_used": len(frames),
+                            "frames_used": frames_used,
                         })
                         ctx.logger.info(f"[VISUAL_EMBED] Complete | {len(visual_embedding)} dimensions")
                     except Exception as visual_error:
