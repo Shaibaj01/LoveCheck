@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Node (frontend)
+node_modules/
+dist/
+
+# Local secrets / certs (do not commit)
+*.pem
+*.key
