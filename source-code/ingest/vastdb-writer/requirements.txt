@@ -11,5 +11,8 @@ pyarrow
 # Data validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
-# OpenTelemetry: provided by vast_runtime — do not pin (conflicts with processor-baggage)
+# vast_runtime processor-baggage needs SDK >=1.39 (ReadWriteLogRecord)
+opentelemetry-api==1.40.0
+opentelemetry-sdk==1.40.0
+opentelemetry-exporter-otlp==1.40.0
 
