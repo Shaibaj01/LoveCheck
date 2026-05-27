@@ -4,7 +4,7 @@ manifest:
   config:
     environment_variables: []
     secrets:
-      - videoreasonsecret
+      - vss2-secret
   function_deployments:
     - function_vrn: vast:dataengine:functions:video-segmenter
       name: video-segmenter-2

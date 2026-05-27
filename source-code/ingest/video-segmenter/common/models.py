@@ -25,7 +25,7 @@ class Settings(BaseModel):
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, Any]) -> "Settings":
         """Load settings from runtime context secrets; optional keys use model defaults."""
-        src = secrets["videoreasonsecret"]
+        src = secrets["vss2-secret"]
         config = {name: src[name] for name in cls.model_fields if name in src}
         return cls(**config)
 
