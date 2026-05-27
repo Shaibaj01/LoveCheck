@@ -11,4 +11,4 @@ requests==2.31.0
 # Data validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
-# OpenTelemetry: provided by vast_runtime — do not pin (conflicts with processor-baggage)
+# OpenTelemetry: provided by vast_runtime — do not pin (pins SDK 1.38 break processor-baggage)
