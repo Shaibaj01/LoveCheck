@@ -15,8 +15,7 @@ imageio-ffmpeg==0.4.9  # Bundles ffmpeg for moviepy
 # Data validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
-# vast_runtime processor-baggage needs SDK >=1.39 (ReadWriteLogRecord); build may otherwise resolve 1.38
-opentelemetry-api==1.40.0
-opentelemetry-sdk==1.40.0
-opentelemetry-exporter-otlp==1.40.0
+# Do NOT pin opentelemetry-* here. vast_runtime installs OTEL 1.42+ in the cpython layer.
+# Pinning (especially 1.38) lands in pip-install first on PYTHONPATH and breaks processor-baggage.
+# After changing deps, rebuild with a fresh cache (see ingest/BUILD.md).
 
