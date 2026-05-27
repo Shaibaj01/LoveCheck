@@ -23,7 +23,6 @@ Configure in `ingest/vss-video-ingest-secret-template.yaml`:
 | **`visual_embedding_enabled`** | When `true`, download segment from S3 and compute `vectors_visual` |
 | **`visual_embedding_model`** | Multimodal embed model (e.g. `nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1`) |
 | **`visual_embedding_dimensions`** | Visual vector dimensions (typically same as text, 2048) |
-| **`visual_embedding_num_frames`** | Frames sampled from each segment for visual embedding |
 | **`nvidia_api_key`** | Required when `embedding_local_nim: false` (NVIDIA Cloud) |
 
 For NVIDIA Cloud, set: `embeddinghost: integrate.api.nvidia.com`, `embeddingport: 443`, `embeddinghttpscheme: https`
