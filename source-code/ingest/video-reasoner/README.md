@@ -1,44 +1,32 @@
 # Video Reasoner
 
-DataEngine function that analyzes video segments using NVIDIA VLM (Cosmos or Nemotron) to generate text descriptions.
+DataEngine function that analyzes video segments using **Cosmos-Reason2** to generate structured descriptions.
 
 ## What It Does
 
 - Triggered when segments land in `video-chunks-segments` bucket
-- Analyzes video content and generates text descriptions
-- Extracts metadata from S3 object metadata
-- Passes results to the next function in pipeline
+- Sends segment MP4 (base64) to Cosmos-Reason2
+- Produces `dense_caption`, `vlm_structured`, and `reasoning_content`
+- Optional perception lite (second Reason2 call when `perception_enabled: true`)
+- Passes results to `video-embedder`
 
 ## Configuration
 
-Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-template.yaml.yaml` (GUI) or `vss-cli-secret-file-template.yaml` (CLI):
+Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-template.yaml` (GUI) or `vss-cli-secret-file-template.yaml` (CLI):
 
-### Provider Selection
-
-```yaml
-reasoning_provider: "nemotron"  # or "cosmos"
-```
-
-| Provider | Description |
-|----------|-------------|
-| `cosmos` | Hosted Reason API (sends base64-encoded video) |
-| `nemotron` | NVIDIA Cloud API (extracts frames, sends as images) |
-
-### Cosmos Settings
+### Cosmos-Reason2 Settings
 
 | Setting | Default |
 |---------|---------|
 | `cosmos_host` | (required) |
-| `cosmos_port` | (required) |
+| `cosmos_port` | 8001 |
 | `cosmos_model` | ./Cosmos-Reason2-8B |
+| `cosmos_max_tokens` | 4000 |
+| `cosmos_temperature` | 0.2 |
+| `perception_enabled` | false |
+| `perception_max_tokens` | 512 |
 
-### Nemotron Settings
-
-| Setting | Default |
-|---------|---------|
-| `nvidia_api_key` | (required) |
-| `nemotron_model` | nvidia/nemotron-nano-12b-v2-vl |
-| `nemotron_num_frames` | 5 |
+Local stack guide: `docs/COSMOS_LOCAL_STACK.md`
 
 ---
 

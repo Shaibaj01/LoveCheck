@@ -11,26 +11,12 @@ class Settings(BaseModel):
     s3secretkey: str
     s3endpoint: str
     
-    # Provider selection: "cosmos" or "nemotron"
-    reasoning_provider: str = Field(default="cosmos", description="Reasoning provider: 'cosmos' or 'nemotron'")
-    
-    # Cosmos settings (used when reasoning_provider == "cosmos")
-    # Hosted Reason2 API - no SFTP needed, sends base64-encoded video directly
+    # Cosmos-Reason2 (hosted vLLM OpenAI API — base64-encoded segment MP4)
     cosmos_host: str = ""
     cosmos_port: int = 8001
     cosmos_model: str = ""
     cosmos_max_tokens: int = Field(default=4000, description="Maximum tokens in response for Cosmos (higher for detailed video analysis)")
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for Cosmos")
-    
-    # Nemotron settings (used when reasoning_provider == "nemotron")
-    nvidia_api_key: str = Field(default="", description="NVIDIA API key from build.nvidia.com")
-    nemotron_model: str = Field(default="nvidia/nemotron-nano-12b-v2-vl", description="Nemotron model identifier")
-    nemotron_endpoint: str = Field(default="https://integrate.api.nvidia.com/v1", description="Nemotron API endpoint")
-    nemotron_num_frames: int = Field(default=5, description="Number of frames to extract from video (default: 5 for 5-second videos)")
-    nemotron_frame_interval: Optional[float] = Field(default=None, description="Interval in seconds between frames (None = evenly spaced)")
-    nemotron_max_tokens: int = Field(default=4096, description="Maximum tokens in response")
-    nemotron_temperature: float = Field(default=0.6, description="Sampling temperature")
-    nemotron_top_p: float = Field(default=0.7, description="Top-p sampling parameter")
     
     max_video_size_mb: int = 100
     # Scenario for prompt selection
@@ -56,19 +42,18 @@ class Settings(BaseModel):
 
 
 class VideoReasoningResult(BaseModel):
-    """Result from reasoning analysis (Cosmos or Nemotron)"""
+    """Result from Cosmos-Reason2 video analysis"""
     source: str
     filename: str
     reasoning_content: str
     dense_caption: str = ""
     vlm_structured: str = ""
     structured_parse_ok: bool = False
-    cosmos_model: str = ""  # For backward compatibility, also used for nemotron_model
+    cosmos_model: str = ""
     tokens_used: int
     processing_time: float
-    video_url: str = ""  # Optional, not used for Nemotron
+    video_url: str = ""
     status: str = "success"
-    reasoning_provider: str = "cosmos"  # "cosmos" or "nemotron"
     
     # Metadata fields from S3 (passed through pipeline)
     is_public: bool = True  # Default to public (for CLI uploads)

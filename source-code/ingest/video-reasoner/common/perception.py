@@ -1,6 +1,6 @@
 """
 Perception lite: fast object listing on segment video before main VLM reasoning.
-Uses the same Cosmos/Nemotron client with a short JSON-only prompt.
+Uses Cosmos-Reason2 with a short JSON-only prompt.
 """
 import json
 import logging
@@ -90,20 +90,12 @@ def run_perception_lite(reasoning_client, video_content: bytes, settings) -> Dic
     if not getattr(settings, "perception_enabled", False):
         return dict(EMPTY_PERCEPTION)
 
-    provider = settings.reasoning_provider.lower()
     try:
-        if provider == "nemotron":
-            raw = reasoning_client.get_nemotron_reasoning(
-                video_content,
-                PERCEPTION_OBJECT_PROMPT,
-                max_tokens=getattr(settings, "perception_max_tokens", 512),
-            )
-        else:
-            raw = reasoning_client.get_cosmos_reasoning(
-                video_content,
-                PERCEPTION_OBJECT_PROMPT,
-                max_tokens=getattr(settings, "perception_max_tokens", 512),
-            )
+        raw = reasoning_client.get_cosmos_reasoning(
+            video_content,
+            PERCEPTION_OBJECT_PROMPT,
+            max_tokens=getattr(settings, "perception_max_tokens", 512),
+        )
         content = raw.get("reasoning_content", "")
         parsed = _parse_perception_response(content)
         agg = _aggregate_detections(parsed)
@@ -114,7 +106,7 @@ def run_perception_lite(reasoning_client, video_content: bytes, settings) -> Dic
                 for cls, cnt in sorted(agg["counts"].items())
             ],
             "summary": agg["summary"],
-            "provider": provider,
+            "provider": "cosmos",
         }
 
         return {

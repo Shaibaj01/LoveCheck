@@ -11,7 +11,6 @@ This blueprint can run against two local services (your docker commands).
 
 ## Secret alignment (`vss-gui-secret-file-template.yaml`)
 
-- `reasoning_provider: cosmos`
 - `cosmos_host` / `cosmos_port: 8001` / `cosmos_model: "./Cosmos-Reason2-8B"`
 - `embedding_provider: cosmos_embed1`
 - `embeddinghost` / `embeddingport: 8002` / `embeddingmodel: nvidia/cosmos-embed1`
