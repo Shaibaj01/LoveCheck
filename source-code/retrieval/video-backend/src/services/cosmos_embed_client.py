@@ -12,12 +12,6 @@ logger = logging.getLogger(__name__)
 COSMOS_EMBED1_MODEL = "nvidia/cosmos-embed1"
 
 
-def is_cosmos_embed1(model: str, provider: str = "") -> bool:
-    if (provider or "").lower() in ("cosmos_embed1", "cosmos-embed1"):
-        return True
-    return "cosmos-embed1" in (model or "").lower()
-
-
 class CosmosEmbed1Client:
     def __init__(self):
         settings = get_settings()

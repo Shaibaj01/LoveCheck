@@ -11,8 +11,7 @@ class Settings(BaseModel):
     s3secretkey: str
     s3endpoint: str
 
-    # Text embedding: openai_compat (Llama embed NIM) or cosmos_embed1 (Cosmos-Embed1 NIM)
-    embedding_provider: str = ""
+    # Cosmos-Embed1 NIM (text + visual)
     embeddinghost: str
     embeddingport: int
     embeddinghttpscheme: str = "http"

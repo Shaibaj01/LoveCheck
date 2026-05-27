@@ -37,10 +37,6 @@ class Settings(BaseSettings):
     embedding_host: str = Field(..., description="NVIDIA NIM embedding host")
     embedding_port: int = Field(default=80, description="NVIDIA NIM embedding port")
     embedding_http_scheme: str = Field(default="http", description="HTTP scheme")
-    embedding_provider: str = Field(
-        default="",
-        description="cosmos_embed1 for Cosmos-Embed1 NIM; leave empty for OpenAI-style embed API",
-    )
     embedding_model: str = Field(
         default="nvidia/cosmos-embed1",
         description="Embedding model",
