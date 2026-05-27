@@ -5,7 +5,6 @@ from common.models import Settings, ReasoningEvent, EmbeddingResult
 from common.embedding_client import EmbeddingClient
 from common.visual_embedding_client import VisualEmbeddingClient
 from common.s3_client import S3Client
-from common.frame_utils import extract_frames_from_video
 from common.handler_utils import parse_reasoning_event, validate_embed_text
 
 
@@ -131,19 +130,8 @@ def handler(ctx, event: VastEvent):
                             f"{ctx.settings.visual_embedding_model}"
                         )
                         video_bytes = ctx.s3_client.download_from_uri(source)
-                        frames_used = 0
-                        if getattr(ctx.visual_embedding_client, "_cosmos", None):
-                            visual_embedding = ctx.visual_embedding_client.embed_segment_video(
-                                video_bytes
-                            )
-                            frames_used = 0  # full MP4 embed (Cosmos-Embed1)
-                        else:
-                            frames = extract_frames_from_video(
-                                video_bytes,
-                                num_frames=ctx.settings.visual_embedding_num_frames,
-                            )
-                            frames_used = len(frames)
-                            visual_embedding = ctx.visual_embedding_client.embed_frame_pngs(frames)
+                        visual_embedding = ctx.visual_embedding_client.embed_segment_video(video_bytes)
+                        frames_used = 0  # full MP4 embed (Cosmos-Embed1)
                         visual_embedding_ok = len(visual_embedding) > 0
                         visual_span.set_attributes({
                             "visual_embedding_dimensions": len(visual_embedding),

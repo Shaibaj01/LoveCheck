@@ -25,25 +25,12 @@ class Settings(BaseModel):
     visual_embedding_enabled: bool = True
     visual_embedding_model: str = "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1"
     visual_embedding_dimensions: int = 256
-    visual_embedding_host: str = ""
-    visual_embedding_port: int = 0
-    visual_embedding_httpscheme: str = ""
-    visual_embedding_local_nim: bool = False
-    visual_embedding_num_frames: int = 3
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':
         """Load settings from runtime context secrets (uses model defaults for missing optional fields)"""
         raw = secrets["videoreasonsecret"]
         config = {field: raw[field] for field in cls.__annotations__.keys() if field in raw}
-        if not config.get("visual_embedding_host"):
-            config["visual_embedding_host"] = config.get("embeddinghost", "")
-        if not config.get("visual_embedding_port"):
-            config["visual_embedding_port"] = config.get("embeddingport", 443)
-        if not config.get("visual_embedding_httpscheme"):
-            config["visual_embedding_httpscheme"] = config.get("embeddinghttpscheme", "https")
-        if "visual_embedding_local_nim" not in config and "embedding_local_nim" in config:
-            config["visual_embedding_local_nim"] = config["embedding_local_nim"]
         return cls(**config)
 
 
