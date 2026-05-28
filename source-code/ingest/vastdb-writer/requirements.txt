@@ -11,5 +11,5 @@ pyarrow
 # Data validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
-# Do NOT pin opentelemetry-* — see ingest/BUILD.md
+# OpenTelemetry: provided by vast_runtime — do not pin (conflicts with processor-baggage)
 
