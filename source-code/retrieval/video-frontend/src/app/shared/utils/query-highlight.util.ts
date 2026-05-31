@@ -100,6 +100,48 @@ export function objectMatchesQuery(label: string, terms: string[]): boolean {
   return terms.some(term => termMatchesLabel(term, label));
 }
 
+function formatObjectChipLabel(type: string, count: unknown): string {
+  const label = type.trim();
+  if (!label) return '';
+  if (count == null || count === '') return label;
+  const numeric = Number(count);
+  if (Number.isFinite(numeric) && numeric > 1) {
+    return `${Math.trunc(numeric)} ${label}`;
+  }
+  return label;
+}
+
+export function segmentDisplayCaption(segment: {
+  dense_caption?: string | null;
+  reasoning_content?: string | null;
+  vlm_structured?: string | null;
+}): string {
+  if (segment.vlm_structured?.trim()) {
+    try {
+      let data: unknown = JSON.parse(segment.vlm_structured);
+      if (typeof data === 'string') data = JSON.parse(data);
+      const summary = (data as { scene_summary?: string }).scene_summary?.trim();
+      if (summary) return summary;
+    } catch {
+      // ignore malformed structured JSON
+    }
+  }
+
+  const dense = segment.dense_caption?.trim();
+  if (dense) {
+    const objectsIdx = dense.indexOf(' | Objects:');
+    if (objectsIdx > 0) return dense.slice(0, objectsIdx).trim();
+    return dense;
+  }
+
+  const reasoning = segment.reasoning_content?.trim();
+  if (reasoning) {
+    const firstLine = reasoning.split('\n')[0]?.trim();
+    if (firstLine) return firstLine;
+  }
+  return '';
+}
+
 export function parseStructuredObjects(segment: SegmentObjectSource): string[] {
   const labels: string[] = [];
 
@@ -114,9 +156,9 @@ export function parseStructuredObjects(segment: SegmentObjectSource): string[] {
             continue;
           }
           if (obj && typeof obj === 'object') {
-            const typed = obj as { type?: string; notes?: string };
-            if (typed.type?.trim()) labels.push(typed.type.trim());
-            if (typed.notes?.trim()) labels.push(typed.notes.trim());
+            const typed = obj as { type?: string; count?: unknown };
+            const chip = formatObjectChipLabel(typed.type ?? '', typed.count);
+            if (chip) labels.push(chip);
           }
         }
       }
@@ -192,7 +234,7 @@ export function pickPreviewSegment(timeline: PreviewSegmentLike[]): PreviewSegme
 export function previewCaption(chunk: PreviewChunkLike): string {
   const seg = pickPreviewSegment(chunk.timeline);
   if (seg) {
-    return (seg.dense_caption || seg.reasoning_content || '').trim();
+    return segmentDisplayCaption(seg) || (chunk.dense_caption || chunk.reasoning_content || '').trim();
   }
   return (chunk.dense_caption || chunk.reasoning_content || '').trim();
 }

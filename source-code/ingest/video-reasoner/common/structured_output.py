@@ -31,6 +31,7 @@ Rules:
 """
 
 DENSE_CAPTION_MAX_CHARS = 600
+OBJECT_NOTES_MAX_CHARS = 120
 
 
 def wrap_prompt_with_structured_output(base_prompt: str) -> str:
@@ -209,6 +210,33 @@ def _normalize_list_field(data: Dict[str, Any], key: str) -> List[Any]:
     return []
 
 
+def _coerce_count(value: Any) -> Optional[int]:
+    """Normalize object counts; fuzzy strings like 'more than 10' -> 10."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return max(1, value)
+    if isinstance(value, float):
+        return max(1, int(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return max(1, int(text))
+    except (TypeError, ValueError):
+        match = re.search(r"\d+", text)
+        if match:
+            return max(1, int(match.group(0)))
+    return None
+
+
+def _truncate_notes(notes: str) -> str:
+    text = notes.strip()
+    if len(text) <= OBJECT_NOTES_MAX_CHARS:
+        return text
+    return text[: OBJECT_NOTES_MAX_CHARS - 3].rstrip() + "..."
+
+
 def _coerce_structured(data: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure expected keys exist with safe types."""
     objects = _normalize_list_field(data, "objects")
@@ -217,8 +245,8 @@ def _coerce_structured(data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(obj, dict):
             normalized_objects.append({
                 "type": str(obj.get("type", "unknown")).strip() or "unknown",
-                "count": obj.get("count"),
-                "notes": str(obj.get("notes", "")).strip(),
+                "count": _coerce_count(obj.get("count")),
+                "notes": _truncate_notes(str(obj.get("notes", ""))),
             })
         elif isinstance(obj, str) and obj.strip():
             normalized_objects.append({"type": obj.strip(), "count": None, "notes": ""})
@@ -265,18 +293,11 @@ def build_dense_caption(data: Dict[str, Any]) -> str:
         if not isinstance(obj, dict):
             continue
         label = obj.get("type", "object")
-        count = obj.get("count")
-        notes = obj.get("notes", "")
+        count = _coerce_count(obj.get("count"))
         if count is not None:
-            try:
-                count_i = int(count)
-                piece = f"{count_i} {label}"
-            except (TypeError, ValueError):
-                piece = str(label)
+            piece = f"{count} {label}"
         else:
             piece = str(label)
-        if notes:
-            piece = f"{piece} ({notes})"
         object_bits.append(piece)
     if object_bits:
         parts.append("Objects: " + ", ".join(object_bits[:8]))
@@ -414,7 +435,7 @@ def derive_object_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
         if not label:
             continue
         try:
-            count_i = max(1, int(obj.get("count", 1) or 1))
+            count_i = max(1, _coerce_count(obj.get("count")) or 1)
         except (TypeError, ValueError):
             count_i = 1
         counts[label] = counts.get(label, 0) + count_i

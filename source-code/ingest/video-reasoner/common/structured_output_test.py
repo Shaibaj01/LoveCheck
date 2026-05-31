@@ -32,7 +32,27 @@ class StructuredOutputTests(unittest.TestCase):
         result = process_vlm_response(raw)
         self.assertTrue(result["structured_parse_ok"])
         self.assertIn("forklift", result["dense_caption"].lower())
-        self.assertIn("Forklift", result["reasoning_content"])
+        self.assertNotIn("yellow", result["dense_caption"].lower())
+        self.assertIn("yellow", result["reasoning_content"])
+
+    def test_dense_caption_omits_long_object_notes(self):
+        payload = {
+            "scene_summary": "Crowded city square with performers and billboards.",
+            "objects": [{
+                "type": "people",
+                "count": "more than 10",
+                "notes": "Pedestrians in winter attire walking or standing, some taking photos",
+            }],
+            "actions": [],
+            "events": [],
+            "hazards": [],
+            "attributes": {},
+        }
+        result = process_vlm_response(json.dumps(payload))
+        self.assertIn("10 people", result["dense_caption"].lower())
+        self.assertNotIn("Pedestrians in winter", result["dense_caption"])
+        parsed = json.loads(result["vlm_structured"])
+        self.assertEqual(parsed["objects"][0]["count"], 10)
 
     def test_fallback_on_invalid_json(self):
         result = process_vlm_response("This is plain prose without JSON.")

@@ -22,6 +22,7 @@ import {
   highlightQueryTerms,
   objectMatchesQuery,
   parseStructuredObjects,
+  segmentDisplayCaption,
 } from '../../shared/utils/query-highlight.util';
 
 export interface VideoPlayerData {
@@ -144,7 +145,7 @@ export interface VideoPlayerData {
                   <span class="hit-pill">Query hit</span>
                 }
               </div>
-              <p class="seg-caption" [innerHTML]="highlightHtml(seg.dense_caption || seg.reasoning_content || '')"></p>
+              <p class="seg-caption" [innerHTML]="highlightHtml(segmentDisplayCaption(seg))"></p>
               @if (segmentObjects(seg).length) {
                 <div class="seg-objects">
                   @for (obj of segmentObjects(seg); track obj) {
@@ -551,6 +552,8 @@ export class VideoPlayerComponent implements OnInit {
   segmentObjects(seg: TimelineSegment): string[] {
     return parseStructuredObjects(seg).slice(0, 6);
   }
+
+  readonly segmentDisplayCaption = segmentDisplayCaption;
 
   isQueryTerm(label: string): boolean {
     return objectMatchesQuery(label, this.queryTerms());
