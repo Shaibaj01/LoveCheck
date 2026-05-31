@@ -4,11 +4,11 @@ import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { SearchBarComponent } from './components/search-bar.component';
-import { VideoCardComponent } from './components/video-card.component';
+import { ChunkCardComponent } from './components/chunk-card.component';
 import { SearchAnimationComponent } from './components/search-animation.component';
 import { LLMSynthesisComponent } from './components/llm-synthesis.component';
 import { SearchService } from './services/search.service';
-import { SearchRequest, VideoSearchResult } from '../../shared/models/video.model';
+import { SearchRequest, ChunkSearchResult } from '../../shared/models/video.model';
 import { VideoPlayerComponent } from '../player/video-player.component';
 import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
@@ -23,7 +23,7 @@ import { environment } from '../../../environments/environment';
     MatButtonModule,
     MatIconModule,
     SearchBarComponent,
-    VideoCardComponent,
+    ChunkCardComponent,
     SearchAnimationComponent,
     LLMSynthesisComponent
   ],
@@ -62,13 +62,13 @@ import { environment } from '../../../environments/environment';
         </div>
       }
 
-      @if (searchService.state().results.length > 0) {
+      @if (displayResults().length > 0) {
         <div class="results-header">
           <h2>Search Results</h2>
           <div class="results-info">
-            <span>Found {{ searchService.state().results.length }} videos</span>
+            <span>Found {{ displayResults().length }} clip{{ displayResults().length === 1 ? '' : 's' }}</span>
             <span>
-              Showing {{ pageStartIndex() }}-{{ pageEndIndex() }} / {{ searchService.state().results.length }}
+              Showing {{ pageStartIndex() }}-{{ pageEndIndex() }} / {{ displayResults().length }}
             </span>
             @if (searchService.state().permissionFiltered > 0) {
               <span class="filtered-info">
@@ -88,8 +88,12 @@ import { environment } from '../../../environments/environment';
         }
 
         <div class="results-grid">
-          @for (video of visibleResults(); track video.source) {
-            <app-video-card [video]="video" (play)="playVideo($event)"></app-video-card>
+          @for (chunk of visibleChunks(); track trackChunk($index, chunk)) {
+            <app-chunk-card
+              [chunk]="chunk"
+              (open)="openChunk($event)"
+              (jumpTo)="openChunkAt($event.chunk, $event.seekSec)">
+            </app-chunk-card>
           }
         </div>
         @if (hasMultiplePages()) {
@@ -117,7 +121,7 @@ import { environment } from '../../../environments/environment';
         }
       }
 
-      @if (hasSearched() && searchService.state().results.length === 0 && !searchService.state().loading) {
+      @if (hasSearched() && displayResults().length === 0 && !searchService.state().loading) {
         <div class="no-results">
           <img src="assets/vast_logo.svg" alt="VAST" class="vast-logo-glow">
           <h2>No videos found</h2>
@@ -131,7 +135,7 @@ import { environment } from '../../../environments/environment';
       [embeddingTime]="searchService.state().embeddingTimeMs"
       [searchTime]="searchService.state().searchTimeMs"
       [llmTime]="searchService.state().llmTimeMs"
-      [resultsCount]="searchService.state().results.length"
+      [resultsCount]="displayResults().length"
       [showLlmPhase]="searchService.state().llmSynthesis !== null"
       (close)="closeAnimation()">
     </app-search-animation>
@@ -474,24 +478,33 @@ export class SearchPageComponent implements OnInit {
     this.searchBar?.setQuery(example.trim());
   }
 
-  visibleResults(): VideoSearchResult[] {
+  displayResults(): ChunkSearchResult[] {
+    const chunks = this.searchService.state().chunkResults;
+    if (chunks.length > 0) return chunks;
+    return [];
+  }
+
+  visibleChunks(): ChunkSearchResult[] {
     const start = (this.currentPage() - 1) * SearchPageComponent.PAGE_SIZE;
-    const end = start + SearchPageComponent.PAGE_SIZE;
-    return this.searchService.state().results.slice(start, end);
+    return this.displayResults().slice(start, start + SearchPageComponent.PAGE_SIZE);
+  }
+
+  trackChunk(_index: number, chunk: ChunkSearchResult): string {
+    return `${chunk.original_video}|${chunk.query}|${chunk.best_segment_number}`;
   }
 
   pageStartIndex(): number {
-    const total = this.searchService.state().results.length;
+    const total = this.displayResults().length;
     if (total === 0) return 0;
     return (this.currentPage() - 1) * SearchPageComponent.PAGE_SIZE + 1;
   }
 
   pageEndIndex(): number {
-    return Math.min(this.currentPage() * SearchPageComponent.PAGE_SIZE, this.searchService.state().results.length);
+    return Math.min(this.currentPage() * SearchPageComponent.PAGE_SIZE, this.displayResults().length);
   }
 
   totalPages(): number {
-    const total = this.searchService.state().results.length;
+    const total = this.displayResults().length;
     return Math.max(1, Math.ceil(total / SearchPageComponent.PAGE_SIZE));
   }
 
@@ -530,14 +543,22 @@ export class SearchPageComponent implements OnInit {
     this.searchService.closeAnimation();
   }
 
-  playVideo(video: VideoSearchResult) {
+  openChunk(chunk: ChunkSearchResult, seekSec?: number) {
     this.dialog.open(VideoPlayerComponent, {
-      data: { video },
-      width: '90vw',
-      maxWidth: '1200px',
-      height: '90vh',
-      panelClass: 'video-player-dialog'
+      data: {
+        chunk,
+        query: chunk.query,
+        initialSeekSec: seekSec ?? chunk.best_match_start_sec,
+      },
+      width: '92vw',
+      maxWidth: '1100px',
+      height: '92vh',
+      panelClass: 'video-player-dialog',
     });
+  }
+
+  openChunkAt(chunk: ChunkSearchResult, seekSec: number) {
+    this.openChunk(chunk, seekSec);
   }
 
   openUpload() {

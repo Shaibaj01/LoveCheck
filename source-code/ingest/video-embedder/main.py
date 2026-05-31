@@ -5,7 +5,7 @@ from common.models import Settings, ReasoningEvent, EmbeddingResult
 from common.embedding_client import EmbeddingClient
 from common.visual_embedding_client import VisualEmbeddingClient
 from common.s3_client import S3Client
-from common.handler_utils import parse_reasoning_event, validate_embed_text
+from common.handler_utils import parse_reasoning_event, resolve_embed_text, validate_embed_text
 
 
 def init(ctx):
@@ -24,8 +24,14 @@ def handler(ctx, event: VastEvent):
     """Main handler function for vast serverless runtime"""
     
     with ctx.tracer.start_as_current_span("Video Embedder Handler") as handler_span:
+        source = ""
+        filename = ""
         try:
             data = event.get_data()
+            if data.get("status") == "error":
+                ctx.logger.warning(f"[SKIP] upstream error: {data.get('error')}")
+                return {"status": "skipped", "reason": data.get("error", "upstream error")}
+
             event_type = getattr(event, 'get_type', lambda: 'element_trigger')()
             handler_span.set_attribute("event_type", event_type)
             
@@ -38,12 +44,13 @@ def handler(ctx, event: VastEvent):
                 dense_caption = reasoning_event.get("dense_caption", "")
                 vlm_structured = reasoning_event.get("vlm_structured", "")
                 structured_parse_ok = reasoning_event.get("structured_parse_ok", False)
-                text_to_embed = (dense_caption or "").strip() or reasoning_content
+                text_to_embed = resolve_embed_text(
+                    dense_caption, reasoning_content, vlm_structured
+                )
                 cosmos_model = reasoning_event.get("cosmos_model", "")
                 tokens_used = reasoning_event.get("tokens_used", 0)
                 cached_prompt_tokens = reasoning_event.get("cached_prompt_tokens", 0)
                 processing_time = reasoning_event.get("processing_time", 0.0)
-                video_url = reasoning_event.get("video_url", "")
                 status = reasoning_event.get("status", "success")
                 
                 is_public = reasoning_event.get("is_public", True)
@@ -161,7 +168,6 @@ def handler(ctx, event: VastEvent):
                 "tokens_used": tokens_used,
                 "cached_prompt_tokens": cached_prompt_tokens,
                 "processing_time": processing_time,
-                "video_url": video_url,
                 "status": "success",
                 "is_public": is_public,
                 "allowed_users": allowed_users,
@@ -194,5 +200,10 @@ def handler(ctx, event: VastEvent):
             handler_span.set_attribute("error.message", str(e))
             handler_span.record_exception(e)
             ctx.logger.error(f"Embedding failed: {e}")
-            return {"status": "error", "error": str(e)}
+            err = {"status": "error", "error": str(e)}
+            if source:
+                err["source"] = source
+            if filename:
+                err["filename"] = filename
+            return err
 

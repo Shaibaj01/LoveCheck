@@ -23,8 +23,7 @@ class Settings(BaseModel):
     # Options: surveillance, traffic, nhl, sports, retail, warehouse, general
     scenario: str = "general"
 
-    # Perception lite (short VLM object pass before main reasoning)
-    perception_enabled: bool = False
+    # Perception lite (always on — short VLM object pass before main reasoning)
     perception_max_tokens: int = 512
     
     @computed_field
@@ -52,7 +51,6 @@ class VideoReasoningResult(BaseModel):
     cosmos_model: str = ""
     tokens_used: int
     processing_time: float
-    video_url: str = ""
     status: str = "success"
     
     # Metadata fields from S3 (passed through pipeline)

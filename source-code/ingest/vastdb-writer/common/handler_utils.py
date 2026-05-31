@@ -12,7 +12,16 @@ def parse_embedding_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Parsed embedding event dict
     """
-    logging.info(f"[PARSER] Parsing embedding event: {event_data}")
+    if event_data.get("status") == "error":
+        raise ValueError(f"Upstream embedding error: {event_data.get('error', 'unknown')}")
+
+    if event_data.get("status") == "skipped":
+        raise ValueError(f"Upstream skipped: {event_data.get('reason', 'unknown')}")
+
+    logging.info(
+        f"[PARSER] Parsing embedding event: "
+        f"filename={event_data.get('filename')} source={event_data.get('source')}"
+    )
     
     # Validate required fields
     required_fields = ["source", "filename", "reasoning_content", "embedding"]

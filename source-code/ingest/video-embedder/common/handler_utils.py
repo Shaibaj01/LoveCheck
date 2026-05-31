@@ -1,5 +1,12 @@
+import json
 import logging
-from typing import Dict, Any
+import re
+from typing import Dict, Any, Optional
+
+SCENE_SUMMARY_RE = re.compile(
+    r'"scene_summary"\s*:\s*"((?:\\.|[^"\\])*)"',
+    re.DOTALL,
+)
 
 
 def parse_reasoning_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -33,9 +40,59 @@ def parse_reasoning_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
     return event_data
 
 
+def _extract_scene_summary(text: str) -> Optional[str]:
+    if not text or not text.strip():
+        return None
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+    if fence_match:
+        cleaned = fence_match.group(1)
+    match = SCENE_SUMMARY_RE.search(cleaned)
+    if not match:
+        return None
+    raw_value = match.group(1)
+    try:
+        return str(json.loads(f'"{raw_value}"')).strip()
+    except json.JSONDecodeError:
+        return raw_value.replace('\\"', '"').replace("\\n", " ").strip()
+
+
+def _looks_like_json_blob(text: str) -> bool:
+    stripped = (text or "").strip()
+    return stripped.startswith("```") or stripped.startswith("{") or '"scene_summary"' in stripped[:800]
+
+
+def resolve_embed_text(
+    dense_caption: str,
+    reasoning_content: str,
+    vlm_structured: str = "",
+) -> str:
+    """Plain caption text for Cosmos-Embed1; never raw ```json blobs."""
+    if vlm_structured and str(vlm_structured).strip():
+        try:
+            data = json.loads(vlm_structured)
+            if isinstance(data, dict):
+                summary = str(data.get("scene_summary") or "").strip()
+                if summary:
+                    return summary
+        except Exception:
+            pass
+
+    for candidate in ((dense_caption or "").strip(), (reasoning_content or "").strip()):
+        if not candidate:
+            continue
+        if _looks_like_json_blob(candidate):
+            summary = _extract_scene_summary(candidate)
+            if summary:
+                return summary
+            continue
+        return candidate
+    return ""
+
+
 def validate_embed_text(dense_caption: str, reasoning_content: str) -> bool:
     """Validate text available for embedding (prefer dense_caption)."""
-    text = (dense_caption or "").strip() or (reasoning_content or "").strip()
+    text = resolve_embed_text(dense_caption, reasoning_content)
     if not text:
         logging.warning("[VALIDATOR] No dense_caption or reasoning_content to embed")
         return False

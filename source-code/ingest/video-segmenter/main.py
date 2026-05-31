@@ -4,11 +4,13 @@ from vast_runtime.vast_event import VastEvent  # type: ignore
 from common.models import Settings, S3ObjectMetadataModel
 from common.video_processor import VideoProcessor
 from common.handler_utils import (
-    parse_s3_event, 
-    should_process_event, 
-    get_output_bucket_name, 
-    get_segment_key, 
-    prepare_metadata
+    parse_s3_event,
+    should_process_event,
+    get_output_bucket_name,
+    get_segment_key,
+    get_segment_list_prefix,
+    segments_already_complete,
+    prepare_metadata,
 )
 from common.clients import S3Client
 
@@ -63,10 +65,12 @@ def handler(ctx, event: VastEvent):
             filename = key.split('/')[-1] if '/' in key else key
             output_bucket = get_output_bucket_name(bucket, ctx.processor.settings.output_bucket_suffix)
 
-            # NOTE: Do not skip based on "any segment object exists" under this video's prefix.
-            # A crash/OOM after uploading only segment_001 made re-invocations skip forever,
-            # so segments 002+ were never created. Duplicate S3 notifications may re-segment
-            # the same source (same keys overwritten); that is acceptable.
+            segment_prefix = get_segment_list_prefix(filename)
+            existing_segment_keys = ctx.s3_client.list_all_objects_prefix(output_bucket, segment_prefix)
+            complete, complete_reason = segments_already_complete(existing_segment_keys, filename)
+            if complete:
+                ctx.logger.info(f"[SKIP] {key} | reason={complete_reason}")
+                return {"status": "skipped", "reason": complete_reason}
 
             with ctx.tracer.start_as_current_span("S3 Download") as download_span:
                 video_content = ctx.s3_client.download_file(bucket, key)

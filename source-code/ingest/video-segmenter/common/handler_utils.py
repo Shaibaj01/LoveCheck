@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, Any, Tuple
+import re
+from typing import Dict, Any, List, Tuple
 from urllib.parse import unquote
 
 
@@ -54,6 +55,32 @@ def should_process_event(key: str, event_name: str) -> Tuple[bool, str]:
 def get_output_bucket_name(input_bucket: str, suffix: str = "-segments") -> str:
     """Get output bucket name for segments."""
     return f"{input_bucket}{suffix}"
+
+
+def get_segment_list_prefix(original_filename: str) -> str:
+    """S3 prefix for listing segment objects of a source video."""
+    base_name = original_filename.rsplit(".", 1)[0]
+    return f"segments/{base_name}_segment_"
+
+
+def segments_already_complete(segment_keys: List[str], original_filename: str) -> Tuple[bool, str]:
+    """True when every segment 1..N exists for some consistent total N."""
+    base_name = original_filename.rsplit(".", 1)[0]
+    pattern = re.compile(
+        rf"^segments/{re.escape(base_name)}_segment_(\d{{3}})_of_(\d{{3}})\."
+    )
+    by_total: dict[int, set[int]] = {}
+    for key in segment_keys:
+        match = pattern.match(key)
+        if not match:
+            continue
+        seg_num, total = int(match.group(1)), int(match.group(2))
+        by_total.setdefault(total, set()).add(seg_num)
+
+    for total, found in by_total.items():
+        if found == set(range(1, total + 1)):
+            return True, f"All {total} segments already exist in S3"
+    return False, ""
 
 
 def get_segment_key(original_filename: str, segment_number: int, total_segments: int) -> str:

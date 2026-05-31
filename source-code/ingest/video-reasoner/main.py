@@ -2,10 +2,12 @@ from opentelemetry import trace
 from vast_runtime.vast_event import VastEvent  # type: ignore
 from urllib.parse import unquote
 
+import json
 from common.models import Settings, VideoReasoningResult
 from common.clients import S3Client, CosmosReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event
 from common.perception import run_perception_lite, format_perception_context
+from common.structured_output import derive_object_metadata
 
 
 def init(ctx):
@@ -145,26 +147,18 @@ def handler(ctx, event: VastEvent):
                     scenario = ctx.settings.scenario  # Fall back to default from settings
                     custom_prompt = ""  # No custom prompt on error
 
-            perception_result = {
-                "perception_json": "",
-                "object_classes": "",
-                "object_counts": "{}",
-                "max_detection_conf": 0.0,
-                "perception_ok": False,
-            }
-            if ctx.settings.perception_enabled:
-                with ctx.tracer.start_as_current_span("Perception Lite") as perception_span:
-                    perception_result = run_perception_lite(
-                        ctx.reasoning_client, video_content, ctx.settings
-                    )
-                    perception_span.set_attributes({
-                        "perception_ok": perception_result.get("perception_ok", False),
-                        "object_classes": perception_result.get("object_classes", ""),
-                    })
-                    ctx.logger.info(
-                        f"[PERCEPTION] ok={perception_result.get('perception_ok')} | "
-                        f"classes={perception_result.get('object_classes') or 'none'}"
-                    )
+            with ctx.tracer.start_as_current_span("Perception Lite") as perception_span:
+                perception_result = run_perception_lite(
+                    ctx.reasoning_client, video_content, ctx.settings
+                )
+                perception_span.set_attributes({
+                    "perception_ok": perception_result.get("perception_ok", False),
+                    "object_classes": perception_result.get("object_classes", ""),
+                })
+                ctx.logger.info(
+                    f"[PERCEPTION] ok={perception_result.get('perception_ok')} | "
+                    f"classes={perception_result.get('object_classes') or 'none'}"
+                )
 
             perception_context = format_perception_context(perception_result)
 
@@ -181,6 +175,7 @@ def handler(ctx, event: VastEvent):
                     prompt=custom_prompt if custom_prompt else None,
                     scenario=scenario,
                     perception_context=perception_context or None,
+                    perception=perception_result,
                 )
                 
                 content_length = len(reasoning_result.get("reasoning_content", ""))
@@ -206,6 +201,20 @@ def handler(ctx, event: VastEvent):
                     f"[COSMOS] Complete | {content_length} chars | {tokens_used} tokens{cache_part} | {processing_time:.2f}s"
                 )
 
+            object_classes = perception_result.get("object_classes", "")
+            object_counts = perception_result.get("object_counts", "{}")
+            if reasoning_result.get("vlm_structured"):
+                try:
+                    structured_data = json.loads(reasoning_result["vlm_structured"])
+                    derived = derive_object_metadata(structured_data)
+                    if perception_result.get("perception_ok") and object_classes:
+                        pass
+                    elif derived.get("object_classes"):
+                        object_classes = derived["object_classes"]
+                        object_counts = derived["object_counts"]
+                except json.JSONDecodeError:
+                    pass
+
             result = {
                 "source": source,
                 "filename": filename,
@@ -217,7 +226,6 @@ def handler(ctx, event: VastEvent):
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),
                 "processing_time": reasoning_result["processing_time"],
-                "video_url": reasoning_result.get("video_url", ""),
                 "status": "success",
                 "is_public": is_public,
                 "allowed_users": allowed_users,
@@ -235,15 +243,14 @@ def handler(ctx, event: VastEvent):
                 "location": location,
                 "scenario": scenario,
                 "perception_json": perception_result.get("perception_json", ""),
-                "object_classes": perception_result.get("object_classes", ""),
-                "object_counts": perception_result.get("object_counts", "{}"),
+                "object_classes": object_classes,
+                "object_counts": object_counts,
                 "max_detection_conf": perception_result.get("max_detection_conf", 0.0),
                 "perception_ok": perception_result.get("perception_ok", False),
                 "row_kind": "segment",
             }
             
-            video_url_info = f" | video_url={reasoning_result.get('video_url', 'N/A')}" if reasoning_result.get("video_url") else ""
-            ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments}{video_url_info}")
+            ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments}")
             return result
             
         except Exception as e:

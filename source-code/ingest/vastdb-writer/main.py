@@ -21,6 +21,14 @@ def handler(ctx, event: VastEvent):
             data = event.get_data()
             event_type = getattr(event, 'get_type', lambda: 'element_trigger')()
             handler_span.set_attribute("event_type", event_type)
+
+            if data.get("status") == "error":
+                ctx.logger.warning(f"[SKIP] upstream error: {data.get('error')}")
+                return {"status": "skipped", "reason": data.get("error", "upstream error")}
+
+            if data.get("status") == "skipped":
+                ctx.logger.info(f"[SKIP] upstream skipped: {data.get('reason')}")
+                return {"status": "skipped", "reason": data.get("reason", "upstream skipped")}
             
             with ctx.tracer.start_as_current_span("Embedding Event Parsing") as parse_span:
                 embedding_event = parse_embedding_event(data)
@@ -104,6 +112,15 @@ def handler(ctx, event: VastEvent):
             ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments} → {table_full_name} | public={is_public} | camera={camera_id or 'none'}")
             return result
             
+        except ValueError as e:
+            msg = str(e)
+            if msg.startswith("Upstream"):
+                ctx.logger.warning(f"[SKIP] {msg}")
+                return {"status": "skipped", "reason": msg}
+            handler_span.set_attribute("error", True)
+            handler_span.set_attribute("error.message", msg)
+            ctx.logger.error(f"VastDB write failed: {msg}")
+            return {"status": "error", "error": msg}
         except Exception as e:
             handler_span.set_attribute("error", True)
             handler_span.set_attribute("error.message", str(e))

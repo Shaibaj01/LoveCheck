@@ -45,7 +45,6 @@ class ReasoningEvent(BaseModel):
     tokens_used: int
     cached_prompt_tokens: int = 0
     processing_time: float
-    video_url: str
     status: str = "success"
     
     # Metadata fields (passed through pipeline)
@@ -95,7 +94,6 @@ class EmbeddingResult(BaseModel):
     tokens_used: int
     cached_prompt_tokens: int = 0
     processing_time: float
-    video_url: str
     status: str = "success"
     
     # Metadata fields (passed to vastdb-writer)

@@ -3,9 +3,12 @@ import json
 import unittest
 
 from .structured_output import (
+    apply_structured_enrichment,
     build_dense_caption,
     extract_json_object,
+    merge_perception_into_structured,
     process_vlm_response,
+    _infer_objects_from_summary,
     wrap_prompt_with_structured_output,
 )
 
@@ -35,6 +38,84 @@ class StructuredOutputTests(unittest.TestCase):
         result = process_vlm_response("This is plain prose without JSON.")
         self.assertFalse(result["structured_parse_ok"])
         self.assertEqual(result["dense_caption"], "This is plain prose without JSON.")
+
+    def test_recovers_scene_summary_when_json_missing_comma(self):
+        raw = '''```json
+{
+  "scene_summary": "A man in a black suit speaks in Times Square."
+  "objects": [{"type": "camera", "count": 1, "notes": ""}],
+  "actions": [],
+  "events": [],
+  "hazards": [],
+  "attributes": {}
+}
+```'''
+        result = process_vlm_response(raw)
+        self.assertIn("black suit", result["dense_caption"].lower())
+        self.assertNotIn("```json", result["dense_caption"])
+        self.assertIn("black suit", result["vlm_structured"])
+
+    def test_enrich_sparse_structured_from_summary(self):
+        payload = {
+            "scene_summary": (
+                "A man in a black suit speaks animatedly while being filmed by another man "
+                "with a camera in a bustling plaza."
+            ),
+            "objects": [],
+            "actions": [],
+            "events": [],
+            "hazards": [],
+            "attributes": {},
+        }
+        enriched = apply_structured_enrichment(payload)
+        self.assertTrue(enriched["objects"] or enriched["actions"])
+        self.assertTrue(enriched["actions"])
+        self.assertNotEqual(
+            build_dense_caption(enriched),
+            enriched["scene_summary"],
+        )
+
+    def test_merge_perception_fills_objects(self):
+        data = {"scene_summary": "Warehouse activity.", "objects": [], "actions": [], "events": [], "hazards": [], "attributes": {}}
+        perception = {
+            "perception_ok": True,
+            "object_counts": '{"person": 2, "forklift": 1}',
+            "perception_summary": "Detected: person x2, forklift",
+        }
+        merged = merge_perception_into_structured(data, perception)
+        self.assertEqual(len(merged["objects"]), 2)
+        self.assertTrue(merged["actions"])
+
+    def test_infer_objects_from_summary(self):
+        summary = (
+            "A bustling urban square with pedestrians, digital billboards, and a statue, "
+            "where a man in a suit gestures while speaking to a cameraman."
+        )
+        objects = _infer_objects_from_summary(summary)
+        labels = {obj["type"] for obj in objects}
+        self.assertIn("person", labels)
+        self.assertIn("signboard", labels)
+        self.assertIn("statue", labels)
+
+    def test_recover_partial_structured_extracts_objects(self):
+        raw = '''```json
+{
+  "scene_summary": "Two performers in costumes in a plaza."
+  "objects": [
+    {"type": "gorilla", "count": 1, "notes": ""},
+    {"type": "minnie mouse", "count": 1, "notes": ""}
+  ],
+  "actions": ["posing"],
+  "events": [],
+  "hazards": [],
+  "attributes": {}
+}
+```'''
+        result = process_vlm_response(raw)
+        parsed = json.loads(result["vlm_structured"])
+        labels = {obj["type"] for obj in parsed["objects"]}
+        self.assertIn("gorilla", labels)
+        self.assertTrue(result["structured_parse_ok"])
 
 
 if __name__ == "__main__":

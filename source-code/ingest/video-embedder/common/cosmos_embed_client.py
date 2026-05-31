@@ -8,6 +8,7 @@ API differs from OpenAI-style embed models:
 """
 import base64
 import logging
+import time
 from typing import List, Optional
 
 import requests
@@ -36,20 +37,29 @@ class CosmosEmbed1Client:
 
     def _post(self, payload: dict, timeout: int = 120) -> List[List[float]]:
         url = f"{self.base_url}/embeddings"
-        response = requests.post(url, json=payload, headers=self._headers(), timeout=timeout)
-        if response.status_code != 200:
-            logging.error(f"[COSMOS_EMBED] {response.status_code}: {response.text[:500]}")
+        last_error = None
+        for attempt in range(3):
+            response = requests.post(url, json=payload, headers=self._headers(), timeout=timeout)
+            if response.status_code == 200:
+                items = response.json().get("data", [])
+                vectors = [item.get("embedding", []) for item in items if item.get("embedding")]
+                if not vectors:
+                    raise RuntimeError("Cosmos-Embed1 returned no embeddings")
+                return vectors
+            last_error = f"{response.status_code}: {response.text[:500]}"
+            logging.error(f"[COSMOS_EMBED] attempt {attempt + 1}/3 {last_error}")
+            if response.status_code in (429, 503) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
             response.raise_for_status()
-        items = response.json().get("data", [])
-        vectors = [item.get("embedding", []) for item in items if item.get("embedding")]
-        if not vectors:
-            raise RuntimeError("Cosmos-Embed1 returned no embeddings")
-        return vectors
+        raise RuntimeError(f"Cosmos-Embed1 failed: {last_error}")
 
     def embed_texts(self, texts: List[str], *, for_query: bool = False) -> List[List[float]]:
         if not texts:
             return []
         if len(texts) == 1:
+            for_query = True
+        if for_query and len(texts) == 1:
             payload = {
                 "input": texts[0],
                 "model": self.model,
@@ -64,7 +74,8 @@ class CosmosEmbed1Client:
                 "encoding_format": "float",
             }
         logging.info(
-            f"[COSMOS_EMBED] Text embed | n={len(texts)} | query_mode={for_query}"
+            f"[COSMOS_EMBED] Text embed | n={len(texts)} | "
+            f"request_type={payload['request_type']}"
         )
         return self._post(payload)
 

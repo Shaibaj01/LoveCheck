@@ -75,7 +75,7 @@ const STORAGE_KEY = 'video_lab_system_prompt';
             <strong>How it works:</strong>
             <ul>
               <li>Your prompt is stored in your browser (localStorage)</li>
-              <li>It's sent with each search request when "Enable LLM Response" is enabled</li>
+              <li>It's sent with every search when AI synthesis runs (always on for clip results)</li>
               <li>Click "Reset" to restore the default surveillance prompt</li>
             </ul>
           </div>

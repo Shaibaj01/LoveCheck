@@ -25,7 +25,6 @@ class AgentAskRequest(BaseModel):
         description="When set, summarize/list segments for this parent video instead of global search",
     )
     top_k: int = Field(default=10, ge=1, le=50)
-    use_llm: bool = Field(default=True)
 
 
 class AgentAskResponse(BaseModel):
@@ -75,7 +74,6 @@ async def agent_ask(request: AgentAskRequest, current_user: CurrentUser = None):
     search_request = VideoSearchRequest(
         query=request.question,
         top_k=request.top_k,
-        use_llm=request.use_llm,
         include_public=True,
     )
     search_response = await search_videos(search_request, current_user)

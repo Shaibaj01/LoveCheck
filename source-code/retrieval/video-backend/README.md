@@ -60,13 +60,14 @@ Users authenticate with their **VAST username + S3 secret key** (not DataEngine 
 
 ## GUI Settings
 
-### Advanced LLM Settings (Settings → Advanced LLM Settings)
+### Advanced Search & AI Settings (Settings → Advanced Search & AI Settings)
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| LLM Analysis Count | Results sent to LLM | 3 |
-| Max Search Results | Max segments returned | 15 |
-| Minimum Similarity | Vector similarity threshold | 0.1 |
+| Max Clip Cards | Grouped upload cards returned (`top_k`) | 15 |
+| LLM Clips Analyzed | Clip cards sent to LLM with timeline evidence | 3 |
+| Caption vs Video Weight | Hybrid search blend (`hybrid_text_weight`) | 0.6 |
+| Minimum Similarity | Hybrid score threshold for clip cards | 0.1 |
 
 ### System Prompt (Settings → System Prompt)
 

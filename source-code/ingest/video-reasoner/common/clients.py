@@ -215,6 +215,7 @@ class CosmosReasoningClient:
         prompt: Optional[str] = None,
         scenario: Optional[str] = None,
         perception_context: Optional[str] = None,
+        perception: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Complete video analysis pipeline using Cosmos reasoning.
         
@@ -248,7 +249,7 @@ class CosmosReasoningClient:
             
             # Send base64-encoded video directly to API (no SFTP upload)
             reasoning_result = self.get_cosmos_reasoning(video_content, prompt)
-            structured = process_vlm_response(reasoning_result["reasoning_content"])
+            structured = process_vlm_response(reasoning_result["reasoning_content"], perception=perception)
             
             result = {
                 "filename": filename,
@@ -260,7 +261,6 @@ class CosmosReasoningClient:
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),
                 "processing_time": reasoning_result["processing_time"],
-                "video_url": "",
             }
 
             span.set_attributes({

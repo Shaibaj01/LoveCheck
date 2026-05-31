@@ -7,7 +7,7 @@ DataEngine function that analyzes video segments using **Cosmos-Reason2** to gen
 - Triggered when segments land in `video-chunks-segments` bucket
 - Sends segment MP4 (base64) to Cosmos-Reason2
 - Produces `dense_caption`, `vlm_structured`, and `reasoning_content`
-- Optional perception lite (second Reason2 call when `perception_enabled: true`)
+- Perception lite (always on) → object list conditions main VLM
 - Passes results to `video-embedder`
 
 ## Configuration
@@ -23,7 +23,6 @@ Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-tem
 | `cosmos_model` | ./Cosmos-Reason2-8B |
 | `cosmos_max_tokens` | 4000 |
 | `cosmos_temperature` | 0.2 |
-| `perception_enabled` | false |
 | `perception_max_tokens` | 512 |
 
 Local stack guide: `docs/COSMOS_LOCAL_STACK.md`

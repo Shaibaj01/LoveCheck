@@ -1,10 +1,11 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { VideoService } from '../../../shared/services/video.service';
-import { SearchRequest, SearchResponse, VideoSearchResult, LLMSynthesis } from '../../../shared/models/video.model';
+import { SearchRequest, SearchResponse, VideoSearchResult, ChunkSearchResult, LLMSynthesis } from '../../../shared/models/video.model';
 
 export interface SearchState {
   loading: boolean;
   results: VideoSearchResult[];
+  chunkResults: ChunkSearchResult[];
   query: string;
   error: string | null;
   embeddingTimeMs: number;
@@ -25,6 +26,7 @@ export class SearchService {
   state = signal<SearchState>({
     loading: false,
     results: [],
+    chunkResults: [],
     query: '',
     error: null,
     embeddingTimeMs: 0,
@@ -60,7 +62,7 @@ export class SearchService {
         await this.delay(600);
 
         // Show LLM synthesis phase if enabled
-        if (request.use_llm && response.results.length > 0) {
+        if ((response.chunk_results?.length ?? response.results.length) > 0) {
           this.state.update(s => ({ ...s, animationPhase: 'synthesizing' }));
           await this.delay(800);
         }
@@ -72,6 +74,7 @@ export class SearchService {
           ...s,
           loading: false,
           results: response.results,
+          chunkResults: response.chunk_results ?? [],
           embeddingTimeMs: response.embedding_time_ms,
           searchTimeMs: response.search_time_ms,
           llmTimeMs: response.llm_synthesis?.processing_time ? response.llm_synthesis.processing_time * 1000 : 0,
@@ -95,6 +98,7 @@ export class SearchService {
     this.state.update(s => ({
       ...s,
       results: [],
+      chunkResults: [],
       query: '',
       error: null,
       embeddingTimeMs: 0,

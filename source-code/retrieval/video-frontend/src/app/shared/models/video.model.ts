@@ -1,3 +1,44 @@
+export interface TimelineSegment {
+  segment_number: number;
+  segment_start_sec: number;
+  segment_end_sec: number;
+  source: string;
+  dense_caption?: string;
+  reasoning_content?: string;
+  vlm_structured?: string;
+  object_classes?: string;
+  similarity_score: number;
+  is_search_match: boolean;
+  query_highlight: boolean;
+  is_best_match: boolean;
+}
+
+export interface ChunkSearchResult {
+  original_video: string;
+  filename: string;
+  chunk_duration_sec: number;
+  total_segments: number;
+  similarity_score: number;
+  best_segment_number: number;
+  best_match_start_sec: number;
+  best_match_end_sec: number;
+  preview_source: string;
+  reasoning_content: string;
+  dense_caption?: string;
+  is_public: boolean;
+  upload_timestamp: string;
+  tags: string[];
+  matched_segment_count: number;
+  query: string;
+  timeline: TimelineSegment[];
+  camera_id?: string;
+  capture_type?: string;
+  location?: string;
+  cosmos_model?: string;
+  tokens_used?: number;
+  cached_prompt_tokens?: number | null;
+}
+
 export interface VideoSearchResult {
   filename: string;
   source: string;
@@ -5,7 +46,6 @@ export interface VideoSearchResult {
   dense_caption?: string;
   vlm_structured?: string;
   structured_parse_ok?: boolean;
-  video_url: string;
   is_public: boolean;
   upload_timestamp: string;
   duration: number;
@@ -33,7 +73,6 @@ export interface SearchRequest {
   tags?: string[];
   include_public?: boolean;
   public_only?: boolean;  // When true, only public videos (scope "Public Only")
-  use_llm?: boolean;
   system_prompt?: string;  // Custom LLM system prompt (overrides backend default)
   time_filter?: string;  // 'all', '5m', '15m', '1h', '24h', '7d', 'custom'
   custom_start_date?: string;  // ISO 8601 format for custom date range
@@ -56,7 +95,9 @@ export interface LLMSynthesis {
 
 export interface SearchResponse {
   results: VideoSearchResult[];
+  chunk_results?: ChunkSearchResult[];
   total: number;
+  chunk_total?: number;
   query: string;
   embedding_time_ms: number;
   search_time_ms: number;

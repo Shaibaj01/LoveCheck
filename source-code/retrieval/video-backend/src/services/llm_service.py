@@ -5,20 +5,23 @@ Note: System prompt is now managed by the frontend and sent with each request.
 The backend no longer requires a ConfigMap for the system prompt.
 """
 import httpx
+import json
 import time
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from src.config import get_settings
+from src.models.video import ChunkSearchResult
 
 
 # Fallback system prompt (only used if frontend doesn't send one)
-DEFAULT_SYSTEM_PROMPT = """Role: Video analyst answering from retrieved segment evidence only.
+DEFAULT_SYSTEM_PROMPT = """Role: Video analyst answering from retrieved clip evidence only.
 
 Rules:
-- Use only facts present in the segment summaries and structured JSON. If evidence is insufficient, say so clearly.
-- Cite in-video time using the provided segment time range (e.g. 1:25–1:30 in video) when referencing events.
+- Evidence is organized by uploaded video clip with a timeline of segment scene summaries (structured VLM output).
+- Use only facts present in scene_summary text and structured objects/actions/events. If evidence is insufficient, say so clearly.
+- Cite in-video time using segment time ranges (e.g. 0:15–0:20) when referencing events; note the best search match moment when relevant.
 - Direct answer first, then brief supporting detail.
 - Do not invent objects, people, actions, or timestamps that are not in the evidence.
-- If segments conflict, note the uncertainty.
+- If clips conflict, note the uncertainty.
 
 You may use a concise, readable tone, but accuracy and grounding take priority over style."""
 
@@ -90,7 +93,7 @@ class LLMService:
         # Custom system prompt from frontend is the single source of synthesis style/rules.
         user_message = f"""User Query: {query}
 
-Video Segment Evidence (summaries and structured JSON when available):
+Video Clip Evidence (timeline scene summaries from structured VLM analysis):
 {summaries_text}
 
 Answer using only this evidence. Cite in-video times when relevant."""
@@ -102,13 +105,7 @@ Answer using only this evidence. Cite in-video times when relevant."""
             processing_time = time.time() - start_time
             
             # Extract segment names for reference
-            segment_names = [
-                f"{self._parent_video_label(r.get('original_video', 'Unknown'))} "
-                f"(segment {r.get('segment_number', '?')}, "
-                f"{self._format_media_time(r.get('segment_start_sec'))}–"
-                f"{self._format_media_time(r.get('segment_end_sec'))})"
-                for r in top_results[:top_n]
-            ]
+            segment_names = self._clip_labels(top_results[:top_n])
             
             return {
                 "response": response_data.get("content", ""),
@@ -126,13 +123,7 @@ Answer using only this evidence. Cite in-video times when relevant."""
             print(f"LLM API error: {error_msg}")
             
             # Extract segment names even on error
-            segment_names = [
-                f"{self._parent_video_label(r.get('original_video', 'Unknown'))} "
-                f"(segment {r.get('segment_number', '?')}, "
-                f"{self._format_media_time(r.get('segment_start_sec'))}–"
-                f"{self._format_media_time(r.get('segment_end_sec'))})"
-                for r in top_results[:top_n]
-            ]
+            segment_names = self._clip_labels(top_results[:top_n])
             
             return {
                 "response": f"Failed to generate AI synthesis: {error_msg}",
@@ -167,50 +158,149 @@ Answer using only this evidence. Cite in-video times when relevant."""
             return original_video.rsplit("/", 1)[-1]
         return original_video
 
+    @staticmethod
+    def chunk_search_result_to_evidence(chunk: ChunkSearchResult) -> Dict[str, Any]:
+        """Build LLM evidence from a grouped chunk using timeline scene summaries."""
+        segments: List[Dict[str, Any]] = []
+        for seg in chunk.timeline:
+            parsed = LLMService._parse_structured(seg.vlm_structured)
+            scene_summary = (parsed.get("scene_summary") or "").strip()
+            if not scene_summary:
+                scene_summary = (seg.reasoning_content or seg.dense_caption or "").strip()
+            segments.append({
+                "segment_number": seg.segment_number,
+                "segment_start_sec": seg.segment_start_sec,
+                "segment_end_sec": seg.segment_end_sec,
+                "scene_summary": scene_summary or "No scene summary available.",
+                "objects": parsed.get("objects") or [],
+                "actions": parsed.get("actions") or [],
+                "events": parsed.get("events") or [],
+                "is_search_match": seg.is_search_match,
+                "is_best_match": seg.is_best_match,
+                "query_highlight": seg.query_highlight,
+                "similarity_score": seg.similarity_score,
+            })
+        return {
+            "evidence_type": "chunk",
+            "original_video": chunk.original_video,
+            "filename": chunk.filename,
+            "similarity_score": chunk.similarity_score,
+            "total_segments": chunk.total_segments,
+            "chunk_duration_sec": chunk.chunk_duration_sec,
+            "best_segment_number": chunk.best_segment_number,
+            "segment_start_sec": chunk.best_match_start_sec,
+            "segment_end_sec": chunk.best_match_end_sec,
+            "upload_timestamp": chunk.upload_timestamp,
+            "segments": segments,
+        }
+
+    @staticmethod
+    def _parse_structured(vlm_structured: Optional[str]) -> Dict[str, Any]:
+        if not vlm_structured or not str(vlm_structured).strip():
+            return {}
+        raw = str(vlm_structured).strip()
+        try:
+            data = json.loads(raw)
+            if isinstance(data, str):
+                data = json.loads(data)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _clip_labels(results: List[Dict]) -> List[str]:
+        labels = []
+        for result in results:
+            parent = LLMService._parent_video_label(result.get("original_video", "Unknown"))
+            start = LLMService._format_media_time(result.get("segment_start_sec"))
+            end = LLMService._format_media_time(result.get("segment_end_sec"))
+            labels.append(f"{parent} (best moment {start}–{end})")
+        return labels
+
     def _format_summaries(self, results: List[Dict]) -> str:
-        """Format video summaries for LLM input with timestamps and segment information so the LLM can reference real times."""
+        """Format clip timeline evidence for LLM input."""
         formatted = []
         for i, result in enumerate(results, 1):
-            summary = result.get("summary", "No summary available")
-            structured = (result.get("vlm_structured") or "").strip()
-            dense = (result.get("dense_caption") or "").strip()
-            original_video = result.get("original_video", "Unknown video")
-            parent_label = self._parent_video_label(original_video)
-            segment_num = result.get("segment_number", "?")
-            total_segments = result.get("total_segments", "?")
-            filename = result.get("filename", result.get("source", "Unknown").split('/')[-1])
-            score = result.get("similarity_score", 0)
-            start_sec = result.get("segment_start_sec")
-            end_sec = result.get("segment_end_sec")
-            if start_sec is not None and end_sec is not None:
-                video_time = (
-                    f"{self._format_media_time(start_sec)}–{self._format_media_time(end_sec)} in video"
-                )
-            else:
-                video_time = "unknown position in video"
-            # Human-readable timestamp so the LLM can say "At 14:32" or "22 Feb 2025 14:32"
-            upload_ts = result.get("upload_timestamp")
-            if upload_ts is not None:
-                try:
-                    if hasattr(upload_ts, "strftime"):
-                        ts_str = upload_ts.strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        ts_str = str(upload_ts)[:19].replace("T", " ")
-                except Exception:
-                    ts_str = str(upload_ts)[:19] if upload_ts else "?"
-            else:
-                ts_str = "?"
-            header = (
-                f"Segment {i}: {parent_label} (segment {segment_num}/{total_segments}, {video_time}) "
-                f"[match: {score:.1%}] | Uploaded: {ts_str}"
-            )
-            body_parts = [summary]
-            if dense and dense != summary:
-                body_parts.append(f"Dense caption: {dense}")
-            if structured:
-                body_parts.append(f"Structured JSON: {structured}")
-            formatted.append(f"{header}\n" + "\n".join(body_parts))
+            if result.get("evidence_type") == "chunk":
+                formatted.append(self._format_chunk_evidence(i, result))
+                continue
+            formatted.append(self._format_legacy_segment_evidence(i, result))
         return "\n\n".join(formatted)
+
+    def _format_chunk_evidence(self, index: int, result: Dict) -> str:
+        parent_label = self._parent_video_label(result.get("original_video", "Unknown video"))
+        score = result.get("similarity_score", 0)
+        best_start = self._format_media_time(result.get("segment_start_sec"))
+        best_end = self._format_media_time(result.get("segment_end_sec"))
+        duration = self._format_media_time(result.get("chunk_duration_sec"))
+        upload_ts = result.get("upload_timestamp")
+        if upload_ts is not None and hasattr(upload_ts, "strftime"):
+            ts_str = upload_ts.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            ts_str = str(upload_ts)[:19].replace("T", " ") if upload_ts else "?"
+
+        header = (
+            f"Clip {index}: {parent_label} "
+            f"({result.get('total_segments', '?')} segments, {duration} total) "
+            f"[best match {best_start}–{best_end}, relevance {score:.1%}] | Uploaded: {ts_str}"
+        )
+        segment_blocks = []
+        for seg in result.get("segments") or []:
+            sn = seg.get("segment_number", "?")
+            t0 = self._format_media_time(seg.get("segment_start_sec"))
+            t1 = self._format_media_time(seg.get("segment_end_sec"))
+            flags = []
+            if seg.get("is_best_match"):
+                flags.append("BEST MATCH")
+            elif seg.get("is_search_match"):
+                flags.append("search match")
+            if seg.get("query_highlight"):
+                flags.append("query hit")
+            flag_str = f" [{', '.join(flags)}]" if flags else ""
+            block = [f"  Segment {sn} ({t0}–{t1}){flag_str}:", f"  scene_summary: {seg.get('scene_summary', '')}"]
+            objects = seg.get("objects") or []
+            actions = seg.get("actions") or []
+            events = seg.get("events") or []
+            if objects:
+                block.append(f"  objects: {json.dumps(objects, ensure_ascii=False)[:1200]}")
+            if actions:
+                block.append(f"  actions: {json.dumps(actions, ensure_ascii=False)[:800]}")
+            if events:
+                block.append(f"  events: {json.dumps(events, ensure_ascii=False)[:800]}")
+            segment_blocks.append("\n".join(block))
+        return header + "\n" + "\n".join(segment_blocks)
+
+    def _format_legacy_segment_evidence(self, index: int, result: Dict) -> str:
+        summary = result.get("summary", "No summary available")
+        structured = (result.get("vlm_structured") or "").strip()
+        dense = (result.get("dense_caption") or "").strip()
+        parent_label = self._parent_video_label(result.get("original_video", "Unknown video"))
+        segment_num = result.get("segment_number", "?")
+        total_segments = result.get("total_segments", "?")
+        score = result.get("similarity_score", 0)
+        start_sec = result.get("segment_start_sec")
+        end_sec = result.get("segment_end_sec")
+        if start_sec is not None and end_sec is not None:
+            video_time = (
+                f"{self._format_media_time(start_sec)}–{self._format_media_time(end_sec)} in video"
+            )
+        else:
+            video_time = "unknown position in video"
+        upload_ts = result.get("upload_timestamp")
+        if upload_ts is not None and hasattr(upload_ts, "strftime"):
+            ts_str = upload_ts.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            ts_str = str(upload_ts)[:19].replace("T", " ") if upload_ts else "?"
+        parsed = self._parse_structured(structured)
+        scene_summary = (parsed.get("scene_summary") or summary or dense).strip()
+        header = (
+            f"Clip {index}: {parent_label} (segment {segment_num}/{total_segments}, {video_time}) "
+            f"[match: {score:.1%}] | Uploaded: {ts_str}"
+        )
+        body_parts = [f"scene_summary: {scene_summary}"]
+        if structured and not parsed.get("scene_summary"):
+            body_parts.append(f"Structured JSON: {structured}")
+        return f"{header}\n" + "\n".join(body_parts)
     
     def _call_llm_api(self, user_message: str, system_prompt: Optional[str] = None) -> Dict:
         """

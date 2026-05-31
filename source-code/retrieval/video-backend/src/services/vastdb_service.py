@@ -12,7 +12,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from typing import List, Optional
 from src.config import get_settings
-from src.models.video import VideoSearchResult
+from src.models.video import VideoSearchResult, ChunkSearchResult
 from src.models.user import User
 
 # Import ADBC driver manager
@@ -254,7 +254,6 @@ class VastDBService:
                     dense_caption,
                     vlm_structured,
                     structured_parse_ok,
-                    video_url,
                     allowed_users,
                     is_public,
                     upload_timestamp,
@@ -489,7 +488,6 @@ class VastDBService:
                                 dense_caption=str(row['dense_caption']) if pd.notna(row.get('dense_caption')) else None,
                                 vlm_structured=str(row['vlm_structured']) if pd.notna(row.get('vlm_structured')) else None,
                                 structured_parse_ok=bool(row['structured_parse_ok']) if pd.notna(row.get('structured_parse_ok')) else None,
-                                video_url=str(row['video_url']) if pd.notna(row.get('video_url')) else '',
                                 is_public=is_public_bool,
                                 upload_timestamp=row['upload_timestamp'],
                                 duration=row.get('duration'),
@@ -587,6 +585,152 @@ class VastDBService:
 
         merged.sort(key=lambda item: item.similarity_score, reverse=True)
         return merged[:top_k]
+
+    @staticmethod
+    def _extract_query_terms(query_text: str) -> List[str]:
+        from src.utils.query_highlight import extract_highlight_terms
+        return extract_highlight_terms(query_text)
+
+    def _segment_query_highlight(self, segment: dict, query_terms: List[str]) -> bool:
+        from src.utils.query_highlight import segment_query_highlight
+        return segment_query_highlight(segment, query_terms)
+
+    def group_results_by_chunk(
+        self,
+        segment_results: List[VideoSearchResult],
+        user: User,
+        query_text: str,
+        top_k: int,
+    ) -> List[ChunkSearchResult]:
+        """Collapse segment hits into one card per original upload with full timeline."""
+        from src.models.video import ChunkSearchResult, TimelineSegment
+
+        if not segment_results:
+            return []
+
+        query_terms = self._extract_query_terms(query_text)
+        by_video: dict[str, List[VideoSearchResult]] = {}
+        for result in segment_results:
+            key = (result.original_video or result.source).strip()
+            if not key:
+                key = result.source
+            by_video.setdefault(key, []).append(result)
+
+        ranked_groups = sorted(
+            by_video.items(),
+            key=lambda item: max(r.similarity_score for r in item[1]),
+            reverse=True,
+        )[:top_k]
+
+        chunks: List[ChunkSearchResult] = []
+        for original_video, matches in ranked_groups:
+            matches_sorted = sorted(matches, key=lambda r: r.similarity_score, reverse=True)
+            best = matches_sorted[0]
+            match_by_number = {m.segment_number: m for m in matches_sorted if m.segment_number > 0}
+
+            all_segments = self.list_segments_for_video(original_video, user)
+            if not all_segments:
+                all_segments = [
+                    {
+                        "segment_number": best.segment_number,
+                        "segment_start_sec": best.segment_start_sec,
+                        "segment_end_sec": best.segment_end_sec,
+                        "source": best.source,
+                        "dense_caption": best.dense_caption or "",
+                        "reasoning_content": best.reasoning_content,
+                        "object_classes": best.object_classes or "",
+                    }
+                ]
+
+            timeline: List[TimelineSegment] = []
+            for seg in all_segments:
+                sn = int(seg.get("segment_number") or 0)
+                matched = match_by_number.get(sn)
+                score = matched.similarity_score if matched else 0.0
+                highlight = self._segment_query_highlight(seg, query_terms)
+                vlm_structured = str(seg.get("vlm_structured") or "")
+                if matched and matched.vlm_structured:
+                    vlm_structured = matched.vlm_structured
+                timeline.append(
+                    TimelineSegment(
+                        segment_number=sn,
+                        segment_start_sec=float(seg.get("segment_start_sec") or 0),
+                        segment_end_sec=float(seg.get("segment_end_sec") or 0),
+                        source=str(seg.get("source") or ""),
+                        dense_caption=str(seg.get("dense_caption") or "") or None,
+                        reasoning_content=str(seg.get("reasoning_content") or "") or None,
+                        vlm_structured=vlm_structured or None,
+                        object_classes=str(seg.get("object_classes") or "") or None,
+                        similarity_score=score,
+                        is_search_match=matched is not None,
+                        query_highlight=highlight,
+                        is_best_match=False,
+                    )
+                )
+
+            from src.utils.query_highlight import timeline_query_term_score
+
+            query_hits = [t for t in timeline if t.query_highlight]
+            if query_hits:
+                display_seg = max(
+                    query_hits,
+                    key=lambda seg: (
+                        timeline_query_term_score(seg, query_terms),
+                        seg.similarity_score,
+                        -seg.segment_number,
+                    ),
+                )
+            else:
+                display_seg = next(
+                    (t for t in timeline if t.segment_number == best.segment_number),
+                    timeline[0] if timeline else None,
+                )
+
+            if display_seg:
+                display_sn = display_seg.segment_number
+                timeline = [
+                    seg.model_copy(update={"is_best_match": seg.segment_number == display_sn})
+                    for seg in timeline
+                ]
+            else:
+                display_seg = None
+                display_sn = best.segment_number
+
+            chunk_duration = max(
+                (t.segment_end_sec for t in timeline),
+                default=float(best.segment_end_sec or best.duration or 0),
+            )
+            filename = original_video.rsplit("/", 1)[-1] if "/" in original_video else original_video
+
+            chunks.append(
+                ChunkSearchResult(
+                    original_video=original_video,
+                    filename=filename,
+                    chunk_duration_sec=chunk_duration,
+                    total_segments=int(best.total_segments or len(timeline)),
+                    similarity_score=best.similarity_score,
+                    best_segment_number=int(display_seg.segment_number if display_seg else best.segment_number),
+                    best_match_start_sec=float(display_seg.segment_start_sec if display_seg else best.segment_start_sec),
+                    best_match_end_sec=float(display_seg.segment_end_sec if display_seg else best.segment_end_sec),
+                    preview_source=display_seg.source if display_seg else best.source,
+                    reasoning_content=(display_seg.reasoning_content or "") if display_seg else best.reasoning_content,
+                    dense_caption=(display_seg.dense_caption or None) if display_seg else best.dense_caption,
+                    is_public=best.is_public,
+                    upload_timestamp=best.upload_timestamp,
+                    tags=best.tags,
+                    matched_segment_count=len(matches_sorted),
+                    query=query_text,
+                    timeline=timeline,
+                    camera_id=best.camera_id,
+                    capture_type=best.capture_type,
+                    location=best.location,
+                    cosmos_model=best.cosmos_model,
+                    tokens_used=best.tokens_used,
+                    cached_prompt_tokens=best.cached_prompt_tokens,
+                )
+            )
+
+        return chunks
 
     def _calculate_time_threshold(self, time_filter: str) -> Optional[datetime]:
         """
@@ -881,7 +1025,6 @@ class VastDBService:
                     dense_caption,
                     vlm_structured,
                     structured_parse_ok,
-                    video_url,
                     allowed_users,
                     is_public,
                     upload_timestamp,
@@ -945,7 +1088,6 @@ class VastDBService:
                 dense_caption=row.get('dense_caption'),
                 vlm_structured=row.get('vlm_structured'),
                 structured_parse_ok=bool(row['structured_parse_ok']) if pd.notna(row.get('structured_parse_ok')) else None,
-                video_url=row['video_url'],
                 is_public=is_public_bool,
                 upload_timestamp=row['upload_timestamp'],
                 duration=row['duration'],
@@ -997,7 +1139,7 @@ class VastDBService:
         sql_query = f"""
             SELECT
                 filename, source, reasoning_content, dense_caption, vlm_structured,
-                structured_parse_ok, video_url, allowed_users, is_public, upload_timestamp,
+                structured_parse_ok, allowed_users, is_public, upload_timestamp,
                 duration, segment_number, total_segments, segment_start_sec, segment_end_sec,
                 original_video, tags, cosmos_model, tokens_used, cached_prompt_tokens,
                 camera_id, capture_type, location,
@@ -1005,7 +1147,6 @@ class VastDBService:
             FROM {table_path}
             WHERE original_video = '{safe_video}'
               AND (row_kind IS NULL OR row_kind = '' OR row_kind = 'segment')
-            ORDER BY segment_number ASC
         """
         df = self._execute_adbc_query(sql_query)
         segments = []
@@ -1028,6 +1169,7 @@ class VastDBService:
                 "upload_timestamp": row.get("upload_timestamp"),
                 "tags": self._safe_array_to_list(row.get("tags", [])),
             })
+        segments.sort(key=lambda s: s["segment_number"])
         return segments
 
     def get_video_summary_row(self, original_video: str, user: User) -> Optional[dict]:
@@ -1121,7 +1263,6 @@ class VastDBService:
             "cached_prompt_tokens": 0,
             "processing_time": 0.0,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "video_url": "",
             "allowed_users": [],
             "is_public": bool(reference_segment.get("is_public", True)),
             "upload_timestamp": upload_ts,

@@ -39,6 +39,21 @@ class S3Client:
                 logging.warning(f"Bucket not found: {bucket}")
                 return []
             raise
+
+    def list_all_objects_prefix(self, bucket: str, prefix: str) -> List[str]:
+        """List all object keys under prefix (paginated)."""
+        keys: List[str] = []
+        try:
+            paginator = self.client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                keys.extend(obj["Key"] for obj in page.get("Contents", []))
+            return keys
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code == "NoSuchBucket":
+                logging.warning(f"Bucket not found: {bucket}")
+                return []
+            raise
     
     def download_file(self, bucket: str, key: str) -> bytes:
         """Download file from S3"""

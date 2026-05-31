@@ -23,7 +23,7 @@ Configuration is managed via the backend service. The frontend reads configurati
 
 Users can customize these settings in the UI (stored in browser localStorage):
 
-- **Advanced LLM Settings**: LLM analysis count, max search results, minimum similarity threshold
+- **Advanced Search & AI Settings**: max clip cards, LLM clips analyzed, caption/video weight, minimum similarity
 - **System Prompt**: Custom LLM system prompt for search result synthesis
 - **Time Filters**: Preset or custom date ranges for filtering
 

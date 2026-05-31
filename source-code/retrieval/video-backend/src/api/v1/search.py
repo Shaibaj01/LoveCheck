@@ -24,7 +24,7 @@ async def search_videos(
     """
     logger.info(
         f"Search request from {current_user.username}: query='{request.query}', "
-        f"top_k={request.top_k}, use_llm={request.use_llm}, "
+        f"top_k={request.top_k}, llm_top_n={request.llm_top_n}, "
         f"min_similarity={request.min_similarity}, metadata_filters={request.metadata_filters or {}}"
     )
 
@@ -52,9 +52,11 @@ async def search_videos(
             f"public_only={request.public_only} | time_filter={request.time_filter}"
         )
 
+        segment_fetch_k = min(max(request.top_k * 5, request.top_k), 100)
+
         results, search_time_ms, permission_filtered, formatted_sql = vastdb_service.similarity_search(
             query_embedding=query_embedding,
-            top_k=request.top_k,
+            top_k=segment_fetch_k,
             user=current_user,
             tags=request.tags if request.tags else None,
             include_public=request.include_public,
@@ -71,7 +73,14 @@ async def search_videos(
             include_video_summaries=request.include_video_summaries,
         )
 
-        logger.info(f"[SEARCH] Found {len(results)} results in {search_time_ms:.2f}ms")
+        chunk_results = vastdb_service.group_results_by_chunk(
+            results, current_user, request.query, request.top_k
+        )
+
+        logger.info(
+            f"[SEARCH] Found {len(results)} segment hits → {len(chunk_results)} chunks "
+            f"in {search_time_ms:.2f}ms"
+        )
         logger.info(f"[SEARCH] Permission filtered: {permission_filtered} videos")
 
         if results:
@@ -79,28 +88,14 @@ async def search_videos(
             logger.debug(f"[SEARCH] Top scores: {', '.join(top_scores)}")
 
         llm_synthesis = None
-        if request.use_llm and len(results) > 0:
-            llm_results = results[:request.llm_top_n]
-            logger.info(f"[LLM] Generating AI synthesis for top {len(llm_results)} results")
+        if len(chunk_results) > 0:
+            llm_results = chunk_results[:request.llm_top_n]
+            logger.info(f"[LLM] Generating AI synthesis for top {len(llm_results)} chunks")
             try:
                 llm_service = get_llm_service()
                 results_dict = [
-                    {
-                        "summary": r.reasoning_content,
-                        "dense_caption": r.dense_caption,
-                        "vlm_structured": r.vlm_structured,
-                        "structured_parse_ok": r.structured_parse_ok,
-                        "source": r.source,
-                        "filename": r.filename,
-                        "original_video": r.original_video,
-                        "segment_number": r.segment_number,
-                        "total_segments": r.total_segments,
-                        "segment_start_sec": r.segment_start_sec,
-                        "segment_end_sec": r.segment_end_sec,
-                        "similarity_score": r.similarity_score,
-                        "upload_timestamp": r.upload_timestamp,
-                    }
-                    for r in llm_results
+                    llm_service.chunk_search_result_to_evidence(c)
+                    for c in llm_results
                 ]
                 llm_synthesis = llm_service.synthesize_search_results(
                     query=request.query,
@@ -119,8 +114,10 @@ async def search_videos(
                 }
 
         return VideoSearchResponse(
-            results=results,
-            total=len(results),
+            results=results[:request.top_k],
+            chunk_results=chunk_results,
+            total=len(results[:request.top_k]),
+            chunk_total=len(chunk_results),
             query=request.query,
             embedding_time_ms=embedding_time_ms,
             search_time_ms=search_time_ms,

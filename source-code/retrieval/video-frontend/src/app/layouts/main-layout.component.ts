@@ -88,7 +88,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         </button>
         <button mat-menu-item (click)="openAdvancedLLMSettings()">
           <mat-icon>tune</mat-icon>
-          <span>Advanced LLM Settings</span>
+          <span>Advanced Search &amp; AI Settings</span>
         </button>
       </mat-menu>
       <button mat-raised-button class="logout-button" (click)="logout()">

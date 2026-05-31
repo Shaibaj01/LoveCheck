@@ -13,13 +13,13 @@ import { LLMSynthesis } from '../../../shared/models/video.model';
       <div class="synthesis-header">
         <div class="header-content">
           <mat-icon class="ai-icon">auto_awesome</mat-icon>
-          <h3>Top {{synthesis.segments_used}} Segments LLM-Summary</h3>
+          <h3>Top {{synthesis.segments_used}} Clips — AI Summary</h3>
           <span class="badge">Powered by {{synthesis.model}}</span>
         </div>
         <div class="header-meta">
-          <span class="meta-item" [matTooltip]="'Analyzed ' + synthesis.segments_used + ' video segments'">
+          <span class="meta-item" [matTooltip]="'Analyzed ' + synthesis.segments_used + ' clip cards with timeline evidence'">
             <mat-icon>videocam</mat-icon>
-            {{synthesis.segments_used}} segments
+            {{synthesis.segments_used}} clip{{ synthesis.segments_used === 1 ? '' : 's' }}
           </span>
           <span class="meta-item" [matTooltip]="'Processing time'">
             <mat-icon>schedule</mat-icon>
@@ -38,7 +38,7 @@ import { LLMSynthesis } from '../../../shared/models/video.model';
           <div class="segments-list" *ngIf="synthesis.segments_analyzed && synthesis.segments_analyzed.length > 0">
             <button class="segments-toggle" (click)="showSegments = !showSegments">
               <mat-icon>movie_filter</mat-icon>
-              <span>Segments Analyzed ({{synthesis.segments_analyzed.length}})</span>
+              <span>Clips Analyzed ({{synthesis.segments_analyzed.length}})</span>
               <mat-icon class="toggle-icon" [class.expanded]="showSegments">expand_more</mat-icon>
             </button>
             <div class="segment-chips" *ngIf="showSegments">

@@ -15,5 +15,8 @@ imageio-ffmpeg==0.4.9  # Bundles ffmpeg for moviepy
 # Data validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
-# OpenTelemetry: provided by vast_runtime — do not pin (conflicts with processor-baggage)
+# OpenTelemetry for tracing
+opentelemetry-api==1.38
+opentelemetry-sdk==1.38
+opentelemetry-exporter-otlp==1.38
 

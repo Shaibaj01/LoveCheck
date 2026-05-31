@@ -14,7 +14,7 @@ The system has two main parts:
 1. **K8s Application** - Web UI and REST API (Kubernetes)
 2. **Ingest Pipeline** - Serverless video processing (VAST DataEngine)
 
-![VSS Blueprint Architecture](source-code/video-demo-diagram.png)
+![VSS Blueprint Architecture](source-code/video-demo-diagram.png) — see also the interactive diagram in the app (**Show Blueprint Diagram**) or [`blueprint.html`](source-code/retrieval/video-frontend/src/assets/blueprint.html)
 
 ---
 
@@ -51,7 +51,7 @@ The system has two main parts:
 | **Video Analysis Prompts** | Configurable AI scenarios (surveillance, traffic, sports, etc.) | [video-reasoner](source-code/ingest/video-reasoner/README.md) |
 | **Custom AI Prompts** | Per-video custom prompts (max 800 chars) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
 | **Metadata Filters** | Filter by camera_id, location, capture_type | [ingest](source-code/ingest/README.md) |
-| **LLM Settings** | Adjustable search/synthesis parameters | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
+| **Advanced Search & AI Settings** | Max clip cards, LLM clips analyzed, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Time Filtering** | Filter by upload time (presets or custom range) | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Video Streaming** | Capture YouTube videos to S3 | [video-streaming](source-code/video-streaming/README.md) |
 | **Batch Sync** | Copy MP4 files between S3 buckets | [video-batch-sync](source-code/video-batch-sync/README.md) |
@@ -79,18 +79,22 @@ The system has two main parts:
 ```
 Upload Video → video-chunks bucket
                     ↓
-            video-segmenter
+            video-segmenter (5s segments)
                     ↓
-        video-chunks-segments bucket
+            perception lite (always on — object list)
                     ↓
-            video-reasoner (AI analysis)
+            video-reasoner (structured JSON → dense_caption + reasoning_content)
                     ↓
-            video-embedder (vectors)
+            video-embedder (vectors text + vectors_visual video)
                     ↓
-            vastdb-writer (store)
+            vastdb-writer (segment rows in VastDB)
                     ↓
               Search Ready
 ```
+
+**Search flow:** query embed → hybrid caption+video search → group by upload (clip cards + timeline) → always-on LLM synthesis → jump-to-moment playback
+
+Interactive diagram: open **Show Blueprint Diagram** in the app, or `source-code/retrieval/video-frontend/src/assets/blueprint.html`
 
 ---
 

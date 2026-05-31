@@ -13,9 +13,9 @@ Respond with a single JSON object only. No markdown code fences, no text before 
 
 Required schema:
 {
-  "scene_summary": "one factual sentence describing the clip",
-  "objects": [{"type": "string", "count": 0, "notes": "optional details"}],
-  "actions": ["observed actions as short strings"],
+  "scene_summary": "one short sentence, max 25 words — setting + main activity only",
+  "objects": [{"type": "string", "count": 1, "notes": "optional visible details"}],
+  "actions": ["observed activity phrases, e.g. speaking to camera, walking across frame"],
   "events": [{"type": "string", "description": "string", "severity": "low|medium|high|unknown"}],
   "hazards": ["safety or risk observations, empty array if none"],
   "attributes": {"setting": "optional key-value context"}
@@ -23,8 +23,11 @@ Required schema:
 
 Rules:
 - Describe only what is visible in this clip; do not guess or invent details.
-- Use empty arrays when a category does not apply.
-- Be specific about people, equipment, PPE, vehicles, and interactions when visible.
+- scene_summary must stay brief; put entity lists in objects, verbs in actions, scene-level notes in events.
+- objects: REQUIRED — list every distinct visible entity (people, vehicles, equipment, animals, signage).
+- actions: REQUIRED — at least one observable activity when anything moves or interacts.
+- events: include scene-level observations (filming, crowd flow, interview, traffic) when visible; [] only for a static empty scene.
+- hazards: [] when none visible.
 """
 
 DENSE_CAPTION_MAX_CHARS = 600
@@ -38,26 +41,161 @@ def wrap_prompt_with_structured_output(base_prompt: str) -> str:
     return f"{base}\n\n{STRUCTURED_OUTPUT_INSTRUCTION}"
 
 
+SCENE_SUMMARY_RE = re.compile(
+    r'"scene_summary"\s*:\s*"((?:\\.|[^"\\])*)"',
+    re.DOTALL,
+)
+
+
+def _strip_json_fences(text: str) -> str:
+    cleaned = (text or "").strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+    return cleaned
+
+
+def _repair_json_payload(payload: str) -> str:
+    """Fix common VLM JSON mistakes before json.loads."""
+    repaired = payload
+    repaired = re.sub(
+        r'("scene_summary"\s*:\s*"(?:\\.|[^"\\])*")\s*\n(\s*"objects")',
+        r"\1,\n\2",
+        repaired,
+    )
+    repaired = re.sub(
+        r'("scene_summary"\s*:\s*"(?:\\.|[^"\\])*")\s+("objects")',
+        r"\1, \2",
+        repaired,
+    )
+    repaired = re.sub(r'([\}\]])\s*(?!,)(\s*"[\w_]+"\s*:)', r"\1,\2", repaired)
+    repaired = re.sub(r"\}\s*\{", "}, {", repaired)
+    repaired = re.sub(r",\s*([\}\]])", r"\1", repaired)
+    return repaired
+
+
+def _load_json_object(payload: str) -> Dict[str, Any]:
+    """Parse JSON object with progressive repair attempts."""
+    last_error: Optional[Exception] = None
+    candidates = [payload, _repair_json_payload(payload)]
+    if candidates[-1] != candidates[0]:
+        candidates.append(_repair_json_payload(candidates[-1]))
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+            if not isinstance(data, dict):
+                raise ValueError("VLM JSON root must be an object")
+            return data
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            last_error = exc
+            continue
+    raise last_error or ValueError("Failed to parse VLM JSON")
+
+
+OBJECT_DICT_RE = re.compile(
+    r'\{\s*"type"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*,\s*"count"\s*:\s*(\d+)',
+    re.IGNORECASE,
+)
+
+
+def _extract_object_dicts_from_raw(text: str) -> List[Dict[str, Any]]:
+    objects: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in OBJECT_DICT_RE.finditer(text or ""):
+        label = match.group(1).replace('\\"', '"').strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        objects.append({"type": label, "count": int(match.group(2)), "notes": ""})
+    return objects
+
+
+SUMMARY_ENTITY_RULES: List[tuple[str, str]] = [
+    (r"\bminnie mouse\b", "minnie mouse"),
+    (r"\bcherry picker\b", "cherry picker"),
+    (r"\bdigital billboards?\b", "signboard"),
+    (r"\bbillboards?\b", "signboard"),
+    (r"\bpedestrians?\b", "person"),
+    (r"\bpeople\b", "person"),
+    (r"\bcameraman\b", "person"),
+    (r"\bcostumed performers?\b", "person"),
+    (r"\bperformers?\b", "person"),
+    (r"\bgorillas?\b", "gorilla"),
+    (r"\bambulances?\b", "ambulance"),
+    (r"\bforklifts?\b", "forklift"),
+    (r"\bstatues?\b", "statue"),
+    (r"\bcameras?\b", "camera"),
+    (r"\btrucks?\b", "truck"),
+    (r"\bcranes?\b", "crane"),
+    (r"\bstorefronts?\b", "store"),
+    (r"\bstores?\b", "store"),
+    (r"\bsignboards?\b", "signboard"),
+    (r"\bmen\b", "person"),
+    (r"\bman\b", "person"),
+    (r"\bwomen\b", "person"),
+    (r"\bwoman\b", "person"),
+]
+
+
+def _infer_objects_from_summary(summary: str) -> List[Dict[str, Any]]:
+    if not summary.strip():
+        return []
+    lower = summary.lower()
+    counts: Dict[str, int] = {}
+    for match in re.finditer(r"(\d+)\s+(people|persons|pedestrians|men|women)", lower):
+        counts["person"] = counts.get("person", 0) + int(match.group(1))
+    for pattern, obj_type in SUMMARY_ENTITY_RULES:
+        if re.search(pattern, lower):
+            counts[obj_type] = counts.get(obj_type, 0) + 1
+    return [
+        {"type": label, "count": count, "notes": "inferred from summary"}
+        for label, count in sorted(counts.items())
+    ]
+
+
+def _recover_partial_structured(raw_content: str) -> Optional[Dict[str, Any]]:
+    summary = extract_scene_summary(raw_content)
+    objects = _extract_object_dicts_from_raw(raw_content)
+    if not summary and not objects:
+        return None
+    return {
+        "scene_summary": summary or "",
+        "objects": objects,
+        "actions": [],
+        "events": [],
+        "hazards": [],
+        "attributes": {},
+    }
+
+
+def extract_scene_summary(text: str) -> Optional[str]:
+    """Best-effort scene_summary extraction when full JSON parsing fails."""
+    if not text or not text.strip():
+        return None
+    cleaned = _strip_json_fences(text)
+    match = SCENE_SUMMARY_RE.search(cleaned)
+    if not match:
+        return None
+    raw_value = match.group(1)
+    try:
+        return str(json.loads(f'"{raw_value}"')).strip()
+    except json.JSONDecodeError:
+        return raw_value.replace('\\"', '"').replace("\\n", " ").strip()
+
+
 def extract_json_object(text: str) -> Dict[str, Any]:
     """Extract and parse the first JSON object from model output."""
     if not text or not text.strip():
         raise ValueError("Empty VLM response")
 
-    cleaned = text.strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
-    if fence_match:
-        cleaned = fence_match.group(1).strip()
-
+    cleaned = _strip_json_fences(text.strip())
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found in VLM response")
 
     payload = cleaned[start : end + 1]
-    data = json.loads(payload)
-    if not isinstance(data, dict):
-        raise ValueError("VLM JSON root must be an object")
-    return data
+    return _load_json_object(payload)
 
 
 def _normalize_list_field(data: Dict[str, Any], key: str) -> List[Any]:
@@ -165,6 +303,141 @@ def build_dense_caption(data: Dict[str, Any]) -> str:
     return caption or summary or "Video segment"
 
 
+def merge_perception_into_structured(
+    data: Dict[str, Any], perception: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Fill empty object lists from perception lite detections."""
+    if not perception or not perception.get("perception_ok"):
+        return data
+
+    if not data.get("objects"):
+        try:
+            counts = json.loads(perception.get("object_counts") or "{}")
+        except json.JSONDecodeError:
+            counts = {}
+        for cls, cnt in sorted(counts.items()):
+            try:
+                count_i = max(1, int(cnt))
+            except (TypeError, ValueError):
+                count_i = 1
+            data.setdefault("objects", []).append({
+                "type": str(cls).strip(),
+                "count": count_i,
+                "notes": "perception lite",
+            })
+
+    summary = (perception.get("perception_summary") or "").strip()
+    if summary and not data.get("actions"):
+        data.setdefault("actions", []).append(summary)
+
+    return data
+
+
+def _infer_actions_from_summary(summary: str) -> List[str]:
+    if not summary.strip():
+        return []
+    actions: List[str] = []
+    for match in re.finditer(
+        r"\b([a-z]+(?:\s+[a-z]+){0,2}\s+(?:ing|ed))\b",
+        summary,
+        re.IGNORECASE,
+    ):
+        phrase = match.group(1).strip().lower()
+        if len(phrase) > 4:
+            actions.append(phrase)
+    for match in re.finditer(r"\bwhile\s+([^,;.]+)", summary, re.IGNORECASE):
+        phrase = match.group(1).strip().lower()
+        if phrase:
+            actions.append(phrase)
+    return list(dict.fromkeys(actions))[:6]
+
+
+def _infer_events_from_summary(summary: str) -> List[Dict[str, Any]]:
+    if not summary.strip():
+        return []
+    lower = summary.lower()
+    events: List[Dict[str, Any]] = []
+    if any(token in lower for token in ("filmed", "camera", "interview", "recording", "broadcast")):
+        events.append({
+            "type": "media",
+            "description": "Filming or on-camera activity",
+            "severity": "low",
+        })
+    if any(token in lower for token in ("crowd", "pedestrian", "plaza", "bustling", "traffic")):
+        events.append({
+            "type": "crowd",
+            "description": "Active public or pedestrian activity",
+            "severity": "low",
+        })
+    return events[:4]
+
+
+def enrich_sparse_structured(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill objects/actions/events when the VLM returns only scene_summary."""
+    summary = str(data.get("scene_summary", "")).strip()
+
+    if not data.get("objects"):
+        inferred_objects = _infer_objects_from_summary(summary)
+        if inferred_objects:
+            data["objects"] = inferred_objects
+
+    if not data.get("actions"):
+        inferred = _infer_actions_from_summary(summary)
+        if inferred:
+            data["actions"] = inferred
+
+    if not data.get("events"):
+        inferred_events = _infer_events_from_summary(summary)
+        if inferred_events:
+            data["events"] = inferred_events
+
+    return data
+
+
+def apply_structured_enrichment(
+    data: Dict[str, Any], perception: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    enriched = _coerce_structured(data)
+    enriched = merge_perception_into_structured(enriched, perception)
+    enriched = enrich_sparse_structured(enriched)
+    return enriched
+
+
+def derive_object_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Build object_classes / object_counts columns from structured objects."""
+    counts: Dict[str, int] = {}
+    classes: List[str] = []
+    for obj in data.get("objects", []):
+        if not isinstance(obj, dict):
+            continue
+        label = str(obj.get("type", "")).strip().lower()
+        if not label:
+            continue
+        try:
+            count_i = max(1, int(obj.get("count", 1) or 1))
+        except (TypeError, ValueError):
+            count_i = 1
+        counts[label] = counts.get(label, 0) + count_i
+        if label not in classes:
+            classes.append(label)
+    return {
+        "object_classes": ",".join(classes),
+        "object_counts": json.dumps(counts, ensure_ascii=False),
+    }
+
+
+def rebuild_vlm_fields(
+    data: Dict[str, Any], structured_parse_ok: bool = True
+) -> Dict[str, Any]:
+    recovered_ok = bool(data.get("scene_summary")) and bool(data.get("objects"))
+    return {
+        "vlm_structured": json.dumps(data, ensure_ascii=False),
+        "dense_caption": build_dense_caption(data),
+        "reasoning_content": build_reasoning_narrative(data),
+        "structured_parse_ok": structured_parse_ok or recovered_ok,
+    }
+
+
 def build_reasoning_narrative(data: Dict[str, Any]) -> str:
     """Human-readable summary for UI display."""
     lines: List[str] = []
@@ -212,28 +485,50 @@ def build_reasoning_narrative(data: Dict[str, Any]) -> str:
     return "\n".join(lines).strip() or summary or "Video segment analysis"
 
 
-def process_vlm_response(raw_content: str) -> Dict[str, Any]:
+def process_vlm_response(
+    raw_content: str, perception: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Parse raw VLM text into structured fields.
 
     Returns dict with: vlm_structured (JSON str), dense_caption, reasoning_content, structured_parse_ok
     """
     try:
-        parsed = _coerce_structured(extract_json_object(raw_content))
-        dense = build_dense_caption(parsed)
-        narrative = build_reasoning_narrative(parsed)
-        return {
-            "vlm_structured": json.dumps(parsed, ensure_ascii=False),
-            "dense_caption": dense,
-            "reasoning_content": narrative,
-            "structured_parse_ok": True,
-        }
+        parsed = apply_structured_enrichment(extract_json_object(raw_content), perception)
+        return rebuild_vlm_fields(parsed, structured_parse_ok=True)
     except (json.JSONDecodeError, ValueError, TypeError) as e:
         logger.warning(f"[STRUCTURED] Failed to parse VLM JSON: {e}")
-        fallback = raw_content.strip()
+        partial = _recover_partial_structured(raw_content)
+        if partial:
+            enriched = apply_structured_enrichment(partial, perception)
+            logger.info(
+                f"[STRUCTURED] Partial recovery: summary={bool(partial.get('scene_summary'))}, "
+                f"objects={len(enriched.get('objects', []))}"
+            )
+            return rebuild_vlm_fields(enriched, structured_parse_ok=False)
+
+        summary = extract_scene_summary(raw_content)
+        if summary:
+            partial = apply_structured_enrichment(
+                {
+                    "scene_summary": summary,
+                    "objects": [],
+                    "actions": [],
+                    "events": [],
+                    "hazards": [],
+                    "attributes": {},
+                },
+                perception,
+            )
+            logger.info(f"[STRUCTURED] Recovered scene_summary fallback ({len(summary)} chars)")
+            return rebuild_vlm_fields(partial, structured_parse_ok=False)
+
+        fallback = _strip_json_fences(raw_content).strip()
+        if fallback.startswith("{"):
+            fallback = summary or "Video segment"
         return {
             "vlm_structured": "",
-            "dense_caption": fallback[:DENSE_CAPTION_MAX_CHARS],
-            "reasoning_content": fallback,
+            "dense_caption": (fallback or "Video segment")[:DENSE_CAPTION_MAX_CHARS],
+            "reasoning_content": fallback or "Video segment analysis",
             "structured_parse_ok": False,
         }

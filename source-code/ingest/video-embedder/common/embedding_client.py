@@ -12,4 +12,4 @@ class EmbeddingClient:
         logging.info(f"[EMBEDDING] Cosmos-Embed1 at {self._cosmos.base_url}")
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        return self._cosmos.embed_texts(texts)
+        return self._cosmos.embed_texts(texts, for_query=False)

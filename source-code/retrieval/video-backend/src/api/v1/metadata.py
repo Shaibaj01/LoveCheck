@@ -13,6 +13,54 @@ from src.config import get_settings
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# User-facing upload metadata only (hide pipeline / perception / audit columns from GUI filters).
+FILTERABLE_METADATA_COLUMNS = ("camera_id", "capture_type", "location")
+
+METADATA_FIELD_LABELS = {
+    "camera_id": "Camera ID",
+    "capture_type": "Capture Type",
+    "location": "Location",
+}
+
+# Internal columns — never exposed in Advanced Filters (also blocks /metadata/values).
+_EXCLUDED_METADATA_COLUMNS = {
+    "pk",
+    "vectors",
+    "vectors_visual",
+    "source",
+    "filename",
+    "reasoning_content",
+    "dense_caption",
+    "vlm_structured",
+    "structured_parse_ok",
+    "perception_json",
+    "object_classes",
+    "object_counts",
+    "max_detection_conf",
+    "perception_ok",
+    "row_kind",
+    "video_summary_json",
+    "video_events_json",
+    "extra_metadata",
+    "cosmos_model",
+    "embedding_model",
+    "visual_embedding_model",
+    "tokens_used",
+    "cached_prompt_tokens",
+    "processing_time",
+    "timestamp",
+    "upload_timestamp",
+    "duration",
+    "segment_number",
+    "total_segments",
+    "segment_start_sec",
+    "segment_end_sec",
+    "original_video",
+    "tags",
+    "allowed_users",
+    "is_public",
+}
+
 
 @router.get("/schema")
 async def get_metadata_schema(
@@ -30,48 +78,25 @@ async def get_metadata_schema(
         settings = get_settings()
         logger.info(f"[METADATA] Discovering schema for table: {settings.vdb_collection}")
         
-        # Columns to EXCLUDE from Advanced Filters (internal/system columns)
-        excluded_columns = {
-            # Primary key and vectors
-            'pk', 'vectors', 'vectors_visual',
-            # Source/file identifiers
-            'source', 'filename',
-            # Content fields (too large for filters)
-            'reasoning_content', 'dense_caption', 'vlm_structured', 'structured_parse_ok',
-            'perception_json', 'video_summary_json', 'video_events_json',
-            'video_url', 'extra_metadata',
-            # Processing metadata
-            'cosmos_model', 'embedding_model', 'tokens_used', 'cached_prompt_tokens', 'processing_time',
-            # Timestamps (use time picker instead)
-            'timestamp', 'upload_timestamp', 'duration',
-            # Segment info
-            'segment_number', 'total_segments', 'segment_start_sec', 'segment_end_sec', 'original_video',
-            # Permission fields
-            'tags', 'allowed_users', 'is_public'
-        }
-        
-        # Discover schema dynamically from VastDB
         arrow_schema = vastdb_service.get_table_schema()
-        
+        schema_by_name = {field.name: field for field in arrow_schema}
+
         schema = []
-        
-        for field in arrow_schema:
-            col_name = field.name
+
+        for col_name in FILTERABLE_METADATA_COLUMNS:
+            field = schema_by_name.get(col_name)
+            if field is None:
+                continue
+
             col_type = str(field.type)
-            
-            # Skip excluded columns (internal/system columns)
-            if col_name in excluded_columns:
+            if "fixed_size_list" in col_type or "list<" in col_type:
                 continue
-            
-            # Skip vector columns (fixed_size_list type)
-            if 'fixed_size_list' in col_type or 'list<' in col_type:
-                continue
-            
+
             field_info = {
                 "name": col_name,
                 "type": col_type,
-                "ui_type": "select",  # All 3 fields are dropdowns
-                "label": col_name.replace('_', ' ').title()
+                "ui_type": "select",
+                "label": METADATA_FIELD_LABELS.get(col_name, col_name.replace("_", " ").title()),
             }
             
             # Get distinct values for dropdown options
@@ -127,19 +152,7 @@ async def get_field_values(
         
         logger.info(f"[METADATA] Getting values for field: {field}, prefix: {prefix}")
         
-        # Columns to EXCLUDE from value lookup (same as schema discovery)
-        excluded_columns = {
-            'pk', 'vectors', 'vectors_visual', 'source', 'filename',
-            'reasoning_content', 'dense_caption', 'vlm_structured', 'structured_parse_ok',
-            'perception_json', 'video_summary_json', 'video_events_json',
-            'video_url', 'extra_metadata',
-            'cosmos_model', 'embedding_model', 'tokens_used', 'cached_prompt_tokens', 'processing_time',
-            'timestamp', 'upload_timestamp', 'duration',
-            'segment_number', 'total_segments', 'segment_start_sec', 'segment_end_sec', 'original_video',
-            'tags', 'allowed_users', 'is_public'
-        }
-        
-        if field in excluded_columns:
+        if field in _EXCLUDED_METADATA_COLUMNS or field not in FILTERABLE_METADATA_COLUMNS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Field '{field}' is not available for value lookup"
