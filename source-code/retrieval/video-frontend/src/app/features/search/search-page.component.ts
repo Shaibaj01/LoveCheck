@@ -2,6 +2,7 @@ import { Component, ViewChild, inject, signal, OnInit, OnDestroy, effect } from 
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { Subscription, interval } from 'rxjs';
 import { SearchBarComponent } from './components/search-bar.component';
 import { ChunkCardComponent } from './components/chunk-card.component';
@@ -22,6 +23,7 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     SearchBarComponent,
     ChunkCardComponent,
     SearchAnimationComponent,
@@ -44,20 +46,43 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
           <h2>What are you looking for?</h2>
           <p>Type what you want to see in plain words to find the right clips</p>
           <div class="examples">
-            <h3>Try something like:</h3>
-            <ul class="example-list">
-              @for (example of exampleQueries(); track example) {
-                <li>
-                  <button
-                    type="button"
-                    class="example-query-button"
-                    (click)="onExampleQueryClick(example)">
-                    <mat-icon>search</mat-icon>
-                    <span class="example-query-text">"{{ example }}"</span>
-                  </button>
-                </li>
+            <div class="examples-header">
+              <h3>Try something like:</h3>
+              @if (exampleQueries().length) {
+                <span class="examples-live-hint">Live from your index · refreshes every 30s</span>
               }
-            </ul>
+            </div>
+            @if (suggestionsLoading()) {
+              <div class="examples-status">
+                <mat-spinner diameter="28"></mat-spinner>
+                <span>Loading search suggestions…</span>
+              </div>
+            } @else if (suggestionsError()) {
+              <p class="examples-hint examples-hint-warn">
+                <mat-icon>warning_amber</mat-icon>
+                Could not load suggestions. Check backend logs and VastDB access.
+              </p>
+            } @else if (!exampleQueries().length) {
+              <p class="examples-hint">
+                No suggestions yet. Run the <strong>prompt-suggester</strong> DataEngine function
+                after segments are in <code>vss2-collection</code> (writes to
+                <code>vss2-prompts-events</code>).
+              </p>
+            } @else {
+              <ul class="example-list">
+                @for (example of exampleQueries(); track example) {
+                  <li>
+                    <button
+                      type="button"
+                      class="example-query-button"
+                      (click)="onExampleQueryClick(example)">
+                      <mat-icon>search</mat-icon>
+                      <span class="example-query-text">"{{ example }}"</span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
           </div>
         </div>
       }
@@ -207,10 +232,58 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
         border: 1px solid var(--border-color);
         transition: background 0.3s ease, border-color 0.3s ease;
         
+        .examples-header {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 0.5rem;
+          margin-bottom: 0.75rem;
+        }
+
         h3 {
           color: var(--accent-primary);
-          margin-bottom: 0.75rem;
+          margin: 0;
           font-size: 1rem;
+        }
+
+        .examples-live-hint {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+
+        .examples-status {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          color: var(--text-secondary);
+          padding: 0.5rem 0;
+        }
+
+        .examples-hint {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 0.9rem;
+          line-height: 1.5;
+
+          code {
+            font-size: 0.82rem;
+            color: var(--accent-primary);
+          }
+        }
+
+        .examples-hint-warn {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.5rem;
+          color: var(--accent-warning, #e8af6f);
+
+          mat-icon {
+            font-size: 1.1rem;
+            width: 1.1rem;
+            height: 1.1rem;
+            flex-shrink: 0;
+          }
         }
         
         ul.example-list {
@@ -420,6 +493,8 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   
   hasSearched = signal(false);
   exampleQueries = signal<string[]>([]);
+  suggestionsLoading = signal(true);
+  suggestionsError = signal(false);
   private suggestionsBatchId: string | null = null;
   private suggestionsSub?: Subscription;
   isOpeningDialog = signal(false);
@@ -436,13 +511,18 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   }
 
   loadExampleQueries(silent = false) {
+    if (!silent) {
+      this.suggestionsLoading.set(true);
+    }
     this.suggestionsService.getSuggestions().subscribe({
       next: (data) => {
+        this.suggestionsLoading.set(false);
+        this.suggestionsError.set(false);
         const batchId = data.batch_id ?? null;
         const prompts = (data.search_prompts ?? []).slice(0, 10);
         if (!prompts.length) {
-          if (!silent && !this.exampleQueries().length) {
-            this.setFallbackExamples();
+          if (!silent || !this.exampleQueries().length) {
+            this.exampleQueries.set([]);
           }
           return;
         }
@@ -453,20 +533,16 @@ export class SearchPageComponent implements OnInit, OnDestroy {
         this.exampleQueries.set(prompts);
       },
       error: (err) => {
+        this.suggestionsLoading.set(false);
+        this.suggestionsError.set(true);
         if (!silent) {
           console.error('Failed to load search suggestions', err);
-          this.setFallbackExamples();
+        }
+        if (!silent || !this.exampleQueries().length) {
+          this.exampleQueries.set([]);
         }
       },
     });
-  }
-
-  private setFallbackExamples() {
-    this.exampleQueries.set([
-      'person waving at the camera',
-      'someone dropping a bag',
-      'car stopping at a red light',
-    ]);
   }
   
   constructor() {
