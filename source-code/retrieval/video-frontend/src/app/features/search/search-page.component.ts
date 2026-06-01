@@ -1,8 +1,8 @@
-import { Component, ViewChild, inject, signal, OnInit, effect } from '@angular/core';
+import { Component, ViewChild, inject, signal, OnInit, OnDestroy, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { Subscription, interval } from 'rxjs';
 import { SearchBarComponent } from './components/search-bar.component';
 import { ChunkCardComponent } from './components/chunk-card.component';
 import { SearchAnimationComponent } from './components/search-animation.component';
@@ -13,7 +13,7 @@ import { VideoPlayerComponent } from '../player/video-player.component';
 import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { AuthService } from '../auth/services/auth.service';
-import { environment } from '../../../environments/environment';
+import { SuggestionsService } from '../../shared/services/suggestions.service';
 
 @Component({
   selector: 'app-search-page',
@@ -46,7 +46,7 @@ import { environment } from '../../../environments/environment';
           <div class="examples">
             <h3>Try something like:</h3>
             <ul class="example-list">
-              @for (example of exampleQueries(); track $index) {
+              @for (example of exampleQueries(); track example) {
                 <li>
                   <button
                     type="button"
@@ -408,7 +408,7 @@ import { environment } from '../../../environments/environment';
     }
   `]
 })
-export class SearchPageComponent implements OnInit {
+export class SearchPageComponent implements OnInit, OnDestroy {
   private static readonly PAGE_SIZE = 20;
 
   @ViewChild(SearchBarComponent) private searchBar?: SearchBarComponent;
@@ -416,35 +416,57 @@ export class SearchPageComponent implements OnInit {
   searchService = inject(SearchService);
   dialog = inject(MatDialog);
   authService = inject(AuthService);
-  http = inject(HttpClient);
+  suggestionsService = inject(SuggestionsService);
   
   hasSearched = signal(false);
   exampleQueries = signal<string[]>([]);
+  private suggestionsBatchId: string | null = null;
+  private suggestionsSub?: Subscription;
   isOpeningDialog = signal(false);
   currentPage = signal(1);
   private uploadDialogRef: MatDialogRef<UploadDialogComponent> | null = null;
 
   ngOnInit() {
     this.loadExampleQueries();
+    this.suggestionsSub = interval(30_000).subscribe(() => this.loadExampleQueries(true));
   }
 
-  loadExampleQueries() {
-    this.http.get<any>(`${environment.apiUrl}/frontend/search-suggestions`).subscribe({
-      next: (config) => {
-        if (config.placeholder_examples && config.placeholder_examples.length > 0) {
-          this.exampleQueries.set(config.placeholder_examples);
+  ngOnDestroy() {
+    this.suggestionsSub?.unsubscribe();
+  }
+
+  loadExampleQueries(silent = false) {
+    this.suggestionsService.getSuggestions().subscribe({
+      next: (data) => {
+        const batchId = data.batch_id ?? null;
+        const prompts = (data.search_prompts ?? []).slice(0, 10);
+        if (!prompts.length) {
+          if (!silent && !this.exampleQueries().length) {
+            this.setFallbackExamples();
+          }
+          return;
         }
+        if (batchId && batchId === this.suggestionsBatchId && silent) {
+          return;
+        }
+        this.suggestionsBatchId = batchId;
+        this.exampleQueries.set(prompts);
       },
       error: (err) => {
-        console.error('Failed to load example queries, using defaults', err);
-        // Set default fallback examples (friendly & varied)
-        this.exampleQueries.set([
-          'person waving at the camera',
-          'someone dropping a bag',
-          'car stopping at a red light'
-        ]);
-      }
+        if (!silent) {
+          console.error('Failed to load search suggestions', err);
+          this.setFallbackExamples();
+        }
+      },
     });
+  }
+
+  private setFallbackExamples() {
+    this.exampleQueries.set([
+      'person waving at the camera',
+      'someone dropping a bag',
+      'car stopping at a red light',
+    ]);
   }
   
   constructor() {

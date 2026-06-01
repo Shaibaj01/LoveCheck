@@ -15,9 +15,7 @@ An Angular web application that provides the user interface for the VSS Blueprin
 
 ### Frontend Configuration
 
-Configuration is managed via the backend service. The frontend reads configuration from:
-- **Backend API**: `/api/v1/config` endpoint provides frontend configuration
-- **Settings**: Stored in `deployments/vss-k8s-application/frontend-config.yaml` ConfigMap
+- **Backend API**: `/api/v1/config` for app settings; `/api/v1/suggestions` for live search examples and key events (from VastDB `vss2-prompts-events`, refreshed by the prompt-suggester DataEngine function)
 
 ### User Settings (Browser Storage)
 

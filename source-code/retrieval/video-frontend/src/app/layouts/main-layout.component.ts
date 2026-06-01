@@ -1,5 +1,5 @@
 import { Component, inject, ViewChild, signal, OnInit, OnDestroy } from '@angular/core';
-import { RouterOutlet, Router } from '@angular/router';
+import { RouterOutlet, Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { AuthService } from '../features/auth/services/auth.service';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
@@ -24,7 +24,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 @Component({
   selector: 'app-main-layout',
   standalone: true,
-  imports: [RouterOutlet, CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatMenuModule, MatDividerModule, MatTooltipModule, ConfigPopoverComponent],
+  imports: [RouterOutlet, RouterLink, CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatMenuModule, MatDividerModule, MatTooltipModule, ConfigPopoverComponent],
   template: `
     <mat-toolbar class="app-toolbar">
       <img src="assets/vast_logo.svg" alt="VAST" class="logo">
@@ -33,6 +33,17 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         <span class="subtitle">Video Search & Summarization Powered By DataEngine</span>
       </div>
       <span class="spacer"></span>
+      <nav class="main-nav">
+        <a mat-stroked-button routerLink="/search" routerLinkActive="active-nav">
+          <mat-icon>search</mat-icon>
+          Search
+        </a>
+        <a mat-stroked-button routerLink="/dashboard" routerLinkActive="active-nav">
+          <mat-icon>dashboard</mat-icon>
+          Dashboard
+        </a>
+      </nav>
+      <span class="spacer nav-spacer"></span>
       <div class="user-info">
         <mat-icon class="user-icon">account_circle</mat-icon>
         <span>{{ authService.user() || 'User' }}</span>
@@ -196,6 +207,29 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 
     .spacer {
       flex: 1;
+    }
+
+    .nav-spacer {
+      flex: 0 0 0.5rem;
+    }
+
+    .main-nav {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+
+      a {
+        cursor: pointer !important;
+        color: var(--text-primary) !important;
+        border-color: var(--border-color) !important;
+        height: 38px;
+      }
+
+      a.active-nav {
+        border-color: var(--accent-primary) !important;
+        color: var(--accent-primary) !important;
+        background: rgba(0, 206, 209, 0.12) !important;
+      }
     }
 
     .user-info {

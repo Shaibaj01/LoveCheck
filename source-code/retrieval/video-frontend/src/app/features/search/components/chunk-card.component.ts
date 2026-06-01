@@ -85,7 +85,7 @@ import {
             Chunk timeline
           </div>
           <div class="timeline-track">
-            @for (seg of chunk.timeline; track seg.segment_number) {
+            @for (seg of chunk.timeline; track seg.source) {
               <button
                 type="button"
                 class="timeline-seg"

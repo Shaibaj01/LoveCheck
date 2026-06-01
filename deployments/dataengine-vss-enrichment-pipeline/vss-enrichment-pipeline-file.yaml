@@ -1,0 +1,36 @@
+# DataEngine pipeline: scheduled LLM prompt + key-event suggestions → vss2-prompts-events
+# Register function VRN after building/pushing prompt-suggester image to DataEngine.
+kubernetes_cluster_vrn: <your-kubernetes-cluster-vrn>
+namespace: <your-namespace>
+name: vss-enrichment-pipeline
+config:
+  environment_variables: []
+  secrets:
+    - vss2-secret
+function_deployments:
+  - function_vrn: vast:dataengine:functions:prompt-suggester
+    name: prompt-suggester-1
+    revision: 1
+    config:
+      log_level: INFO
+    resources:
+      min_cpu: 200m
+      max_cpu: 1000m
+      min_memory: 256Mi
+      max_memory: 512Mi
+      min_concurrency: 1
+      max_concurrency: 2
+      timeout: 300
+links:
+  - source:
+      - vss-prompt-suggester-scheduled-trigger-1
+    destination:
+      - prompt-suggester-1
+    topic: vast:dataengine:topics:<your-broker-name>/<your-topic>
+    config:
+      events_order: unordered
+      retries: 2
+triggers:
+  - name: vss-prompt-suggester-scheduled-trigger-1
+    vrn: vast:dataengine:triggers:vss-prompt-suggester-scheduled-trigger
+    # Set schedule in DataEngine trigger config (e.g. every 5–15 minutes).

@@ -112,7 +112,7 @@ export interface VideoPlayerData {
             <span class="playhead">{{ formatTime(currentTime()) }} / {{ formatTime(chunk()!.chunk_duration_sec) }}</span>
           </div>
           <div class="timeline-track">
-            @for (seg of chunk()!.timeline; track seg.segment_number) {
+            @for (seg of chunk()!.timeline; track seg.source) {
               <button
                 type="button"
                 class="timeline-seg"
@@ -130,7 +130,7 @@ export interface VideoPlayerData {
         </div>
 
         <div class="segments-panel">
-          @for (seg of chunk()!.timeline; track seg.segment_number) {
+          @for (seg of chunk()!.timeline; track seg.source) {
             <button
               type="button"
               class="segment-row"

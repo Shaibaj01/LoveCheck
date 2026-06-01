@@ -87,52 +87,40 @@ echo "  Namespace:    $NAMESPACE"
 echo ""
 
 # Step 1: Create Namespace
-echo -e "${YELLOW}Step 1/7: Creating namespace...${NC}"
+echo -e "${YELLOW}Step 1/6: Creating namespace...${NC}"
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 kubectl label ns $NAMESPACE zarf.dev/agent=ignore
 echo -e "${GREEN}✓ Namespace ready${NC}"
 echo ""
 
 # Step 2: Create Secret
-echo -e "${YELLOW}Step 2/7: Creating backend secret...${NC}"
+echo -e "${YELLOW}Step 2/6: Creating backend secret...${NC}"
 sed "s/NAMESPACE/$NAMESPACE/g" backend-secret.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Secret created${NC}"
 echo ""
 
-# Step 3: Create ConfigMaps
-echo -e "${YELLOW}Step 3/7: Creating configmaps...${NC}"
-sed "s/NAMESPACE/$NAMESPACE/g" frontend-config.yaml | kubectl apply -f -
-echo -e "${GREEN}✓ ConfigMaps created${NC}"
-echo ""
-
-# Step 4: Deploy Backend (includes backend ingress)
-echo -e "${YELLOW}Step 4/7: Deploying backend...${NC}"
+# Step 3: Deploy Backend (includes backend ingress)
+echo -e "${YELLOW}Step 3/6: Deploying backend...${NC}"
 sed -e "s/NAMESPACE/$NAMESPACE/g" -e "s/CLUSTER_NAME/$CLUSTER_NAME/g" backend-deployment.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Backend deployed${NC}"
 echo ""
 
-# Step 5: Deploy Frontend (includes frontend ingress)
-echo -e "${YELLOW}Step 5/7: Deploying frontend...${NC}"
+# Step 4: Deploy Frontend (includes frontend ingress)
+echo -e "${YELLOW}Step 4/6: Deploying frontend...${NC}"
 sed -e "s/NAMESPACE/$NAMESPACE/g" -e "s/CLUSTER_NAME/$CLUSTER_NAME/g" frontend-deployment.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Frontend deployed${NC}"
 echo ""
 
-# Step 6: Deploy Video Streaming
-echo -e "${YELLOW}Step 6/8: Deploying video streaming service...${NC}"
+# Step 5: Deploy Video Streaming
+echo -e "${YELLOW}Step 5/6: Deploying video streaming service...${NC}"
 sed -e "s/NAMESPACE/$NAMESPACE/g" -e "s/CLUSTER_NAME/$CLUSTER_NAME/g" videostreamer-deployment.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Video streaming service deployed${NC}"
 echo ""
 
-# Step 7: Deploy Video Batch Sync
-echo -e "${YELLOW}Step 7/8: Deploying video batch sync service...${NC}"
+# Step 6: Deploy Video Batch Sync
+echo -e "${YELLOW}Step 6/6: Deploying video batch sync service...${NC}"
 sed -e "s/NAMESPACE/$NAMESPACE/g" -e "s/CLUSTER_NAME/$CLUSTER_NAME/g" video-batch-sync-deployment.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Video batch sync service deployed${NC}"
-echo ""
-
-# Step 8: Verify ConfigMaps
-echo -e "${YELLOW}Step 8/8: Verifying configuration...${NC}"
-kubectl get configmap -n $NAMESPACE
-echo -e "${GREEN}✓ Configuration verified${NC}"
 echo ""
 
 # Get Ingress IP

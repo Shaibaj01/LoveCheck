@@ -14,6 +14,7 @@ from typing import List, Optional
 from src.config import get_settings
 from src.models.video import VideoSearchResult, ChunkSearchResult
 from src.models.user import User
+from src.utils.segment_timeline import dedupe_by_segment_number, dedupe_segment_dicts
 
 # Import ADBC driver manager
 try:
@@ -60,6 +61,12 @@ def _patched_build_query_data_request(schema, predicate, field_names):
 _internal.build_query_data_request = _patched_build_query_data_request
 print("[VastDB] Applied monkey patch to support tables with vector columns")  # Use print for import-time logging
 # ============================================================================
+DASHBOARD_SCAN_COLUMNS = (
+    "source", "filename", "original_video", "segment_number", "total_segments",
+    "upload_timestamp", "row_kind", "camera_id", "capture_type", "location",
+    "object_classes", "structured_parse_ok", "perception_ok", "is_public", "allowed_users",
+)
+
 settings = get_settings()
 
 
@@ -624,7 +631,12 @@ class VastDBService:
 
         chunks: List[ChunkSearchResult] = []
         for original_video, matches in ranked_groups:
-            matches_sorted = sorted(matches, key=lambda r: r.similarity_score, reverse=True)
+            matches_deduped = dedupe_by_segment_number(
+                matches,
+                segment_number=lambda r: int(r.segment_number or 0),
+                rank_key=lambda r: float(r.similarity_score or 0),
+            )
+            matches_sorted = sorted(matches_deduped, key=lambda r: r.similarity_score, reverse=True)
             best = matches_sorted[0]
             match_by_number = {m.segment_number: m for m in matches_sorted if m.segment_number > 0}
 
@@ -1130,6 +1142,87 @@ class VastDBService:
                 cursor.execute(sql_query)
                 return cursor.fetch_arrow_table().to_pandas()
 
+    def get_dashboard_stats(self, user: User, scope: str = "all") -> dict:
+        """Scan accessible VastDB rows and aggregate dashboard statistics."""
+        import time
+        from datetime import datetime, timezone
+
+        from src.utils.dashboard_stats import build_dashboard_stats, empty_dashboard_stats
+
+        start = time.time()
+        include_public = scope in ("all", "public")
+        public_only = scope == "public"
+        table_ref = (
+            f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self.settings.vdb_collection}"
+        )
+
+        table_available = True
+        table_message: Optional[str] = None
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[DASHBOARD] VastDB scan failed for %s: %s", table_ref, exc)
+            raw_rows = []
+            table_available = False
+            table_message = (
+                f"Could not read VastDB table {table_ref}. "
+                "Verify vdb_bucket, vdb_schema, and vdb_collection in backend config."
+            )
+
+        accessible_rows: List[dict] = []
+        for row in raw_rows:
+            if not self._user_has_access(row, user, include_public, public_only):
+                continue
+            accessible_rows.append(row)
+
+        payload = (
+            build_dashboard_stats(accessible_rows)
+            if table_available
+            else empty_dashboard_stats()
+        )
+        if table_available and not accessible_rows and not raw_rows:
+            table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
+        elif table_available and not accessible_rows and raw_rows:
+            table_message = "Rows exist in VastDB but none are visible for the selected scope."
+
+        payload["table"] = table_ref
+        payload["table_available"] = table_available
+        payload["table_message"] = table_message
+        payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+        payload["query_time_ms"] = round((time.time() - start) * 1000, 2)
+        payload["scope"] = scope
+        return payload
+
+    def _fetch_dashboard_rows_sdk(self) -> List[dict]:
+        """Read non-vector columns via the VastDB Python SDK (same path as metadata discovery)."""
+        with self.client.transaction() as tx:
+            bucket = tx.bucket(self.settings.vdb_bucket)
+            db_schema = bucket.schema(self.settings.vdb_schema)
+            table = db_schema.table(self.settings.vdb_collection)
+            full_schema = table.columns()
+
+            columns_to_select: List[str] = []
+            for field in full_schema:
+                field_type_str = str(field.type)
+                if "fixed_size_list" in field_type_str:
+                    continue
+                if "list<" in field_type_str and "float" in field_type_str:
+                    continue
+                if field.name in DASHBOARD_SCAN_COLUMNS:
+                    columns_to_select.append(field.name)
+
+            if not columns_to_select:
+                logger.warning("[DASHBOARD] No dashboard columns found in table schema")
+                return []
+
+            result = table.select(columns=columns_to_select, internal_row_id=False)
+            arrow_table = result.read_all()
+            if arrow_table.num_rows == 0:
+                return []
+
+            df = arrow_table.to_pandas()
+            return [row.to_dict() for _, row in df.iterrows()]
+
     def list_segments_for_video(self, original_video: str, user: User) -> List[dict]:
         """Return accessible segment rows for a parent video, ordered by segment_number."""
         safe_video = original_video.replace("'", "''")
@@ -1170,7 +1263,7 @@ class VastDBService:
                 "tags": self._safe_array_to_list(row.get("tags", [])),
             })
         segments.sort(key=lambda s: s["segment_number"])
-        return segments
+        return dedupe_segment_dicts(segments)
 
     def get_video_summary_row(self, original_video: str, user: User) -> Optional[dict]:
         safe_video = original_video.replace("'", "''")
