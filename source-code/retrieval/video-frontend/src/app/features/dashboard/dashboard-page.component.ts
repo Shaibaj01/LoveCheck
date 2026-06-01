@@ -224,8 +224,6 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
           </mat-card>
         </section>
 
-        </section>
-
         <mat-card class="panel key-events-panel">
           <mat-card-header>
             <mat-card-title>Key events</mat-card-title>
