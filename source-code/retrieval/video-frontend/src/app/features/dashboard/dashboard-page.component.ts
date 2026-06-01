@@ -228,13 +228,13 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
           <mat-card-header>
             <mat-card-title>Key events</mat-card-title>
             <mat-card-subtitle>
-              LLM-suggested moments — click a row to copy the search query
+              {{ keyEvents().length }} events — click to copy query
               @if (suggestionsGeneratedAt()) {
                 · updated {{ formatTimestamp(suggestionsGeneratedAt()) }}
               }
             </mat-card-subtitle>
           </mat-card-header>
-          <mat-card-content class="key-events-scroll">
+          <mat-card-content class="table-wrap table-scroll-viewport table-scroll-viewport-events">
             @if (keyEvents().length) {
               <table class="data-table key-events-table">
                 <thead>
@@ -245,7 +245,7 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
                   </tr>
                 </thead>
                 <tbody>
-                  @for (ev of keyEvents(); track ev.query_text + ev.segment_start_sec) {
+                  @for (ev of keyEvents(); track eventTrackKey(ev)) {
                     <tr
                       class="key-event-row"
                       tabindex="0"
@@ -256,8 +256,10 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
                       <td class="col-event">
                         <mat-icon class="row-icon">bolt</mat-icon>
                         <div class="event-text">
-                          <strong>{{ ev.label || ev.query_text }}</strong>
-                          <span class="event-query">{{ ev.query_text }}</span>
+                          <strong>{{ eventHeadline(ev) }}</strong>
+                          @if (eventSubline(ev)) {
+                            <span class="event-query">{{ eventSubline(ev) }}</span>
+                          }
                         </div>
                       </td>
                       <td class="col-time">
@@ -283,7 +285,7 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
             <mat-card-title>Recent videos in index</mat-card-title>
             <mat-card-subtitle>Grouped by original_video · {{ data.recent_videos.length }} videos</mat-card-subtitle>
           </mat-card-header>
-          <mat-card-content class="table-wrap">
+          <mat-card-content class="table-wrap table-scroll-viewport">
             @if (data.recent_videos.length) {
               <table class="data-table">
                 <thead>
@@ -705,10 +707,25 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
     }
 
     .table-wrap {
-      overflow-x: auto;
       border: 1px solid var(--border-color);
       border-radius: 10px;
       background: var(--bg-secondary);
+    }
+
+    .table-scroll-viewport {
+      max-height: calc(2.85rem * 11);
+      overflow: auto;
+    }
+
+    .table-scroll-viewport-events {
+      max-height: calc(4.25rem * 11);
+    }
+
+    .table-scroll-viewport thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--bg-header);
     }
 
     .data-table {
@@ -826,12 +843,6 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
 
     .key-events-panel {
       margin-bottom: 1rem;
-    }
-
-    .key-events-scroll {
-      max-height: 320px;
-      overflow-y: auto;
-      padding-right: 0.25rem;
     }
 
     .key-events-table .key-event-row {
@@ -997,6 +1008,28 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
         }
       },
     });
+  }
+
+  eventTrackKey(ev: KeyEventSuggestion): string {
+    return `${ev.batch_id ?? ''}:${ev.query_text}:${ev.segment_start_sec}:${ev.original_video}`;
+  }
+
+  eventHeadline(ev: KeyEventSuggestion): string {
+    const label = (ev.label || '').trim();
+    const query = (ev.query_text || '').trim();
+    if (label && label.toLowerCase() !== query.toLowerCase()) {
+      return label;
+    }
+    return query;
+  }
+
+  eventSubline(ev: KeyEventSuggestion): string {
+    const label = (ev.label || '').trim();
+    const query = (ev.query_text || '').trim();
+    if (label && label.toLowerCase() !== query.toLowerCase()) {
+      return query;
+    }
+    return '';
   }
 
   copyKeyEvent(ev: KeyEventSuggestion) {

@@ -17,12 +17,13 @@ class Settings(BaseModel):
     cosmos_host: str = ""
     cosmos_port: int = 8001
     cosmos_model: str = ""
-    cosmos_max_tokens: int = 3000
+    cosmos_max_tokens: int = 6000
     cosmos_temperature: float = 0.3
 
-    suggestions_max_segments: int = 100
+    suggestions_max_segments: int = 48
     suggestions_search_count: int = 10
-    suggestions_events_count: int = 25
+    suggestions_events_count: int = 30
+    suggestions_max_events_per_video: int = 3
     suggestions_lookback_hours: int = 168
 
     @classmethod

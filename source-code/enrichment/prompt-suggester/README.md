@@ -9,9 +9,10 @@ Structure matches other DataEngine functions (`vastdb-writer`, `fraud-detector`)
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `vdbpromptscollection` | `vss2-prompts-events` | Output table |
-| `suggestions_max_segments` | `100` | Max caption lines sent to LLM |
+| `suggestions_max_segments` | `48` | Max segment lines in LLM corpus (sampled per video) |
 | `suggestions_search_count` | `10` | Search prompts per run |
-| `suggestions_events_count` | `25` | Key events per run |
+| `suggestions_events_count` | `30` | Max unique key events per run |
+| `suggestions_max_events_per_video` | `3` | Cap per video in LLM prompt |
 | `suggestions_lookback_hours` | `168` | Only segments newer than this |
 
 Plus standard VastDB and Cosmos keys (`vdbendpoint`, `vdbcollection`, `cosmos_host`, `cosmos_port`, `cosmos_model`, …).

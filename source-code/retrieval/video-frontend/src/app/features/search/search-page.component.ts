@@ -46,12 +46,7 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
           <h2>What are you looking for?</h2>
           <p>Type what you want to see in plain words to find the right clips</p>
           <div class="examples">
-            <div class="examples-header">
-              <h3>Try something like:</h3>
-              @if (exampleQueries().length) {
-                <span class="examples-live-hint">Live from your index · refreshes every 30s</span>
-              }
-            </div>
+            <h3>Try something like:</h3>
             @if (suggestionsLoading()) {
               <div class="examples-status">
                 <mat-spinner diameter="28"></mat-spinner>
@@ -232,24 +227,10 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
         border: 1px solid var(--border-color);
         transition: background 0.3s ease, border-color 0.3s ease;
         
-        .examples-header {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: baseline;
-          justify-content: space-between;
-          gap: 0.5rem;
-          margin-bottom: 0.75rem;
-        }
-
         h3 {
           color: var(--accent-primary);
-          margin: 0;
+          margin: 0 0 0.75rem;
           font-size: 1rem;
-        }
-
-        .examples-live-hint {
-          font-size: 0.75rem;
-          color: var(--text-muted);
         }
 
         .examples-status {

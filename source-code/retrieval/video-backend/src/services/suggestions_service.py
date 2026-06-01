@@ -1,7 +1,7 @@
 """Read LLM-generated search prompts and key events from VastDB."""
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Set
 
 import pyarrow as pa
 import vastdb
@@ -69,6 +69,14 @@ class SuggestionsService:
 
         return [row.to_dict() for _, row in arrow.to_pandas().iterrows()]
 
+    @staticmethod
+    def _ts_sort_key(ts: Any) -> float:
+        if ts is None:
+            return 0.0
+        if hasattr(ts, "timestamp"):
+            return float(ts.timestamp())
+        return float(str(ts))
+
     def _latest_batch_id(self, rows: List[dict]) -> Optional[str]:
         if not rows:
             return None
@@ -86,44 +94,110 @@ class SuggestionsService:
                 best_batch = bid
         return best_batch
 
+    @staticmethod
+    def _row_to_key_event(row: dict) -> Dict[str, Any]:
+        query = str(row.get("query_text") or "").strip()
+        label = str(row.get("label") or "").strip()
+        if label.lower() == query.lower():
+            label = ""
+        gen_at = row.get("generated_at")
+        if gen_at is not None and hasattr(gen_at, "isoformat"):
+            gen_at = gen_at.isoformat()
+        elif gen_at is not None:
+            gen_at = str(gen_at)
+        return {
+            "query_text": query,
+            "label": label,
+            "original_video": str(row.get("original_video") or ""),
+            "filename": str(row.get("filename") or ""),
+            "segment_start_sec": float(row.get("segment_start_sec") or 0),
+            "segment_end_sec": float(row.get("segment_end_sec") or 0),
+            "generated_at": gen_at,
+            "batch_id": str(row.get("batch_id") or ""),
+        }
+
+    @staticmethod
+    def _event_tokens(text: str) -> Set[str]:
+        stop = {"the", "and", "for", "with", "near", "along", "street", "sidewalk", "road"}
+        return {
+            w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in stop
+        }
+
+    def _events_similar(self, a: str, b: str) -> bool:
+        ta, tb = self._event_tokens(a), self._event_tokens(b)
+        if not ta or not tb:
+            return a.strip().lower() == b.strip().lower()
+        return len(ta & tb) / len(ta | tb) >= 0.52
+
+    def _key_events_for_batch(self, rows: List[dict], batch_id: str) -> List[Dict[str, Any]]:
+        """Latest batch only, timeline order, fuzzy dedupe (avoids stacked duplicate runs)."""
+        event_rows = [
+            r for r in rows
+            if str(r.get("kind") or "") == "key_event"
+            and r.get("is_active")
+            and str(r.get("batch_id") or "") == batch_id
+        ]
+        event_rows.sort(
+            key=lambda r: (
+                float(r.get("segment_start_sec") or 0),
+                str(r.get("original_video") or ""),
+            )
+        )
+        kept: List[Dict[str, Any]] = []
+        for row in event_rows:
+            ev = self._row_to_key_event(row)
+            q = ev["query_text"]
+            if not q:
+                continue
+            dup = False
+            for existing in kept:
+                if str(existing.get("original_video")) != str(ev.get("original_video")):
+                    continue
+                t0 = float(existing.get("segment_start_sec") or 0)
+                t1 = float(ev.get("segment_start_sec") or 0)
+                if abs(t0 - t1) > 12:
+                    continue
+                if self._events_similar(q, existing["query_text"]) or self._events_similar(
+                    ev.get("label") or q, existing.get("label") or existing["query_text"]
+                ):
+                    dup = True
+                    break
+            if not dup:
+                kept.append(ev)
+        return kept
+
     def get_suggestions(self) -> Dict[str, Any]:
         rows = self._read_all_rows()
         batch_id = self._latest_batch_id(rows)
-        if not batch_id:
+        table = f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}"
+
+        if not batch_id and not rows:
             return {
                 "batch_id": None,
                 "generated_at": None,
                 "search_prompts": [],
                 "key_events": [],
-                "table": f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}",
+                "key_events_count": 0,
+                "table": table,
             }
 
-        active = [r for r in rows if str(r.get("batch_id")) == batch_id and r.get("is_active")]
-
         prompts: List[str] = []
-        events: List[Dict[str, Any]] = []
         gen_at = None
-
-        for row in active:
-            kind = str(row.get("kind") or "")
-            if kind == "search_prompt":
+        if batch_id:
+            for row in rows:
+                if str(row.get("batch_id")) != batch_id or not row.get("is_active"):
+                    continue
+                if str(row.get("kind") or "") != "search_prompt":
+                    continue
                 q = str(row.get("query_text") or "").strip()
                 if q and q not in prompts:
                     prompts.append(q)
-            elif kind == "key_event":
-                events.append({
-                    "query_text": str(row.get("query_text") or ""),
-                    "label": str(row.get("label") or row.get("query_text") or ""),
-                    "original_video": str(row.get("original_video") or ""),
-                    "filename": str(row.get("filename") or ""),
-                    "segment_start_sec": float(row.get("segment_start_sec") or 0),
-                    "segment_end_sec": float(row.get("segment_end_sec") or 0),
-                })
-            ts = row.get("generated_at")
-            if ts is not None:
-                gen_at = ts
+                ts = row.get("generated_at")
+                if ts is not None:
+                    gen_at = ts
 
-        events.sort(key=lambda e: (e["segment_start_sec"], e["filename"]))
+        events = self._key_events_for_batch(rows, batch_id) if batch_id else []
 
         generated_iso = None
         if gen_at is not None and hasattr(gen_at, "isoformat"):
@@ -136,7 +210,8 @@ class SuggestionsService:
             "generated_at": generated_iso,
             "search_prompts": prompts[:10],
             "key_events": events,
-            "table": f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}",
+            "key_events_count": len(events),
+            "table": table,
         }
 
 

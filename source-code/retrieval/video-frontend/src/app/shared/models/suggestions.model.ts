@@ -5,6 +5,8 @@ export interface KeyEventSuggestion {
   filename: string;
   segment_start_sec: number;
   segment_end_sec: number;
+  generated_at?: string | null;
+  batch_id?: string;
 }
 
 export interface SuggestionsResponse {
@@ -12,5 +14,6 @@ export interface SuggestionsResponse {
   generated_at: string | null;
   search_prompts: string[];
   key_events: KeyEventSuggestion[];
+  key_events_count?: number;
   table?: string;
 }

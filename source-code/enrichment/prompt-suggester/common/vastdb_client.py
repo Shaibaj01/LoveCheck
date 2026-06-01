@@ -1,8 +1,10 @@
-"""VastDB reads (segment captions) and writes (prompts/events table)."""
+"""VastDB reads (summaries + sampled segments) and writes (prompts/events table)."""
 import hashlib
+import json
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pyarrow as pa
 import vastdb
@@ -26,11 +28,13 @@ PROMPTS_SCHEMA = pa.schema([
     ("is_active", pa.bool_()),
 ])
 
-SEGMENT_COLUMNS = (
+READ_COLUMNS = (
     "source", "filename", "original_video", "dense_caption", "reasoning_content",
     "segment_number", "segment_start_sec", "segment_end_sec", "upload_timestamp",
-    "object_classes", "row_kind",
+    "object_classes", "row_kind", "video_summary_json", "video_events_json",
 )
+
+MAX_SAMPLE_SEGMENTS_PER_VIDEO = 4
 
 
 class VastDBClient:
@@ -53,49 +57,86 @@ class VastDBClient:
             ssl_verify=False,
         )
 
-    def fetch_recent_segments(self) -> List[dict]:
-        """Segment rows in lookback window with captions (no vector columns)."""
-        rows: List[dict] = []
+    def _in_lookback(self, row: dict, cutoff: datetime) -> bool:
+        ts = row.get("upload_timestamp")
+        if ts is None or not hasattr(ts, "to_pydatetime"):
+            return True
+        ts_dt = ts.to_pydatetime()
+        if ts_dt.tzinfo is None:
+            ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+        return ts_dt >= cutoff
+
+    def _sample_segments(self, segments: List[dict]) -> List[dict]:
+        by_video: Dict[str, List[dict]] = defaultdict(list)
+        for seg in segments:
+            ov = str(seg.get("original_video") or seg.get("source") or "").strip()
+            if ov:
+                by_video[ov].append(seg)
+
+        sampled: List[dict] = []
+        for segs in by_video.values():
+            segs.sort(key=lambda s: int(s.get("segment_number") or 0))
+            n = len(segs)
+            if n <= MAX_SAMPLE_SEGMENTS_PER_VIDEO:
+                sampled.extend(segs)
+                continue
+            step = n / MAX_SAMPLE_SEGMENTS_PER_VIDEO
+            for i in range(MAX_SAMPLE_SEGMENTS_PER_VIDEO):
+                sampled.append(segs[min(int(i * step), n - 1)])
+        return sampled
+
+    def fetch_corpus(self) -> Tuple[List[dict], List[dict]]:
+        """
+        Returns (video_rollups, sampled_segments) within lookback window.
+        Rollups are row_kind=video_summary; segments are capped per video.
+        """
+        rollups: List[dict] = []
+        segments: List[dict] = []
         cutoff = datetime.now(timezone.utc) - timedelta(
             hours=self.settings.suggestions_lookback_hours
         )
+
         with self.session.transaction() as tx:
             bucket = tx.bucket(self.bucket)
             db_schema = bucket.schema(self.schema_name)
             table = db_schema.table(self.table_name)
             full = table.columns()
-            cols = [f.name for f in full if f.name in SEGMENT_COLUMNS]
+            cols = [f.name for f in full if f.name in READ_COLUMNS]
             if not cols:
-                return []
+                return [], []
             result = table.select(columns=cols, internal_row_id=False)
             arrow = result.read_all()
 
         if arrow.num_rows == 0:
-            return []
+            return [], []
 
         for row in arrow.to_pylist():
+            if not self._in_lookback(row, cutoff):
+                continue
             kind = str(row.get("row_kind") or "").strip().lower()
+            if kind == "video_summary":
+                rollups.append(row)
+                continue
             if kind and kind not in ("", "segment"):
                 continue
             cap = str(row.get("dense_caption") or row.get("reasoning_content") or "").strip()
-            if not cap:
-                continue
-            ts = row.get("upload_timestamp")
-            if ts is not None and hasattr(ts, "to_pydatetime"):
-                ts_dt = ts.to_pydatetime()
-                if ts_dt.tzinfo is None:
-                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
-                if ts_dt < cutoff:
-                    continue
-            rows.append(row)
-        return rows
+            if cap:
+                segments.append(row)
 
-    def list_distinct_videos(self, segments: List[dict]) -> List[str]:
-        videos = {
-            str(s.get("original_video") or s.get("source") or "").strip()
-            for s in segments
-        }
-        return sorted(v for v in videos if v)
+        return rollups, self._sample_segments(segments)
+
+    def fetch_recent_segments(self) -> List[dict]:
+        """Backward-compatible: sampled segments only."""
+        _, segments = self.fetch_corpus()
+        return segments
+
+    def list_distinct_videos(self, segments: List[dict], rollups: List[dict]) -> List[str]:
+        videos = set()
+        for row in segments + rollups:
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if ov:
+                videos.add(ov)
+        return sorted(videos)
 
     def ensure_prompts_table(self) -> None:
         with self.session.transaction() as tx:
@@ -142,7 +183,9 @@ class VastDBClient:
             ov = str(ev.get("original_video") or "").strip()
             start = float(ev.get("segment_start_sec") or 0)
             end = float(ev.get("segment_end_sec") or start + 5)
-            label = str(ev.get("label") or ev.get("description") or q)[:200]
+            label = str(ev.get("label") or "").strip()[:200]
+            if label.lower() == q.lower():
+                label = ""
             pk_src = f"event:{ov}:{start}:{q}"
             records.append({
                 "pk": hashlib.md5(pk_src.encode()).hexdigest(),
