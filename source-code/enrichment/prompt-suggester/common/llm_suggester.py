@@ -23,9 +23,12 @@ Input sections:
 2) SAMPLE SEGMENTS — sparse clip captions (use mainly for search_prompts).
 
 Goals:
-1) search_prompts: exactly {search_count} distinct semantic-search sentences.
-   - Concrete, varied wording from captions/summaries.
-   - Not generic ("person on street").
+1) search_prompts: exactly {search_count} distinct semantic-search queries.
+   - EACH search_prompt MUST be exactly ONE sentence (one period at the end; no second sentence).
+   - Length: about 25–55 words. Use commas to add detail; do NOT write a paragraph or bullet list.
+   - Style: who/what + action + setting (urban street, time of day, vehicles/storefronts) + brief hazard/activity note.
+   - Example: "A woman walks on a sidewalk while looking at her phone, passing a white van and other parked vehicles in an urban setting with storefronts and trees along the street during the day, with no visible hazards or unusual activity occurring in the scene."
+   - Concrete and varied; not generic ("person on street").
 
 2) key_events: up to {events_count} UNIQUE investigative moments across ALL videos.
    - Use rollup timeline_events when present (convert to query_text + label + timestamps).

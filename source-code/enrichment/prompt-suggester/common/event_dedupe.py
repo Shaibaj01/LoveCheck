@@ -60,11 +60,29 @@ def dedupe_key_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return kept
 
 
+def normalize_search_prompt(text: str, max_words: int = 70) -> str:
+    """One sentence, no bullets; trim run-on multi-sentence output."""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    t = re.sub(r"^[\d\.\)\-\*]+\s*", "", t)
+    if not t:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z\"'(])", t, maxsplit=1)
+    t = parts[0].strip()
+    words = t.split()
+    if len(words) > max_words:
+        t = " ".join(words[:max_words]).rstrip(",;:")
+        if t and t[-1] not in ".!?":
+            t += "."
+    elif t and t[-1] not in ".!?":
+        t += "."
+    return t
+
+
 def dedupe_prompts(prompts: List[str]) -> List[str]:
     kept: List[str] = []
     for p in prompts:
-        q = p.strip()
-        if not q:
+        q = normalize_search_prompt(p)
+        if not q or len(q) < 20:
             continue
         if any(similar_text(q, k) for k in kept):
             continue
