@@ -28,6 +28,8 @@ import uuid
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+DEFAULT_CAPTURE_INTERVAL_SEC = 30
+
 _cv2 = None
 
 
@@ -93,6 +95,18 @@ class VideoCaptureService:
         self.current_config = None
         self.s3_client = None
         self.temp_files = []
+        self._chunk_index = 0
+
+    def _attach_stream_metadata(self, config, s3_metadata, chunk_index, chunk_start_sec):
+        """Add stream session indexing fields for downstream segment/VastDB rows."""
+        stream_id = config.get("stream_id")
+        if not stream_id:
+            return s3_metadata
+        s3_metadata["stream_id"] = str(stream_id)
+        s3_metadata["chunk_index"] = str(chunk_index)
+        s3_metadata["chunk_start_sec"] = f"{float(chunk_start_sec):.3f}"
+        s3_metadata["ingest_kind"] = "stream_chunk"
+        return s3_metadata
         
     def is_youtube_url(self, url):
         """Check if the URL is a YouTube URL."""
@@ -412,7 +426,10 @@ class VideoCaptureService:
                     if custom_prompt:
                         s3_metadata['custom-prompt'] = quote(custom_prompt, safe='')
                     s3_metadata['capture-timestamp'] = timestamp
-                    
+                    s3_metadata = self._attach_stream_metadata(
+                        config, s3_metadata, capture_count, float(segment_start)
+                    )
+
                     # Upload to S3
                     s3_key = f"{s3_prefix}/{filename}"
                     if self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
@@ -456,7 +473,7 @@ class VideoCaptureService:
         
         try:
             stream_url = config['youtube_url']
-            capture_interval = config.get('capture_interval', 10)
+            capture_interval = config.get('capture_interval', DEFAULT_CAPTURE_INTERVAL_SEC)
             bucket_name = config.get('bucket_name', 'rawlivevideos')
             s3_prefix = config.get('s3_prefix', 'captures')
             
@@ -595,6 +612,13 @@ class VideoCaptureService:
                 self.temp_files.append(temp_path)
                 
                 logger.info(f"Starting capture #{capture_count + 1}: {filename}")
+
+                chunk_start_sec = 0.0
+                if not is_live and fps > 0:
+                    pos_frames = cap.get(cv2.CAP_PROP_POS_FRAMES)
+                    chunk_start_sec = float(pos_frames) / float(fps)
+                else:
+                    chunk_start_sec = float(capture_count * capture_interval)
                 
                 # Create VideoWriter for this chunk
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -673,6 +697,9 @@ class VideoCaptureService:
                     if custom_prompt:
                         s3_metadata['custom-prompt'] = quote(custom_prompt, safe='')
                     s3_metadata['capture-timestamp'] = timestamp
+                    s3_metadata = self._attach_stream_metadata(
+                        config, s3_metadata, capture_count, chunk_start_sec
+                    )
                     
                     # Upload to S3 with metadata
                     s3_key = f"{s3_prefix}/{filename}"
@@ -731,6 +758,10 @@ class VideoCaptureService:
         # Set default name if not provided
         if 'name' not in config:
             config['name'] = 'capture'
+
+        config['stream_id'] = str(uuid.uuid4())
+        config['stream_started_at'] = datetime.utcnow().isoformat() + 'Z'
+        self._chunk_index = 0
         
         # Setup S3 client
         if not self.setup_s3_client(config['access_key'], config['secret_key'], config['s3_endpoint']):

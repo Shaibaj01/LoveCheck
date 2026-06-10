@@ -1,4 +1,4 @@
-"""Generate search prompts and key events from rollups + sampled segments."""
+"""Generate search prompts and key events from sampled segments."""
 import json
 import logging
 import re
@@ -10,7 +10,8 @@ import requests
 from opentelemetry import trace
 
 from .event_dedupe import dedupe_key_events, dedupe_prompts
-from .models import KeyEventSuggestion, Settings, SuggestionsResult
+from .models import KeyEventSuggestion, Settings
+from .stream_index import stream_fields_from_row, timeline_sec
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -18,20 +19,20 @@ tracer = trace.get_tracer(__name__)
 SYSTEM_PROMPT = """You help operators search a NYC street-safety video index.
 Output JSON only.
 
-Input sections:
-1) VIDEO ROLLUPS — whole-video summaries and timeline events (PREFER for key_events).
-2) SAMPLE SEGMENTS — sparse clip captions (use mainly for search_prompts).
+Input: SAMPLE SEGMENTS — sparse clip captions from recent videos.
 
 Goals:
-1) search_prompts: exactly {search_count} distinct semantic-search queries.
-   - EACH search_prompt MUST be exactly ONE sentence (one period at the end; no second sentence).
-   - Length: about 25–55 words. Use commas to add detail; do NOT write a paragraph or bullet list.
-   - Style: who/what + action + setting (urban street, time of day, vehicles/storefronts) + brief hazard/activity note.
-   - Example: "A woman walks on a sidewalk while looking at her phone, passing a white van and other parked vehicles in an urban setting with storefronts and trees along the street during the day, with no visible hazards or unusual activity occurring in the scene."
-   - Concrete and varied; not generic ("person on street").
+1) search_prompts: exactly {search_count} SHORT search-box queries (not captions).
+   - At most 6 words. One line. No period. No commas.
+   - Lead with the specific subject + action (person, vehicle, hazard, brand, sign).
+   - Do NOT add filler: "urban setting", "daylight conditions", "clear skies", "no hazards",
+     "moderately busy", "bustling city street", "in the scene", "visible in the background".
+   - Good: "Woman on sidewalk using phone"
+   - Good: "UPS truck blocking sidewalk"
+   - Good: "Food cart at busy intersection"
+   - Bad: long narrative sentences or generic scene summaries.
 
 2) key_events: up to {events_count} UNIQUE investigative moments across ALL videos.
-   - Use rollup timeline_events when present (convert to query_text + label + timestamps).
    - Max {max_per_video} key_events per video unless severity is high.
    - NEVER list the same object twice in overlapping times (e.g. two "forklift on sidewalk" lines).
    - SKIP idle parked vehicles, mannequins, generic pedestrians unless tied to action/hazard.
@@ -51,78 +52,26 @@ def _video_meta(row: dict) -> Tuple[str, str]:
     return ov, fn
 
 
-def key_events_from_rollups(rollups: List[dict]) -> List[Dict[str, Any]]:
-    """Seed key events from stored video_events_json rollup rows."""
-    events: List[Dict[str, Any]] = []
-    for row in rollups:
-        ov, fn = _video_meta(row)
-        if not ov:
-            continue
-        raw_events = row.get("video_events_json") or "[]"
-        try:
-            timeline = json.loads(raw_events) if isinstance(raw_events, str) else raw_events
-        except json.JSONDecodeError:
-            timeline = []
-        if not isinstance(timeline, list):
-            continue
-        for item in timeline:
-            if not isinstance(item, dict):
-                continue
-            desc = str(item.get("description") or item.get("event") or "").strip()
-            if not desc or len(desc) < 12:
-                continue
-            start = float(item.get("start_sec") or item.get("segment_start_sec") or 0)
-            end = float(item.get("end_sec") or item.get("segment_end_sec") or start + 5)
-            label = desc[:60].rsplit(" ", 1)[0] if len(desc) > 60 else desc
-            if len(label) < 8:
-                label = desc[:40]
-            events.append({
-                "query_text": desc,
-                "label": label.title() if label == desc[: len(label)] else label,
-                "original_video": ov,
-                "filename": fn,
-                "segment_start_sec": start,
-                "segment_end_sec": end,
-                "source": "rollup",
-            })
-    return events
-
-
-def _format_corpus(rollups: List[dict], segments: List[dict], max_segment_lines: int) -> str:
-    parts: List[str] = []
-
-    if rollups:
-        parts.append("=== VIDEO ROLLUPS (prefer for key_events) ===")
-        for row in rollups[:30]:
-            ov, fn = _video_meta(row)
-            summary_raw = row.get("video_summary_json") or ""
-            summary_text = summary_raw
-            try:
-                parsed = json.loads(summary_raw) if summary_raw else {}
-                if isinstance(parsed, dict):
-                    summary_text = str(parsed.get("video_summary") or summary_raw)[:600]
-            except json.JSONDecodeError:
-                summary_text = str(summary_raw)[:600]
-            events_raw = str(row.get("video_events_json") or "")[:1200]
-            parts.append(
-                f"- video={ov} | file={fn}\n"
-                f"  summary: {summary_text}\n"
-                f"  timeline_events: {events_raw}"
+def _format_corpus(segments: List[dict], max_segment_lines: int) -> str:
+    parts: List[str] = ["=== SAMPLE SEGMENTS ==="]
+    for seg in segments[:max_segment_lines]:
+        ov, fn = _video_meta(seg)
+        sn = int(seg.get("segment_number") or 0)
+        start = float(seg.get("segment_start_sec") or 0)
+        end = float(seg.get("segment_end_sec") or start + 5)
+        cap = str(seg.get("dense_caption") or seg.get("reasoning_content") or "")[:350]
+        objs = str(seg.get("object_classes") or "")
+        stream = stream_fields_from_row(seg)
+        stream_note = ""
+        if stream.get("stream_id") is not None:
+            stream_note = (
+                f" | stream chunk={stream.get('chunk_index', '?')}"
+                f" @ {timeline_sec(seg):.0f}s"
             )
-
-    if segments:
-        parts.append("\n=== SAMPLE SEGMENTS (for search_prompts; do not emit one event per line) ===")
-        for seg in segments[:max_segment_lines]:
-            ov, fn = _video_meta(seg)
-            sn = int(seg.get("segment_number") or 0)
-            start = float(seg.get("segment_start_sec") or 0)
-            end = float(seg.get("segment_end_sec") or start + 5)
-            cap = str(seg.get("dense_caption") or seg.get("reasoning_content") or "")[:350]
-            objs = str(seg.get("object_classes") or "")
-            parts.append(
-                f"- video={ov} | file={fn} | seg={sn} | {start:.0f}-{end:.0f}s | objects={objs} | {cap}"
-            )
-
+        parts.append(
+            f"- video={ov} | file={fn} | seg={sn} | {start:.0f}-{end:.0f}s"
+            f"{stream_note} | objects={objs} | {cap}"
+        )
     return "\n".join(parts)
 
 
@@ -215,17 +164,15 @@ def _normalize_key_event(ev: KeyEventSuggestion) -> KeyEventSuggestion:
 
 def generate_suggestions(
     settings: Settings,
-    rollups: List[dict],
     segments: List[dict],
 ) -> Tuple[List[str], List[Dict[str, Any]], str]:
-    """Call Cosmos; merge rollup timeline + LLM output; dedupe."""
-    if not rollups and not segments:
+    """Call Cosmos; dedupe LLM key events."""
+    if not segments:
         return [], [], ""
 
     batch_id = _new_batch_id()
-    rollup_events = key_events_from_rollups(rollups)
     segment_lines = min(settings.suggestions_max_segments, 48)
-    corpus = _format_corpus(rollups, segments, segment_lines)
+    corpus = _format_corpus(segments, segment_lines)
     max_per_video = getattr(settings, "suggestions_max_events_per_video", 3)
     event_target = settings.suggestions_events_count
     if len(segments) > 80:
@@ -237,8 +184,7 @@ def generate_suggestions(
         max_per_video=max_per_video,
     )
     user = (
-        f"Corpus: {len(rollups)} video rollups, {len(segments)} sample segments, "
-        f"{len(rollup_events)} pre-parsed rollup timeline events.\n\n{corpus}"
+        f"Corpus: {len(segments)} sample segments.\n\n{corpus}"
     )
 
     max_tokens = max(settings.cosmos_max_tokens, 4000)
@@ -257,9 +203,7 @@ def generate_suggestions(
         span.set_attributes({
             "cosmos_url": settings.cosmos_url,
             "model": settings.cosmos_model,
-            "rollups": len(rollups),
             "segments_sampled": len(segments),
-            "rollup_events_seed": len(rollup_events),
             "max_tokens": max_tokens,
             "event_target": event_target,
         })
@@ -288,8 +232,13 @@ def generate_suggestions(
         normalized = _normalize_key_event(KeyEventSuggestion.model_validate(ev))
         llm_events.append(normalized.model_dump())
 
-    merged = dedupe_key_events(rollup_events + llm_events)
-    merged.sort(key=lambda e: (str(e.get("original_video")), float(e.get("segment_start_sec") or 0)))
-    events = merged[: settings.suggestions_events_count]
+    events = dedupe_key_events(llm_events)
+    events.sort(
+        key=lambda e: (
+            float(e.get("stream_position_sec") or e.get("segment_start_sec") or 0),
+            str(e.get("original_video") or ""),
+        )
+    )
+    events = events[: settings.suggestions_events_count]
 
     return prompts, events, batch_id

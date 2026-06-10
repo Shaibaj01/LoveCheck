@@ -37,7 +37,7 @@ class StreamingStartRequest(BaseModel):
     s3_endpoint: str = Field(..., description="S3 endpoint URL")
     name: str = Field(default="capture", description="Custom prefix for video files")
     bucket_name: str = Field(..., description="S3 bucket name for storing captures")
-    capture_interval: int = Field(default=10, ge=1, le=300, description="Capture interval in seconds")
+    capture_interval: int = Field(default=30, ge=1, le=300, description="Capture interval in seconds (chunk size)")
     # Stream capture metadata (optional) - passed to streaming service for S3 tagging
     camera_id: Optional[str] = Field(default="", description="Camera identifier")
     capture_type: Optional[str] = Field(default="", description="Capture type: traffic, streets, crowds, malls")

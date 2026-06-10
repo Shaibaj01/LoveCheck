@@ -13,7 +13,7 @@ import { LLMSynthesis } from '../../../shared/models/video.model';
       <div class="synthesis-header">
         <div class="header-content">
           <mat-icon class="ai-icon">auto_awesome</mat-icon>
-          <h3>Top {{synthesis.segments_used}} Clips — AI Summary</h3>
+          <h3>Top {{synthesis.segments_used}} Clips — Summary</h3>
           <span class="badge">Powered by {{synthesis.model}}</span>
         </div>
         <div class="header-meta">
@@ -330,37 +330,35 @@ export class LLMSynthesisComponent {
 
   formatResponse(text: string): string {
     if (!text) return '';
-    
-    let formatted = text
-      // Escape HTML to prevent XSS
+
+    let raw = text.trim()
+      .replace(/\r\n/g, '\n')
+      .replace(/\s*(##+\s+)/g, '\n\n$1')
+      .replace(/(?<![\n\-])\s+(?=\d{1,2}:\d{2}[–\-]\d{1,2}:\d{2}:)/g, '\n- ')
+      .replace(/\s*\([A-Za-z0-9_\-\.]+\.mp4\)/gi, '')
+      .replace(/\(Clip\s+(\d+)\)/gi, ' _(Clip $1)_ ');
+
+    let formatted = raw
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      // Headers: **Title** or ## Title at start of line
       .replace(/^\*\*(.+?)\*\*$/gm, '<h4>$1</h4>')
       .replace(/^##\s+(.+)$/gm, '<h4>$1</h4>')
       .replace(/^###\s+(.+)$/gm, '<h5>$1</h5>')
-      // Bold: **text** or __text__
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/__(.+?)__/g, '<strong>$1</strong>')
-      // Italic: *text* or _text_
       .replace(/\*([^*]+)\*/g, '<em>$1</em>')
       .replace(/_([^_]+)_/g, '<em>$1</em>')
-      // Bullet points: - item or * item at start of line
       .replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>')
-      // Numbered lists: 1. item, 2. item, etc.
       .replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>')
-      // Wrap consecutive <li> elements in <ul>
       .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-      // Line breaks
       .replace(/\n\n/g, '</p><p>')
       .replace(/\n/g, '<br>');
-    
-    // Wrap in paragraph if not starting with a block element
+
     if (!formatted.startsWith('<h') && !formatted.startsWith('<ul')) {
       formatted = '<p>' + formatted + '</p>';
     }
-    
+
     return formatted;
   }
 }

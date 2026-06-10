@@ -1,16 +1,16 @@
-"""VastDB reads (summaries + sampled segments) and writes (prompts/events table)."""
+"""VastDB reads (sampled segments) and writes (prompts/events table)."""
 import hashlib
-import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 import pyarrow as pa
 import vastdb
 
 from . import vastdb_patch  # noqa: F401 — apply SDK patch on import
 from .models import Settings
+from .stream_index import chunk_key, timeline_sec
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ PROMPTS_SCHEMA = pa.schema([
 READ_COLUMNS = (
     "source", "filename", "original_video", "dense_caption", "reasoning_content",
     "segment_number", "segment_start_sec", "segment_end_sec", "upload_timestamp",
-    "object_classes", "row_kind", "video_summary_json", "video_events_json",
+    "object_classes", "is_public", "extra_metadata",
 )
 
 MAX_SAMPLE_SEGMENTS_PER_VIDEO = 4
@@ -67,15 +67,15 @@ class VastDBClient:
         return ts_dt >= cutoff
 
     def _sample_segments(self, segments: List[dict]) -> List[dict]:
-        by_video: Dict[str, List[dict]] = defaultdict(list)
+        by_chunk: Dict[str, List[dict]] = defaultdict(list)
         for seg in segments:
-            ov = str(seg.get("original_video") or seg.get("source") or "").strip()
-            if ov:
-                by_video[ov].append(seg)
+            key = chunk_key(seg)
+            if key:
+                by_chunk[key].append(seg)
 
         sampled: List[dict] = []
-        for segs in by_video.values():
-            segs.sort(key=lambda s: int(s.get("segment_number") or 0))
+        for segs in by_chunk.values():
+            segs.sort(key=lambda s: timeline_sec(s))
             n = len(segs)
             if n <= MAX_SAMPLE_SEGMENTS_PER_VIDEO:
                 sampled.extend(segs)
@@ -85,12 +85,70 @@ class VastDBClient:
                 sampled.append(segs[min(int(i * step), n - 1)])
         return sampled
 
-    def fetch_corpus(self) -> Tuple[List[dict], List[dict]]:
-        """
-        Returns (video_rollups, sampled_segments) within lookback window.
-        Rollups are row_kind=video_summary; segments are capped per video.
-        """
-        rollups: List[dict] = []
+    def _read_prompts_rows(self) -> List[dict]:
+        """All rows from the prompts/events table (empty if missing)."""
+        try:
+            self.ensure_prompts_table()
+        except Exception:
+            pass
+        with self.session.transaction() as tx:
+            bucket = tx.bucket(self.bucket)
+            db_schema = bucket.schema(self.schema_name, fail_if_missing=False)
+            if db_schema is None:
+                return []
+            table = db_schema.table(self.prompts_table_name, fail_if_missing=False)
+            if table is None:
+                return []
+            cols = [f.name for f in PROMPTS_SCHEMA]
+            result = table.select(columns=cols, internal_row_id=False)
+            arrow = result.read_all()
+        if arrow.num_rows == 0:
+            return []
+        return arrow.to_pylist()
+
+    def list_processed_videos(self) -> set:
+        """Videos that already have active key_event rows."""
+        processed: set = set()
+        for row in self._read_prompts_rows():
+            if not row.get("is_active"):
+                continue
+            if str(row.get("kind") or "") != "key_event":
+                continue
+            ov = str(row.get("original_video") or "").strip()
+            if ov:
+                processed.add(ov)
+        return processed
+
+    def list_existing_search_prompts(self) -> set:
+        """Lowercased search_prompt texts already stored."""
+        texts: set = set()
+        for row in self._read_prompts_rows():
+            if not row.get("is_active"):
+                continue
+            if str(row.get("kind") or "") != "search_prompt":
+                continue
+            q = str(row.get("query_text") or "").strip().lower()
+            if q:
+                texts.add(q)
+        return texts
+
+    def existing_primary_keys(self) -> set:
+        return {str(row.get("pk") or "") for row in self._read_prompts_rows() if row.get("pk")}
+
+    @staticmethod
+    def filter_unprocessed_corpus(segments: List[dict], processed_videos: set) -> List[dict]:
+        """Drop segments for videos that already have suggestions."""
+        if not processed_videos:
+            return segments
+
+        def keep(row: dict) -> bool:
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            return bool(ov) and ov not in processed_videos
+
+        return [s for s in segments if keep(s)]
+
+    def fetch_corpus(self) -> List[dict]:
+        """Return sampled segment rows within lookback window."""
         segments: List[dict] = []
         cutoff = datetime.now(timezone.utc) - timedelta(
             hours=self.settings.suggestions_lookback_hours
@@ -103,36 +161,29 @@ class VastDBClient:
             full = table.columns()
             cols = [f.name for f in full if f.name in READ_COLUMNS]
             if not cols:
-                return [], []
+                return []
             result = table.select(columns=cols, internal_row_id=False)
             arrow = result.read_all()
 
         if arrow.num_rows == 0:
-            return [], []
+            return []
 
         for row in arrow.to_pylist():
             if not self._in_lookback(row, cutoff):
-                continue
-            kind = str(row.get("row_kind") or "").strip().lower()
-            if kind == "video_summary":
-                rollups.append(row)
-                continue
-            if kind and kind not in ("", "segment"):
                 continue
             cap = str(row.get("dense_caption") or row.get("reasoning_content") or "").strip()
             if cap:
                 segments.append(row)
 
-        return rollups, self._sample_segments(segments)
+        return self._sample_segments(segments)
 
     def fetch_recent_segments(self) -> List[dict]:
-        """Backward-compatible: sampled segments only."""
-        _, segments = self.fetch_corpus()
-        return segments
+        """Backward-compatible alias."""
+        return self.fetch_corpus()
 
-    def list_distinct_videos(self, segments: List[dict], rollups: List[dict]) -> List[str]:
+    def list_distinct_videos(self, segments: List[dict]) -> List[str]:
         videos = set()
-        for row in segments + rollups:
+        for row in segments:
             ov = str(row.get("original_video") or row.get("source") or "").strip()
             if ov:
                 videos.add(ov)
@@ -153,17 +204,26 @@ class VastDBClient:
         batch_id: str,
         search_prompts: List[str],
         key_events: List[Dict[str, Any]],
+        *,
+        skip_prompt_texts: Optional[Set[str]] = None,
+        skip_videos: Optional[Set[str]] = None,
     ) -> int:
-        """Insert one batch of search prompts and key events."""
+        """Append new search prompts and key events (skip duplicate pk / processed videos)."""
         now = datetime.now(timezone.utc)
         records: List[dict] = []
+        existing_pks = self.existing_primary_keys()
+        known_prompts = skip_prompt_texts or set()
+        known_videos = skip_videos or set()
 
         for text in search_prompts[: self.settings.suggestions_search_count]:
             q = text.strip()
-            if not q:
+            if not q or q.lower() in known_prompts:
+                continue
+            pk = hashlib.md5(f"search:{q}".encode()).hexdigest()
+            if pk in existing_pks:
                 continue
             records.append({
-                "pk": hashlib.md5(f"search:{q}".encode()).hexdigest(),
+                "pk": pk,
                 "kind": "search_prompt",
                 "query_text": q,
                 "label": q[:120],
@@ -175,20 +235,27 @@ class VastDBClient:
                 "batch_id": batch_id,
                 "is_active": True,
             })
+            existing_pks.add(pk)
 
         for ev in key_events[: self.settings.suggestions_events_count]:
             q = str(ev.get("query_text") or ev.get("query") or "").strip()
             if not q:
                 continue
             ov = str(ev.get("original_video") or "").strip()
+            if ov and ov in known_videos:
+                continue
             start = float(ev.get("segment_start_sec") or 0)
             end = float(ev.get("segment_end_sec") or start + 5)
+            source = str(ev.get("source") or "").strip()
             label = str(ev.get("label") or "").strip()[:200]
             if label.lower() == q.lower():
                 label = ""
-            pk_src = f"event:{ov}:{start}:{q}"
+            pk_src = f"event:{source or ov}:{start}:{q}"
+            pk = hashlib.md5(pk_src.encode()).hexdigest()
+            if pk in existing_pks:
+                continue
             records.append({
-                "pk": hashlib.md5(pk_src.encode()).hexdigest(),
+                "pk": pk,
                 "kind": "key_event",
                 "query_text": q,
                 "label": label,
@@ -200,6 +267,7 @@ class VastDBClient:
                 "batch_id": batch_id,
                 "is_active": True,
             })
+            existing_pks.add(pk)
 
         if not records:
             return 0

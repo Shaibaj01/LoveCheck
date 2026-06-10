@@ -355,6 +355,17 @@ class S3Service:
             logger.error(f"Error streaming video from S3: {str(e)}")
             raise
 
+    def count_mp4_objects(self, bucket: str) -> int:
+        """Count .mp4 objects recursively under all prefixes in a bucket."""
+        total = 0
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket):
+            for obj in page.get("Contents") or []:
+                key = str(obj.get("Key") or "")
+                if key.lower().endswith(".mp4"):
+                    total += 1
+        return total
+
     def stream_video_range(
         self, bucket: str, key: str, start: int, end: int
     ) -> Iterator[bytes]:

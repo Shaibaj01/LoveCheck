@@ -24,6 +24,13 @@ class Settings(BaseModel):
     visual_embedding_enabled: bool = True
     visual_embedding_model: str = "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1"
     visual_embedding_dimensions: int = 256
+    # Optional VastDB settings for idempotency checks
+    vdbendpoint: str = ""
+    vdbbucket: str = ""
+    vdbschema: str = ""
+    vdbaccesskey: str = ""
+    vdbsecretkey: str = ""
+    vdbcollection: str = ""
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':
@@ -72,7 +79,6 @@ class ReasoningEvent(BaseModel):
     object_counts: str | None = None
     max_detection_conf: float | None = None
     perception_ok: bool = False
-    row_kind: str = "segment"
 
 
 class EmbeddingResult(BaseModel):
@@ -121,5 +127,4 @@ class EmbeddingResult(BaseModel):
     object_counts: str | None = None
     max_detection_conf: float | None = None
     perception_ok: bool = False
-    row_kind: str = "segment"
 

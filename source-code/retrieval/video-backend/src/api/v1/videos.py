@@ -13,7 +13,6 @@ from src.services.s3_service import (
     parse_stream_range,
 )
 from src.services.vastdb_service import get_vastdb_service
-from src.services.rollup_service import get_rollup_service
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -306,45 +305,6 @@ async def get_playback_presigned_url(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate playback URL: {str(e)}",
         )
-
-
-@router.post("/summarize")
-async def summarize_video(
-    original_video: str = Query(..., description="Parent video S3 URI (original_video)"),
-    force: bool = Query(False, description="Rebuild summary even if one exists"),
-    current_user: CurrentUser = None,
-):
-    """
-    Build or fetch a video-level summary row (row_kind=video_summary) from segment evidence.
-  """
-    logger.info(f"Summarize request from {current_user.username}: video='{original_video}'")
-    try:
-        rollup = get_rollup_service()
-        return rollup.build_rollup(original_video, current_user, force=force)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(f"Summarize failed: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Summarize failed: {exc}",
-        ) from exc
-
-
-@router.get("/summary")
-async def get_video_summary(
-    original_video: str = Query(..., description="Parent video S3 URI (original_video)"),
-    current_user: CurrentUser = None,
-):
-    """Return existing video_summary row if present."""
-    vastdb = get_vastdb_service()
-    summary = vastdb.get_video_summary_row(original_video, current_user)
-    if not summary:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No video summary found. POST /videos/summarize to create one.",
-        )
-    return summary
 
 
 @router.get("/metadata")

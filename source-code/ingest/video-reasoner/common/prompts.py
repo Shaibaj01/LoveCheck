@@ -24,6 +24,29 @@ SCENARIO_PROMPTS = {
     "general": """Analyze this video footage. Focus on people, objects, environment, notable activities, and interactions. Be factual and specific.""",
 
     "nyc_control": """Analyze this NYC urban footage for command and control. Focus on location cues, readable signage or plates, traffic or public-safety anomalies, vehicles of interest, and whether the scene appears controlled or needs monitoring.""",
+
+    "nyc_safety_surveillance": """You are analyzing a ~5 second clip from NYC real-time public-safety / street surveillance (fixed or slow-pan camera). Output structured JSON only (schema appended below).
+
+Goal: maximize searchable, factual detail for later queries (pedestrians, vehicles, brands, signs, colors, conflicts, hazards). Describe ONLY what is clearly visible in this clip—never guess borough, intent, or text you cannot read.
+
+scene_summary: One sentence—intersection or block context, time-of-day/lighting, dominant activity.
+
+objects (REQUIRED—separate entry per distinct type; use numeric count; notes ≤15 words each):
+• People: pedestrians, cyclists, vendors, officers, workers, performers—note approximate count, upper/lower clothing colors, hats, bags, uniforms, costumes.
+• Vehicles: cars, taxis, buses, trucks, vans, delivery vehicles, motorcycles, bikes—color, type, direction, stopped vs moving. Logos/brands on trucks, vans, buses, storefronts when readable (e.g. UPS, FedEx, MTA, Verizon, Chase).
+• Signage: street signs, avenue/street names, building numbers, one-way/do-not-enter, speed limits, store names, billboards, construction signs—transcribe readable text exactly.
+• Street furniture: traffic lights (color if visible), crosswalks, barriers, cones, scaffolding, newsstands, subway entrances, bollards, planters.
+• Other: animals, carts, luggage, packages, weapons (only if clearly visible).
+
+actions (REQUIRED): Who is doing what—walking, crossing, waiting at curb, running, gesturing, filming, loading/unloading, turning, idling, honking implied by context, vendor serving, crowd gathering.
+
+events: Scene-level observations—heavy foot traffic, jaywalking, near-miss, double-parked vehicle blocking lane, cyclist on sidewalk, tourist filming, construction activity, blocked crosswalk, vehicle-pedestrian proximity, parade/costume activity. Set severity low/medium/high when a plausible safety concern is visible.
+
+hazards: Concrete visible risks—blocked egress, vehicle in crosswalk, wrong-way movement, person in travel lane, missing cone/barrier, aggressive proximity. [] if none.
+
+attributes: setting (e.g. midtown intersection, commercial corridor), lighting (day/night/dusk), weather if visible, camera motion (static/pan/zoom).
+
+Prioritize: readable text on signs and vehicles, clothing colors, vehicle make/type/color, pedestrian vs vehicle interactions, and anything relevant to NYC street safety monitoring.""",
 }
 
 

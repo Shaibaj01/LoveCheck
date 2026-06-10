@@ -8,6 +8,18 @@ from common.clients import S3Client, CosmosReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event
 from common.perception import run_perception_lite, format_perception_context
 from common.structured_output import derive_object_metadata
+from common.segment_index import SegmentIndexChecker
+
+
+def _has_vdb_config(settings: Settings) -> bool:
+    return bool(
+        settings.vdbendpoint
+        and settings.vdbbucket
+        and settings.vdbschema
+        and settings.vdbaccesskey
+        and settings.vdbsecretkey
+        and settings.vdbcollection
+    )
 
 
 def init(ctx):
@@ -21,6 +33,7 @@ def init(ctx):
             f"[INIT] Cosmos-Reason2: {settings.cosmos_model} @ "
             f"{settings.cosmos_host}:{settings.cosmos_port}"
         )
+        ctx.segment_index = SegmentIndexChecker(settings) if _has_vdb_config(settings) else None
         
         ctx.settings = settings
 
@@ -60,6 +73,9 @@ def handler(ctx, event: VastEvent):
 
             source = f"s3://{bucket}/{key}"
             filename = key.split('/')[-1] if '/' in key else key
+            if ctx.segment_index and ctx.segment_index.is_indexed(source):
+                ctx.logger.info(f"[SKIP] {filename} | already indexed in VastDB")
+                return {"status": "skipped", "reason": "Already indexed"}
 
             with ctx.tracer.start_as_current_span("S3 Download") as download_span:
                 video_content = ctx.s3_client.download_file(bucket, key)
@@ -92,6 +108,19 @@ def handler(ctx, event: VastEvent):
                     camera_id = s3_metadata.get("camera-id", "")
                     capture_type = s3_metadata.get("capture-type", "")
                     location = s3_metadata.get("location", "")
+                    
+                    stream_id = str(s3_metadata.get("stream_id") or "").strip()
+                    chunk_index_raw = s3_metadata.get("chunk_index", "")
+                    chunk_start_raw = s3_metadata.get("chunk_start_sec", "")
+                    ingest_kind = str(s3_metadata.get("ingest_kind") or "upload").strip()
+                    try:
+                        chunk_index = int(chunk_index_raw) if chunk_index_raw not in ("", None) else None
+                    except (TypeError, ValueError):
+                        chunk_index = None
+                    try:
+                        chunk_start_sec_meta = float(chunk_start_raw) if chunk_start_raw not in ("", None) else None
+                    except (TypeError, ValueError):
+                        chunk_start_sec_meta = None
                     
                     # Extract scenario and custom_prompt from metadata
                     scenario = s3_metadata.get("scenario", "").strip()
@@ -146,6 +175,10 @@ def handler(ctx, event: VastEvent):
                     location = ""
                     scenario = ctx.settings.scenario  # Fall back to default from settings
                     custom_prompt = ""  # No custom prompt on error
+                    stream_id = ""
+                    chunk_index = None
+                    chunk_start_sec_meta = None
+                    ingest_kind = "upload"
 
             with ctx.tracer.start_as_current_span("Perception Lite") as perception_span:
                 perception_result = run_perception_lite(
@@ -247,10 +280,15 @@ def handler(ctx, event: VastEvent):
                 "object_counts": object_counts,
                 "max_detection_conf": perception_result.get("max_detection_conf", 0.0),
                 "perception_ok": perception_result.get("perception_ok", False),
-                "row_kind": "segment",
+                "stream_id": stream_id,
+                "chunk_index": chunk_index,
+                "chunk_start_sec": chunk_start_sec_meta,
+                "ingest_kind": ingest_kind,
             }
             
             ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments}")
+            if ctx.segment_index:
+                ctx.segment_index.mark_indexed(source)
             return result
             
         except Exception as e:

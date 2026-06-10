@@ -21,10 +21,6 @@ class VideoSearchRequest(BaseModel):
     metadata_filters: Dict[str, Any] = Field(default_factory=dict, description="Dynamic metadata filters (e.g., {'camera_id': 'CAM-001', 'location': 'Midtown'})")
     min_similarity: float = Field(default=0.1, ge=0.0, le=1.0, description="Minimum similarity score threshold (0.3-0.8 recommended)")
     llm_top_n: int = Field(default=3, ge=1, le=100, description="Number of top results to send to LLM for analysis (same max as top_k)")
-    include_video_summaries: bool = Field(
-        default=False,
-        description="When true, include row_kind=video_summary rows in vector search (default: segments only)",
-    )
     hybrid_text_weight: Optional[float] = Field(
         default=None,
         description="Caption vs video blend weight (0-1, default from backend). Search is always hybrid.",

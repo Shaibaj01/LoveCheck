@@ -73,8 +73,11 @@ def handler(ctx, event: VastEvent):
                 object_classes = reasoning_event.get("object_classes", "")
                 object_counts = reasoning_event.get("object_counts", "{}")
                 max_detection_conf = reasoning_event.get("max_detection_conf", 0.0)
-                perception_ok = bool(reasoning_event.get("perception_ok", False))
-                row_kind = reasoning_event.get("row_kind", "segment")
+                perception_ok = reasoning_event.get("perception_ok", False)
+                stream_id = reasoning_event.get("stream_id", "")
+                chunk_index = reasoning_event.get("chunk_index")
+                chunk_start_sec_meta = reasoning_event.get("chunk_start_sec")
+                ingest_kind = reasoning_event.get("ingest_kind", "upload")
                 
                 allowed_users_count = len(allowed_users.split(",")) if allowed_users else 0
                 
@@ -189,7 +192,10 @@ def handler(ctx, event: VastEvent):
                 "object_counts": object_counts,
                 "max_detection_conf": max_detection_conf,
                 "perception_ok": perception_ok,
-                "row_kind": row_kind,
+                "stream_id": stream_id,
+                "chunk_index": chunk_index,
+                "chunk_start_sec": chunk_start_sec_meta,
+                "ingest_kind": ingest_kind,
             }
             
             ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments} | {len(embedding)} dims | metadata: camera={camera_id or 'none'}, type={capture_type or 'none'}")

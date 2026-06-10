@@ -65,9 +65,6 @@ class EmbeddingEvent(BaseModel):
     object_counts: str | None = None
     max_detection_conf: float | None = None
     perception_ok: bool = False
-    row_kind: str = "segment"
-    video_summary_json: str | None = None
-    video_events_json: str | None = None
 
     # Stream capture metadata (from video-streaming service)
     camera_id: str | None = None

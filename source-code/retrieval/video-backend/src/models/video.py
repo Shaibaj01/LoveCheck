@@ -40,9 +40,7 @@ class VideoSearchResult(BaseModel):
     object_counts: Optional[str] = None
     max_detection_conf: Optional[float] = None
     perception_ok: Optional[bool] = None
-    row_kind: Optional[str] = None
-    video_summary_json: Optional[str] = None
-    video_events_json: Optional[str] = None
+    extra_metadata: Optional[str] = None
 
 
 class TimelineSegment(BaseModel):

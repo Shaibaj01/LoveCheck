@@ -10,8 +10,7 @@ The system supports customizable metadata fields that flow through the entire pi
 | 2 | Structured VLM + `dense_caption` + 2048 text embed | Done |
 | 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
 | 4 | Perception lite → conditions VLM (always on) | Done |
-| 5 | Video rollup (`row_kind=video_summary`, `POST /api/v1/videos/summarize`) | Done |
-| 6 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
+| 5 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
 
 Recreate the VastDB collection after schema changes (new columns). Perception lite runs on every segment (one short Reason2 call before main analysis).
 

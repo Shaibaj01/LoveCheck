@@ -1,14 +1,15 @@
 """Aggregate VastDB row snapshots into dashboard statistics."""
 from __future__ import annotations
 
+import json
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
+from src.utils.stream_index import row_source_key, stream_fields_from_row
 
-def _is_segment_row(row: dict) -> bool:
-    kind = str(row.get("row_kind") or "").strip().lower()
-    return kind in ("", "segment")
+# Matches video-segmenter default output_bucket_suffix.
+SEGMENTER_OUTPUT_BUCKET_SUFFIX = "-segments"
 
 
 def _split_object_classes(value: Any) -> List[str]:
@@ -48,27 +49,32 @@ def _metadata_label(value: Any) -> str:
     return text if text else "(empty)"
 
 
+def _group_key(row: dict) -> str:
+    stream = stream_fields_from_row(row)
+    stream_id = str(stream.get("stream_id") or "").strip()
+    if stream_id:
+        return f"stream:{stream_id}"
+    ov = str(row.get("original_video") or row.get("source") or "").strip()
+    return f"video:{ov}" if ov else f"row:{row_source_key(row)}"
+
+
 def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     """Build dashboard payload from accessible VastDB rows."""
-    segment_rows = [r for r in rows if _is_segment_row(r)]
-    summary_rows = [r for r in rows if str(r.get("row_kind") or "").strip().lower() == "video_summary"]
-    other_rows = len(rows) - len(segment_rows) - len(summary_rows)
+    segment_rows = list(rows)
+    other_rows = 0
 
-    videos = {
-        str(r.get("original_video") or r.get("source") or "").strip()
-        for r in segment_rows
-        if str(r.get("original_video") or r.get("source") or "").strip()
-    }
-
-    slot_counter: Counter[tuple[str, int]] = Counter()
+    parent_videos: Set[str] = set()
     for row in segment_rows:
-        video = str(row.get("original_video") or row.get("source") or "").strip()
-        sn = int(row.get("segment_number") or 0)
-        if video and sn > 0:
-            slot_counter[(video, sn)] += 1
+        ov = str(row.get("original_video") or row.get("source") or "").strip()
+        if ov:
+            parent_videos.add(ov)
 
-    duplicate_slots = sum(1 for count in slot_counter.values() if count > 1)
-    duplicate_rows = sum(count - 1 for count in slot_counter.values() if count > 1)
+    source_counter: Counter[str] = Counter()
+    for row in segment_rows:
+        source_counter[row_source_key(row)] += 1
+    re_ingest_rows = sum(count - 1 for count in source_counter.values() if count > 1)
+    re_ingest_clips = sum(1 for count in source_counter.values() if count > 1)
+    indexed_clips = len(source_counter)
 
     object_counter: Counter[str] = Counter()
     for row in segment_rows:
@@ -97,51 +103,79 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     perception_ok = sum(1 for r in segment_rows if bool(r.get("perception_ok")))
     with_objects = sum(1 for r in segment_rows if _split_object_classes(r.get("object_classes")))
 
-    video_stats: Dict[str, dict] = {}
+    group_stats: Dict[str, dict] = {}
     for row in segment_rows:
-        video = str(row.get("original_video") or row.get("source") or "").strip()
-        if not video:
-            continue
-        entry = video_stats.setdefault(
-            video,
+        gkey = _group_key(row)
+        stream = stream_fields_from_row(row)
+        ov = str(row.get("original_video") or row.get("source") or "").strip()
+        entry = group_stats.setdefault(
+            gkey,
             {
-                "original_video": video,
-                "filename": str(row.get("filename") or video.rsplit("/", 1)[-1]),
+                "group_key": gkey,
+                "stream_id": str(stream.get("stream_id") or "").strip() or None,
+                "original_video": ov,
+                "filename": str(row.get("filename") or ov.rsplit("/", 1)[-1]),
                 "segment_rows": 0,
-                "unique_segments": set(),
+                "sources": set(),
+                "chunks": set(),
+                "chunk_indices": set(),
+                "stream_positions": [],
                 "upload_timestamp": row.get("upload_timestamp"),
                 "camera_id": _metadata_label(row.get("camera_id")),
                 "capture_type": _metadata_label(row.get("capture_type")),
                 "location": _metadata_label(row.get("location")),
                 "is_public": bool(row.get("is_public")),
-                "total_segments": int(row.get("total_segments") or 0),
+                "ingest_kind": str(stream.get("ingest_kind") or "").strip() or None,
             },
         )
         entry["segment_rows"] += 1
-        sn = int(row.get("segment_number") or 0)
-        if sn > 0:
-            entry["unique_segments"].add(sn)
+        entry["sources"].add(row_source_key(row))
+        if ov:
+            entry["chunks"].add(ov)
+        if stream.get("chunk_index") is not None:
+            try:
+                entry["chunk_indices"].add(int(stream["chunk_index"]))
+            except (TypeError, ValueError):
+                pass
+        pos = stream.get("stream_position_sec")
+        if pos is not None:
+            try:
+                entry["stream_positions"].append(float(pos))
+            except (TypeError, ValueError):
+                pass
         ts = row.get("upload_timestamp")
         if ts is not None and (entry["upload_timestamp"] is None or str(ts) > str(entry["upload_timestamp"])):
             entry["upload_timestamp"] = ts
 
     recent_videos: List[Dict[str, Any]] = []
-    for video, entry in video_stats.items():
-        unique_count = len(entry["unique_segments"]) or entry["segment_rows"]
-        expected = int(entry["total_segments"] or 0)
+    for entry in group_stats.values():
+        sources: Set[str] = entry["sources"]
+        re_ingest = sum(source_counter[s] - 1 for s in sources if source_counter[s] > 1)
+        positions = entry["stream_positions"]
+        stream_span_sec = None
+        if positions:
+            stream_span_sec = round(max(positions) - min(positions), 1)
+        chunk_count = len(entry["chunk_indices"]) or len(entry["chunks"])
         recent_videos.append(
             {
-                "original_video": video,
+                "original_video": entry["original_video"],
                 "filename": entry["filename"],
+                "stream_id": entry["stream_id"],
                 "segment_rows": entry["segment_rows"],
-                "unique_segments": unique_count,
-                "expected_segments": expected,
-                "duplicate_rows": max(0, entry["segment_rows"] - unique_count),
+                "indexed_clips": len(sources),
+                "chunk_count": chunk_count,
+                "re_ingest_rows": re_ingest,
+                "stream_span_sec": stream_span_sec,
+                "ingest_kind": entry["ingest_kind"],
                 "upload_timestamp": _format_timestamp(entry["upload_timestamp"]),
                 "camera_id": entry["camera_id"],
                 "capture_type": entry["capture_type"],
                 "location": entry["location"],
                 "is_public": entry["is_public"],
+                # Legacy fields for older clients
+                "unique_segments": len(sources),
+                "expected_segments": int(entry.get("total_segments") or 0),
+                "duplicate_rows": re_ingest,
             }
         )
 
@@ -157,15 +191,21 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
         "with_object_classes_pct": round((with_objects / segment_total) * 100, 1) if segment_total else 0.0,
     }
 
+    stream_sessions = len({stream_fields_from_row(r).get("stream_id") for r in segment_rows if stream_fields_from_row(r).get("stream_id")})
+
     return {
         "overview": {
             "total_rows": len(rows),
             "segment_rows": segment_total,
-            "video_summary_rows": len(summary_rows),
             "other_rows": other_rows,
-            "unique_videos": len(videos),
-            "duplicate_segment_slots": duplicate_slots,
-            "duplicate_segment_rows": duplicate_rows,
+            "unique_videos": len(parent_videos),
+            "indexed_clips": indexed_clips,
+            "re_ingest_rows": re_ingest_rows,
+            "re_ingest_clips": re_ingest_clips,
+            "stream_sessions": stream_sessions,
+            # Legacy aliases
+            "duplicate_segment_slots": re_ingest_clips,
+            "duplicate_segment_rows": re_ingest_rows,
             "public_segment_rows": public_segments,
             "private_segment_rows": segment_total - public_segments,
         },
@@ -183,15 +223,82 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     }
 
 
+def segmenter_output_bucket(upload_bucket: str, suffix: str = SEGMENTER_OUTPUT_BUCKET_SUFFIX) -> str:
+    return f"{upload_bucket}{suffix}"
+
+
+def attach_s3_inventory(
+    payload: Dict[str, Any],
+    *,
+    upload_bucket: str,
+    segments_bucket: str,
+    bucket_counts: Dict[str, int],
+    bucket_errors: Dict[str, str],
+) -> None:
+    """Add S3 MP4 inventory and pipeline alignment hints to a dashboard payload."""
+    segmenter_bucket = segmenter_output_bucket(upload_bucket)
+    inventory: Dict[str, Any] = {
+        "chunks_bucket": upload_bucket,
+        "chunks_mp4": bucket_counts.get(upload_bucket),
+        "segments_bucket": segments_bucket,
+        "segments_mp4": bucket_counts.get(segments_bucket),
+        "segmenter_output_bucket": segmenter_bucket,
+        "segmenter_output_mp4": bucket_counts.get(segmenter_bucket),
+        "errors": bucket_errors or None,
+    }
+    if segmenter_bucket == segments_bucket:
+        inventory.pop("segmenter_output_mp4", None)
+
+    overview = payload.get("overview") or {}
+    indexed_clips = int(overview.get("indexed_clips") or overview.get("segment_rows") or 0)
+    segment_rows = int(overview.get("segment_rows") or 0)
+    re_ingest_rows = int(overview.get("re_ingest_rows") or overview.get("duplicate_segment_rows") or 0)
+
+    segments_s3 = inventory.get("segments_mp4")
+    if segmenter_bucket != segments_bucket:
+        segments_s3 = inventory.get("segmenter_output_mp4", segments_s3)
+
+    pending_index = None
+    indexed_matches = None
+    rows_match = None
+    if segments_s3 is not None:
+        pending_index = max(0, segments_s3 - indexed_clips)
+        indexed_matches = segments_s3 == indexed_clips
+        rows_match = segments_s3 == segment_rows
+
+    payload["s3_inventory"] = inventory
+    payload["pipeline_alignment"] = {
+        "segments_s3_mp4": segments_s3,
+        "indexed_clips": indexed_clips,
+        "segment_rows": segment_rows,
+        "pending_index": pending_index,
+        "re_ingest_excess": re_ingest_rows,
+        "indexed_matches_segments_s3": indexed_matches,
+        "rows_match_segments_s3": rows_match,
+        "segments_bucket_matches_segmenter": segments_bucket == segmenter_bucket,
+        "healthy": (
+            indexed_matches is True
+            and rows_match is True
+            and re_ingest_rows == 0
+            and segments_bucket == segmenter_bucket
+        )
+        if segments_s3 is not None
+        else None,
+    }
+
+
 def empty_dashboard_stats() -> Dict[str, Any]:
     """Zeroed dashboard payload when the table is empty or unavailable."""
     return {
         "overview": {
             "total_rows": 0,
             "segment_rows": 0,
-            "video_summary_rows": 0,
             "other_rows": 0,
             "unique_videos": 0,
+            "indexed_clips": 0,
+            "re_ingest_rows": 0,
+            "re_ingest_clips": 0,
+            "stream_sessions": 0,
             "duplicate_segment_slots": 0,
             "duplicate_segment_rows": 0,
             "public_segment_rows": 0,

@@ -70,7 +70,6 @@ async def search_videos(
             search_mode="hybrid",
             query_visual_embedding=query_visual_embedding,
             hybrid_text_weight=hybrid_text_weight,
-            include_video_summaries=request.include_video_summaries,
         )
 
         chunk_results = vastdb_service.group_results_by_chunk(

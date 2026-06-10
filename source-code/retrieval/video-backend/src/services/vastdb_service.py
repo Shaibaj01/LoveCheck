@@ -63,7 +63,8 @@ print("[VastDB] Applied monkey patch to support tables with vector columns")  # 
 # ============================================================================
 DASHBOARD_SCAN_COLUMNS = (
     "source", "filename", "original_video", "segment_number", "total_segments",
-    "upload_timestamp", "row_kind", "camera_id", "capture_type", "location",
+    "segment_start_sec", "segment_end_sec", "extra_metadata",
+    "upload_timestamp", "camera_id", "capture_type", "location",
     "object_classes", "structured_parse_ok", "perception_ok", "is_public", "allowed_users",
 )
 
@@ -158,7 +159,6 @@ class VastDBService:
         search_mode: str = "text",
         query_visual_embedding: Optional[List[float]] = None,
         hybrid_text_weight: float = 0.6,
-        include_video_summaries: bool = False,
     ) -> tuple[List[VideoSearchResult], float, int, str]:
         """
         Perform similarity search with permission filtering, time filtering, and dynamic metadata filtering
@@ -204,7 +204,6 @@ class VastDBService:
                 min_similarity=min_similarity,
                 user_query_text=user_query_text,
                 search_mode="text",
-                include_video_summaries=include_video_summaries,
             )
             visual_results, visual_ms, visual_perm, sql_visual = self.similarity_search(
                 query_embedding=query_visual_embedding,
@@ -220,7 +219,6 @@ class VastDBService:
                 min_similarity=min_similarity,
                 user_query_text=user_query_text,
                 search_mode="visual",
-                include_video_summaries=include_video_summaries,
             )
             merged = self._merge_hybrid_results(
                 text_results, visual_results, hybrid_text_weight, top_k
@@ -282,19 +280,12 @@ class VastDBService:
                     object_counts,
                     max_detection_conf,
                     perception_ok,
-                    row_kind,
-                    video_summary_json,
-                    video_events_json,
                     array_cosine_distance({vector_column}::FLOAT[{dimension}], ARRAY{query_embedding}::FLOAT[{dimension}]) as distance
                 FROM {table_path}
             """
             
             # Build WHERE clause conditions
             where_conditions = []
-            if not include_video_summaries:
-                where_conditions.append(
-                    "(row_kind IS NULL OR row_kind = '' OR row_kind = 'segment')"
-                )
             
             # Add tag filter if provided
             if tags:
@@ -362,6 +353,11 @@ class VastDBService:
                         
                         logger.info(f"[METADATA_FILTER] Added filter: {safe_field_name} = {field_value}")
                 logger.info(f"[METADATA_FILTER] Total metadata conditions: {len([c for c in where_conditions if safe_field_name in c])}")
+
+            acl_conditions = self._build_acl_sql_conditions(user, include_public, public_only)
+            where_conditions.extend(acl_conditions)
+            if acl_conditions:
+                logger.info(f"[ACL_FILTER] SQL scope conditions: {acl_conditions}")
             
             # Add WHERE clause if there are any conditions
             if where_conditions:
@@ -521,9 +517,7 @@ class VastDBService:
                                 object_counts=str(row.get('object_counts')) if pd.notna(row.get('object_counts')) else None,
                                 max_detection_conf=float(row.get('max_detection_conf')) if pd.notna(row.get('max_detection_conf')) else None,
                                 perception_ok=bool(row.get('perception_ok')) if pd.notna(row.get('perception_ok')) else None,
-                                row_kind=str(row.get('row_kind')) if pd.notna(row.get('row_kind')) else None,
-                                video_summary_json=str(row.get('video_summary_json')) if pd.notna(row.get('video_summary_json')) else None,
-                                video_events_json=str(row.get('video_events_json')) if pd.notna(row.get('video_events_json')) else None,
+                                extra_metadata=str(row.get('extra_metadata')) if pd.notna(row.get('extra_metadata')) else None,
                             )
                             filtered_results.append(result)
                             logger.debug(f"[ROW {row_index}] Successfully created VideoSearchResult")
@@ -743,6 +737,25 @@ class VastDBService:
             )
 
         return chunks
+
+    def _build_acl_sql_conditions(
+        self,
+        user: User,
+        include_public: bool,
+        public_only: bool,
+    ) -> list[str]:
+        """
+        Push search-scope ACL into SQL so LIMIT applies to accessible rows only.
+        Uses the same array overlap syntax as tag filters (allowed_users && ARRAY[...]).
+        """
+        safe_username = user.username.replace("'", "''")
+        user_array = f"ARRAY['{safe_username}']"
+
+        if public_only:
+            return ["is_public = TRUE"]
+        if not include_public:
+            return [f"allowed_users && {user_array}"]
+        return [f"(is_public = TRUE OR allowed_users && {user_array})"]
 
     def _calculate_time_threshold(self, time_filter: str) -> Optional[datetime]:
         """
@@ -1147,7 +1160,13 @@ class VastDBService:
         import time
         from datetime import datetime, timezone
 
-        from src.utils.dashboard_stats import build_dashboard_stats, empty_dashboard_stats
+        from src.utils.dashboard_stats import (
+            attach_s3_inventory,
+            build_dashboard_stats,
+            empty_dashboard_stats,
+            segmenter_output_bucket,
+        )
+        from src.services.s3_service import get_s3_service
 
         start = time.time()
         include_public = scope in ("all", "public")
@@ -1184,6 +1203,32 @@ class VastDBService:
             table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
         elif table_available and not accessible_rows and raw_rows:
             table_message = "Rows exist in VastDB but none are visible for the selected scope."
+
+        bucket_counts: dict[str, int] = {}
+        bucket_errors: dict[str, str] = {}
+        buckets_to_scan = {
+            self.settings.s3_upload_bucket,
+            self.settings.s3_segments_bucket,
+        }
+        segmenter_bucket = segmenter_output_bucket(self.settings.s3_upload_bucket)
+        if segmenter_bucket not in buckets_to_scan:
+            buckets_to_scan.add(segmenter_bucket)
+
+        s3 = get_s3_service()
+        for bucket in sorted(buckets_to_scan):
+            try:
+                bucket_counts[bucket] = s3.count_mp4_objects(bucket)
+            except Exception as exc:
+                logger.warning("[DASHBOARD] S3 MP4 count failed for %s: %s", bucket, exc)
+                bucket_errors[bucket] = str(exc)
+
+        attach_s3_inventory(
+            payload,
+            upload_bucket=self.settings.s3_upload_bucket,
+            segments_bucket=self.settings.s3_segments_bucket,
+            bucket_counts=bucket_counts,
+            bucket_errors=bucket_errors,
+        )
 
         payload["table"] = table_ref
         payload["table_available"] = table_available
@@ -1236,10 +1281,9 @@ class VastDBService:
                 duration, segment_number, total_segments, segment_start_sec, segment_end_sec,
                 original_video, tags, cosmos_model, tokens_used, cached_prompt_tokens,
                 camera_id, capture_type, location,
-                perception_json, object_classes, object_counts, max_detection_conf, perception_ok, row_kind
+                perception_json, object_classes, object_counts, max_detection_conf, perception_ok
             FROM {table_path}
             WHERE original_video = '{safe_video}'
-              AND (row_kind IS NULL OR row_kind = '' OR row_kind = 'segment')
         """
         df = self._execute_adbc_query(sql_query)
         segments = []
@@ -1265,124 +1309,6 @@ class VastDBService:
         segments.sort(key=lambda s: s["segment_number"])
         return dedupe_segment_dicts(segments)
 
-    def get_video_summary_row(self, original_video: str, user: User) -> Optional[dict]:
-        safe_video = original_video.replace("'", "''")
-        table_path = (
-            f'"{self._adbc_connection["bucket"]}/{self._adbc_connection["schema"]}"."{self.settings.vdb_collection}"'
-        )
-        sql_query = f"""
-            SELECT source, original_video, video_summary_json, video_events_json, segment_number,
-                   is_public, allowed_users
-            FROM {table_path}
-            WHERE original_video = '{safe_video}' AND row_kind = 'video_summary'
-            LIMIT 1
-        """
-        df = self._execute_adbc_query(sql_query)
-        if df.empty:
-            return None
-        row = df.iloc[0]
-        if not self._user_has_access(row, user):
-            return None
-        summary_json = str(row.get("video_summary_json") or "")
-        segment_count = 0
-        try:
-            import json
-            segment_count = int(json.loads(summary_json).get("segment_count", 0))
-        except Exception:
-            pass
-        return {
-            "source": str(row.get("source", "")),
-            "original_video": original_video,
-            "video_summary_json": summary_json,
-            "video_events_json": str(row.get("video_events_json") or ""),
-            "segment_count": segment_count,
-        }
-
-    def store_video_summary_row(
-        self,
-        original_video: str,
-        user: User,
-        video_summary_json: str,
-        video_events_json: str,
-        reference_segment: dict,
-    ) -> bool:
-        """Insert or replace a video_summary row (segment_number=0)."""
-        import hashlib
-
-        dim = self.settings.embedding_dimensions
-        zero_vec = [0.0] * dim
-        pk = hashlib.md5(f"{original_video}::video_summary".encode()).hexdigest()
-        source = f"summary://{original_video}"
-        filename = original_video.rsplit("/", 1)[-1] if "/" in original_video else original_video
-
-        upload_ts = reference_segment.get("upload_timestamp")
-        if upload_ts is None:
-            upload_ts = datetime.utcnow()
-        elif isinstance(upload_ts, str):
-            try:
-                upload_ts = datetime.fromisoformat(upload_ts.replace("Z", "+00:00"))
-            except Exception:
-                upload_ts = datetime.utcnow()
-
-        tags = reference_segment.get("tags") or []
-        if isinstance(tags, str):
-            tags = [t.strip() for t in tags.split(",") if t.strip()]
-
-        record = {
-            "pk": pk,
-            "source": source,
-            "filename": filename,
-            "segment_number": 0,
-            "segment_start_sec": 0.0,
-            "segment_end_sec": 0.0,
-            "reasoning_content": video_summary_json,
-            "dense_caption": video_summary_json[:500],
-            "vlm_structured": video_summary_json,
-            "structured_parse_ok": True,
-            "perception_json": "",
-            "object_classes": "",
-            "object_counts": "{}",
-            "max_detection_conf": 0.0,
-            "perception_ok": False,
-            "row_kind": "video_summary",
-            "video_summary_json": video_summary_json,
-            "video_events_json": video_events_json,
-            "vectors": zero_vec,
-            "vectors_visual": zero_vec,
-            "cosmos_model": "",
-            "embedding_model": "",
-            "visual_embedding_model": "",
-            "tokens_used": 0,
-            "cached_prompt_tokens": 0,
-            "processing_time": 0.0,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "allowed_users": [],
-            "is_public": bool(reference_segment.get("is_public", True)),
-            "upload_timestamp": upload_ts,
-            "duration": 0.0,
-            "total_segments": int(reference_segment.get("total_segments") or 0),
-            "original_video": original_video,
-            "tags": tags,
-            "camera_id": reference_segment.get("camera_id") or "",
-            "capture_type": reference_segment.get("capture_type") or "",
-            "location": reference_segment.get("location") or "",
-            "extra_metadata": "{}",
-        }
-
-        try:
-            with self.client.transaction() as tx:
-                bucket = tx.bucket(self.settings.vdb_bucket)
-                schema = bucket.schema(self.settings.vdb_schema)
-                table = schema.table(self.settings.vdb_collection)
-                table_schema = table.columns()
-                arrow_table = pa.Table.from_pylist([record], schema=table_schema)
-                table.insert(arrow_table)
-            logger.info(f"[ROLLUP] Stored video_summary row for {original_video}")
-            return True
-        except Exception as exc:
-            logger.error(f"[ROLLUP] Failed to store summary row: {exc}")
-            return False
-    
     def get_table_schema(self):
         """
         Get the PyArrow schema of the VastDB table

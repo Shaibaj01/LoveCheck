@@ -13,12 +13,37 @@ export interface UploadDayItem {
   segment_rows: number;
 }
 
+export interface S3Inventory {
+  chunks_bucket: string;
+  chunks_mp4?: number | null;
+  segments_bucket: string;
+  segments_mp4?: number | null;
+  segmenter_output_bucket: string;
+  segmenter_output_mp4?: number | null;
+  errors?: Record<string, string> | null;
+}
+
+export interface PipelineAlignment {
+  segments_s3_mp4?: number | null;
+  indexed_clips?: number;
+  segment_rows?: number;
+  pending_index?: number | null;
+  re_ingest_excess?: number;
+  indexed_matches_segments_s3?: boolean | null;
+  rows_match_segments_s3?: boolean | null;
+  segments_bucket_matches_segmenter?: boolean | null;
+  healthy?: boolean | null;
+}
+
 export interface DashboardOverview {
   total_rows: number;
   segment_rows: number;
-  video_summary_rows: number;
   other_rows: number;
   unique_videos: number;
+  indexed_clips?: number;
+  re_ingest_rows?: number;
+  re_ingest_clips?: number;
+  stream_sessions?: number;
   duplicate_segment_slots: number;
   duplicate_segment_rows: number;
   public_segment_rows: number;
@@ -37,7 +62,13 @@ export interface DashboardQuality {
 export interface RecentVideoItem {
   original_video: string;
   filename: string;
+  stream_id?: string | null;
   segment_rows: number;
+  indexed_clips?: number;
+  chunk_count?: number;
+  re_ingest_rows?: number;
+  stream_span_sec?: number | null;
+  ingest_kind?: string | null;
   unique_segments: number;
   expected_segments: number;
   duplicate_rows: number;
@@ -61,6 +92,8 @@ export interface DashboardStatsResponse {
   metadata: Record<string, CountItem[]>;
   uploads_by_day: UploadDayItem[];
   recent_videos: RecentVideoItem[];
+  s3_inventory?: S3Inventory | null;
+  pipeline_alignment?: PipelineAlignment | null;
 }
 
 export type DashboardScope = 'all' | 'mine' | 'public';

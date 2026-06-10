@@ -2,7 +2,7 @@
 Thin agent endpoint: plan → search → grounded answer using tool APIs.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from src.schemas.search import VideoSearchRequest
 from src.services.auth_service import CurrentUser
 from src.services.llm_service import get_llm_service
-from src.services.rollup_service import get_rollup_service
 from src.services.vastdb_service import get_vastdb_service
 from src.api.v1.search import search_videos
 
@@ -22,7 +21,7 @@ class AgentAskRequest(BaseModel):
     question: str = Field(..., min_length=1)
     original_video: Optional[str] = Field(
         default=None,
-        description="When set, summarize/list segments for this parent video instead of global search",
+        description="When set, answer from this parent video's segments instead of global search",
     )
     top_k: int = Field(default=10, ge=1, le=50)
 
@@ -37,38 +36,41 @@ class AgentAskResponse(BaseModel):
 async def agent_ask(request: AgentAskRequest, current_user: CurrentUser = None):
     """
     Answer a question using VastDB tools:
-    - If original_video is provided → rollup/summary + segment list
+    - If original_video is provided → segment evidence + LLM synthesis
     - Else → hybrid search + optional LLM synthesis
     """
     if request.original_video:
-        rollup = get_rollup_service()
-        try:
-            summary = rollup.build_rollup(request.original_video, current_user, force=False)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
         vastdb = get_vastdb_service()
         segments = vastdb.list_segments_for_video(request.original_video, current_user)
+        if not segments:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No accessible segments found for video: {request.original_video}",
+            )
+
+        top_results = []
+        for seg in segments[: request.top_k]:
+            top_results.append({
+                "summary": seg.get("dense_caption") or seg.get("reasoning_content") or "",
+                "vlm_structured": seg.get("vlm_structured") or "",
+                "dense_caption": seg.get("dense_caption") or "",
+                "reasoning_content": seg.get("reasoning_content") or "",
+                "original_video": request.original_video,
+                "segment_number": seg.get("segment_number"),
+                "segment_start_sec": seg.get("segment_start_sec"),
+                "segment_end_sec": seg.get("segment_end_sec"),
+                "similarity_score": 1.0,
+            })
+
         llm = get_llm_service()
         synthesis = llm.synthesize_search_results(
             query=request.question,
-            top_results=[
-                {
-                    "summary": summary.get("video_summary_json", ""),
-                    "vlm_structured": summary.get("video_summary_json", ""),
-                    "dense_caption": summary.get("video_summary_json", ""),
-                    "original_video": request.original_video,
-                    "segment_number": 0,
-                    "segment_start_sec": 0,
-                    "segment_end_sec": 0,
-                    "similarity_score": 1.0,
-                }
-            ],
+            top_results=top_results,
         )
         return AgentAskResponse(
             answer=synthesis.get("response", ""),
-            tool_used="video_summary",
-            evidence={"summary": summary, "segment_count": len(segments)},
+            tool_used="video_segments",
+            evidence={"segment_count": len(segments), "segments_used": len(top_results)},
         )
 
     search_request = VideoSearchRequest(

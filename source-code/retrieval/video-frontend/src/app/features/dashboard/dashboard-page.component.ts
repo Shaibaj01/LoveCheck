@@ -17,6 +17,14 @@ import {
   UploadDayItem,
 } from '../../shared/models/dashboard.model';
 import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
+import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
+
+interface DashboardKpiCard {
+  label: string;
+  value: number | string;
+  hint: string;
+  warn?: boolean;
+}
 
 @Component({
   selector: 'app-dashboard-page',
@@ -125,6 +133,45 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
           }
         </section>
 
+        @if (data.s3_inventory) {
+          <mat-card class="panel pipeline-panel">
+            <mat-card-header>
+              <mat-card-title>S3 pipeline inventory</mat-card-title>
+              <mat-card-subtitle>
+                Recursive .mp4 counts — chunks bucket vs segments bucket
+              </mat-card-subtitle>
+            </mat-card-header>
+            <mat-card-content>
+              <div class="pipeline-grid">
+                <div class="pipeline-stat">
+                  <span class="pipeline-label">Chunks ({{ data.s3_inventory.chunks_bucket }})</span>
+                  <strong>{{ formatCount(data.s3_inventory.chunks_mp4) }}</strong>
+                  <span class="muted">chunk MP4s uploaded / streamed</span>
+                </div>
+                <div class="pipeline-stat">
+                  <span class="pipeline-label">Segments ({{ data.s3_inventory.segments_bucket }})</span>
+                  <strong>{{ formatCount(data.s3_inventory.segments_mp4) }}</strong>
+                  <span class="muted">segment MP4s in backend config bucket</span>
+                </div>
+                @if (data.s3_inventory.segmenter_output_mp4 != null) {
+                  <div class="pipeline-stat">
+                    <span class="pipeline-label">Segmenter output ({{ data.s3_inventory.segmenter_output_bucket }})</span>
+                    <strong>{{ formatCount(data.s3_inventory.segmenter_output_mp4) }}</strong>
+                    <span class="muted">where video-segmenter actually writes</span>
+                  </div>
+                }
+                @if (data.pipeline_alignment) {
+                  <div class="pipeline-stat">
+                    <span class="pipeline-label">Indexed clips (VastDB)</span>
+                    <strong>{{ data.pipeline_alignment.indexed_clips ?? '—' }}</strong>
+                    <span class="muted">unique segment sources in VastDB</span>
+                  </div>
+                }
+              </div>
+            </mat-card-content>
+          </mat-card>
+        }
+
         <section class="panel-grid">
           <mat-card class="panel">
             <mat-card-header>
@@ -230,7 +277,7 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
             <mat-card-subtitle>
               {{ keyEvents().length }} events — click to copy query
               @if (suggestionsGeneratedAt()) {
-                · updated {{ formatTimestamp(suggestionsGeneratedAt()) }}
+                · updated {{ formatRelativeTime(suggestionsGeneratedAt()) }}
               }
             </mat-card-subtitle>
           </mat-card-header>
@@ -283,15 +330,20 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
         <mat-card class="panel recent-panel">
           <mat-card-header>
             <mat-card-title>Recent videos in index</mat-card-title>
-            <mat-card-subtitle>Grouped by original_video · {{ data.recent_videos.length }} videos</mat-card-subtitle>
+            <mat-card-subtitle>
+              Indexed groups · {{ data.recent_videos.length }}
+              @if (data.overview.stream_sessions) {
+                · {{ data.overview.stream_sessions }} stream sessions
+              }
+            </mat-card-subtitle>
           </mat-card-header>
           <mat-card-content class="table-wrap table-scroll-viewport">
             @if (data.recent_videos.length) {
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Video</th>
-                    <th>Segments</th>
+                    <th>Video / stream</th>
+                    <th>Indexed clips</th>
                     <th>Location</th>
                     <th>Camera</th>
                     <th>Capture</th>
@@ -300,19 +352,23 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
                   </tr>
                 </thead>
                 <tbody>
-                  @for (row of data.recent_videos; track row.original_video) {
+                  @for (row of data.recent_videos; track row.stream_id || row.original_video) {
                     <tr>
                       <td class="col-video">
-                        <mat-icon class="row-icon">movie</mat-icon>
-                        <span [matTooltip]="row.filename">{{ truncate(row.filename, 36) }}</span>
+                        <mat-icon class="row-icon">{{ row.stream_id ? 'live_tv' : 'movie' }}</mat-icon>
+                        <span [matTooltip]="row.original_video">{{ truncate(row.filename, 36) }}</span>
                       </td>
                       <td>
-                        <span class="seg-count">{{ row.unique_segments }}</span>
-                        @if (row.expected_segments) {
-                          <span class="muted">/ {{ row.expected_segments }}</span>
+                        <span class="seg-count">{{ row.indexed_clips ?? row.unique_segments }}</span>
+                        <span class="muted"> clips</span>
+                        @if (row.chunk_count) {
+                          <span class="muted"> · {{ row.chunk_count }} chunks</span>
                         }
-                        @if (row.duplicate_rows > 0) {
-                          <span class="dup-badge" matTooltip="Extra rows from re-ingest">{{ row.duplicate_rows }} dup</span>
+                        @if (row.stream_span_sec) {
+                          <span class="muted"> · {{ formatEventTime(row.stream_span_sec) }} span</span>
+                        }
+                        @if ((row.re_ingest_rows ?? row.duplicate_rows) > 0) {
+                          <span class="dup-badge" matTooltip="Same segment file indexed more than once">{{ row.re_ingest_rows ?? row.duplicate_rows }} re-ingest</span>
                         }
                       </td>
                       <td class="col-muted" [matTooltip]="row.location">{{ formatMetadataLabel(row.location) }}</td>
@@ -554,6 +610,37 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
       line-height: 1.3;
     }
 
+    .pipeline-panel {
+      margin-bottom: 1rem;
+      background: var(--bg-card) !important;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      box-shadow: none !important;
+    }
+
+    .pipeline-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+    }
+
+    .pipeline-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .pipeline-label {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      word-break: break-all;
+    }
+
+    .pipeline-stat strong {
+      font-size: 1.5rem;
+      color: var(--text-primary);
+    }
+
     .panel-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -718,7 +805,7 @@ import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
     }
 
     .table-scroll-viewport-events {
-      max-height: calc(4.25rem * 11);
+      max-height: calc(4.25rem * 10);
     }
 
     .table-scroll-viewport thead th {
@@ -954,6 +1041,8 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   ];
 
   private refreshSub?: Subscription;
+  private keyEventsSub?: Subscription;
+  private static readonly KEY_EVENTS_POLL_MS = 300_000;
 
   ngOnInit() {
     this.loadStats();
@@ -961,13 +1050,16 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     this.refreshSub = interval(30_000).subscribe(() => {
       if (this.autoRefresh()) {
         this.loadStats(true);
-        this.loadKeyEvents(true);
       }
+    });
+    this.keyEventsSub = interval(DashboardPageComponent.KEY_EVENTS_POLL_MS).subscribe(() => {
+      this.loadKeyEvents(true);
     });
   }
 
   ngOnDestroy() {
     this.refreshSub?.unsubscribe();
+    this.keyEventsSub?.unsubscribe();
   }
 
   setScope(scope: DashboardScope) {
@@ -999,8 +1091,13 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   loadKeyEvents(silent = false) {
     this.suggestionsService.getSuggestions().subscribe({
       next: (data) => {
-        this.keyEvents.set(data.key_events ?? []);
-        this.suggestionsGeneratedAt.set(data.generated_at ?? null);
+        const events = data.key_events ?? [];
+        const genAt = data.generated_at ?? null;
+        if (silent && genAt === this.suggestionsGeneratedAt()) {
+          return;
+        }
+        this.keyEvents.set(events);
+        this.suggestionsGeneratedAt.set(genAt);
       },
       error: () => {
         if (!silent) {
@@ -1052,22 +1149,46 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  kpiCards(data: DashboardStatsResponse) {
+  kpiCards(data: DashboardStatsResponse): DashboardKpiCard[] {
     const o = data.overview;
-    return [
+    const s3 = data.s3_inventory;
+    const align = data.pipeline_alignment;
+    const cards: DashboardKpiCard[] = [
       { label: 'Total rows', value: o.total_rows, hint: 'All accessible VastDB rows' },
       { label: 'Segment rows', value: o.segment_rows, hint: 'Searchable clip segments' },
       { label: 'Unique videos', value: o.unique_videos, hint: 'Distinct original_video values' },
-      { label: 'Video summaries', value: o.video_summary_rows, hint: 'Rollup rows' },
       { label: 'Public segments', value: o.public_segment_rows, hint: 'is_public=true' },
       { label: 'Private segments', value: o.private_segment_rows, hint: 'Restricted access' },
+      { label: 'Indexed clips', value: o.indexed_clips ?? o.segment_rows, hint: 'Unique segment files in VastDB' },
+      { label: 'Stream sessions', value: o.stream_sessions ?? 0, hint: 'Distinct stream_id values' },
       {
-        label: 'Duplicate slots',
-        value: o.duplicate_segment_slots,
-        hint: `${o.duplicate_segment_rows} extra rows from re-ingest`,
-        warn: o.duplicate_segment_slots > 0,
+        label: 'Re-ingest rows',
+        value: o.re_ingest_rows ?? o.duplicate_segment_rows,
+        hint: `${o.re_ingest_clips ?? o.duplicate_segment_slots} clips indexed more than once`,
+        warn: (o.re_ingest_rows ?? o.duplicate_segment_rows) > 0,
       },
     ];
+    if (s3) {
+      cards.splice(
+        2,
+        0,
+        {
+          label: 'S3 chunk MP4s',
+          value: this.formatCount(s3.chunks_mp4),
+          hint: s3.chunks_bucket,
+        },
+        {
+          label: 'S3 segment MP4s',
+          value: this.formatCount(align?.segments_s3_mp4 ?? s3.segments_mp4),
+          hint: s3.segments_bucket,
+        },
+      );
+    }
+    return cards;
+  }
+
+  formatCount(value?: number | null): string | number {
+    return value == null ? '—' : value;
   }
 
   barWidth(day: UploadDayItem, all: UploadDayItem[]): number {
@@ -1081,11 +1202,10 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   }
 
   formatTimestamp(value?: string | null): string {
-    if (!value) return '—';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString();
+    return formatAbsoluteTime(value);
   }
+
+  formatRelativeTime = formatRelativeTime;
 
   formatMetadataLabel(value?: string | null): string {
     const text = (value || '').trim();

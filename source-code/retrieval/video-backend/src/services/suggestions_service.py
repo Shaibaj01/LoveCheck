@@ -1,6 +1,7 @@
 """Read LLM-generated search prompts and key events from VastDB."""
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 import pyarrow as pa
@@ -30,6 +31,27 @@ def _apply_vector_patch():
 
 
 _apply_vector_patch()
+
+
+def normalize_generated_at(ts: Any) -> Optional[str]:
+    """Return UTC ISO-8601 with Z suffix for browser-safe parsing."""
+    if ts is None:
+        return None
+    if hasattr(ts, "to_pydatetime"):
+        ts = ts.to_pydatetime()
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            ts = ts.astimezone(timezone.utc)
+        return ts.isoformat().replace("+00:00", "Z")
+    text = str(ts).strip()
+    if not text:
+        return None
+    if text.endswith("Z") or re.search(r"[+-]\d{2}:\d{2}$", text):
+        return text
+    return f"{text}Z"
+
 
 PROMPT_COLUMNS = (
     "pk", "kind", "query_text", "label", "original_video", "filename",
@@ -73,9 +95,19 @@ class SuggestionsService:
     def _ts_sort_key(ts: Any) -> float:
         if ts is None:
             return 0.0
-        if hasattr(ts, "timestamp"):
-            return float(ts.timestamp())
-        return float(str(ts))
+        if hasattr(ts, "to_pydatetime"):
+            ts = ts.to_pydatetime()
+        if isinstance(ts, datetime):
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts.timestamp()
+        iso = normalize_generated_at(ts)
+        if not iso:
+            return 0.0
+        try:
+            return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
 
     def _latest_batch_id(self, rows: List[dict]) -> Optional[str]:
         if not rows:
@@ -89,8 +121,9 @@ class SuggestionsService:
             bid = str(row.get("batch_id") or "")
             if not bid:
                 continue
-            if ts is not None and (best_ts is None or str(ts) > str(best_ts)):
-                best_ts = ts
+            key = self._ts_sort_key(ts)
+            if best_ts is None or key > best_ts:
+                best_ts = key
                 best_batch = bid
         return best_batch
 
@@ -100,11 +133,7 @@ class SuggestionsService:
         label = str(row.get("label") or "").strip()
         if label.lower() == query.lower():
             label = ""
-        gen_at = row.get("generated_at")
-        if gen_at is not None and hasattr(gen_at, "isoformat"):
-            gen_at = gen_at.isoformat()
-        elif gen_at is not None:
-            gen_at = str(gen_at)
+        gen_at = normalize_generated_at(row.get("generated_at"))
         return {
             "query_text": query,
             "label": label,
@@ -130,19 +159,15 @@ class SuggestionsService:
             return a.strip().lower() == b.strip().lower()
         return len(ta & tb) / len(ta | tb) >= 0.52
 
-    def _key_events_for_batch(self, rows: List[dict], batch_id: str) -> List[Dict[str, Any]]:
-        """Latest batch only, timeline order, fuzzy dedupe (avoids stacked duplicate runs)."""
-        event_rows = [
-            r for r in rows
-            if str(r.get("kind") or "") == "key_event"
-            and r.get("is_active")
-            and str(r.get("batch_id") or "") == batch_id
-        ]
-        event_rows.sort(
+    def _dedupe_key_event_rows(self, event_rows: List[dict]) -> List[Dict[str, Any]]:
+        """Timeline order, fuzzy dedupe across all active key_event rows."""
+        event_rows = sorted(
+            event_rows,
             key=lambda r: (
+                -self._ts_sort_key(r.get("generated_at")),
                 float(r.get("segment_start_sec") or 0),
                 str(r.get("original_video") or ""),
-            )
+            ),
         )
         kept: List[Dict[str, Any]] = []
         for row in event_rows:
@@ -165,14 +190,30 @@ class SuggestionsService:
                     break
             if not dup:
                 kept.append(ev)
+        kept.sort(
+            key=lambda e: (
+                float(e.get("segment_start_sec") or 0),
+                str(e.get("original_video") or ""),
+            )
+        )
         return kept
+
+    def _key_events_for_batch(self, rows: List[dict], batch_id: str) -> List[Dict[str, Any]]:
+        """Latest batch only (legacy helper)."""
+        event_rows = [
+            r for r in rows
+            if str(r.get("kind") or "") == "key_event"
+            and r.get("is_active")
+            and str(r.get("batch_id") or "") == batch_id
+        ]
+        return self._dedupe_key_event_rows(event_rows)
 
     def get_suggestions(self) -> Dict[str, Any]:
         rows = self._read_all_rows()
-        batch_id = self._latest_batch_id(rows)
+        active = [r for r in rows if r.get("is_active")]
         table = f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}"
 
-        if not batch_id and not rows:
+        if not active:
             return {
                 "batch_id": None,
                 "generated_at": None,
@@ -182,28 +223,28 @@ class SuggestionsService:
                 "table": table,
             }
 
+        prompt_rows = sorted(
+            [r for r in active if str(r.get("kind") or "") == "search_prompt"],
+            key=lambda r: -self._ts_sort_key(r.get("generated_at")),
+        )
         prompts: List[str] = []
-        gen_at = None
-        if batch_id:
-            for row in rows:
-                if str(row.get("batch_id")) != batch_id or not row.get("is_active"):
-                    continue
-                if str(row.get("kind") or "") != "search_prompt":
-                    continue
-                q = str(row.get("query_text") or "").strip()
-                if q and q not in prompts:
-                    prompts.append(q)
-                ts = row.get("generated_at")
-                if ts is not None:
-                    gen_at = ts
+        seen_prompts: Set[str] = set()
+        for row in prompt_rows:
+            q = str(row.get("query_text") or "").strip()
+            key = q.lower()
+            if not q or key in seen_prompts:
+                continue
+            seen_prompts.add(key)
+            prompts.append(q)
+            if len(prompts) >= 10:
+                break
 
-        events = self._key_events_for_batch(rows, batch_id) if batch_id else []
+        event_rows = [r for r in active if str(r.get("kind") or "") == "key_event"]
+        events = self._dedupe_key_event_rows(event_rows)
 
-        generated_iso = None
-        if gen_at is not None and hasattr(gen_at, "isoformat"):
-            generated_iso = gen_at.isoformat()
-        elif gen_at is not None:
-            generated_iso = str(gen_at)
+        newest = max(active, key=lambda r: self._ts_sort_key(r.get("generated_at")))
+        batch_id = str(newest.get("batch_id") or "") or None
+        generated_iso = normalize_generated_at(newest.get("generated_at"))
 
         return {
             "batch_id": batch_id,

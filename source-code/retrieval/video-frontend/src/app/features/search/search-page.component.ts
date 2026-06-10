@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription, interval } from 'rxjs';
 import { SearchBarComponent } from './components/search-bar.component';
 import { ChunkCardComponent } from './components/chunk-card.component';
@@ -15,6 +16,7 @@ import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { AuthService } from '../auth/services/auth.service';
 import { SuggestionsService } from '../../shared/services/suggestions.service';
+import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
 
 @Component({
   selector: 'app-search-page',
@@ -24,6 +26,7 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
     MatButtonModule,
     MatIconModule,
     MatProgressSpinnerModule,
+    MatTooltipModule,
     SearchBarComponent,
     ChunkCardComponent,
     SearchAnimationComponent,
@@ -46,7 +49,16 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
           <h2>What are you looking for?</h2>
           <p>Type what you want to see in plain words to find the right clips</p>
           <div class="examples">
-            <h3>Try something like:</h3>
+            <div class="examples-header">
+              <h3>Try something like:</h3>
+              @if (suggestionsUpdatedAt()) {
+                <span
+                  class="examples-updated"
+                  [matTooltip]="formatSuggestionsUpdated(suggestionsUpdatedAt())">
+                  Updated {{ suggestionsUpdatedRelative() }}
+                </span>
+              }
+            </div>
             @if (suggestionsLoading()) {
               <div class="examples-status">
                 <mat-spinner diameter="28"></mat-spinner>
@@ -229,8 +241,22 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
         
         h3 {
           color: var(--accent-primary);
-          margin: 0 0 0.75rem;
+          margin: 0;
           font-size: 1rem;
+        }
+
+        .examples-header {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-bottom: 0.75rem;
+        }
+
+        .examples-updated {
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          white-space: nowrap;
         }
 
         .examples-status {
@@ -464,6 +490,7 @@ import { SuggestionsService } from '../../shared/services/suggestions.service';
 })
 export class SearchPageComponent implements OnInit, OnDestroy {
   private static readonly PAGE_SIZE = 20;
+  private static readonly SUGGESTIONS_POLL_MS = 300_000;
 
   @ViewChild(SearchBarComponent) private searchBar?: SearchBarComponent;
 
@@ -476,7 +503,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   exampleQueries = signal<string[]>([]);
   suggestionsLoading = signal(true);
   suggestionsError = signal(false);
-  private suggestionsBatchId: string | null = null;
+  suggestionsUpdatedAt = signal<string | null>(null);
   private suggestionsSub?: Subscription;
   isOpeningDialog = signal(false);
   currentPage = signal(1);
@@ -484,7 +511,9 @@ export class SearchPageComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.loadExampleQueries();
-    this.suggestionsSub = interval(30_000).subscribe(() => this.loadExampleQueries(true));
+    this.suggestionsSub = interval(SearchPageComponent.SUGGESTIONS_POLL_MS).subscribe(
+      () => this.loadExampleQueries(true)
+    );
   }
 
   ngOnDestroy() {
@@ -499,18 +528,23 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       next: (data) => {
         this.suggestionsLoading.set(false);
         this.suggestionsError.set(false);
-        const batchId = data.batch_id ?? null;
         const prompts = (data.search_prompts ?? []).slice(0, 10);
+        const genAt = data.generated_at ?? null;
         if (!prompts.length) {
           if (!silent || !this.exampleQueries().length) {
             this.exampleQueries.set([]);
+            this.suggestionsUpdatedAt.set(null);
           }
           return;
         }
-        if (batchId && batchId === this.suggestionsBatchId && silent) {
+        if (
+          silent &&
+          genAt === this.suggestionsUpdatedAt() &&
+          JSON.stringify(prompts) === JSON.stringify(this.exampleQueries())
+        ) {
           return;
         }
-        this.suggestionsBatchId = batchId;
+        this.suggestionsUpdatedAt.set(genAt);
         this.exampleQueries.set(prompts);
       },
       error: (err) => {
@@ -555,6 +589,14 @@ export class SearchPageComponent implements OnInit, OnDestroy {
 
   onExampleQueryClick(example: string) {
     this.searchBar?.setQuery(example.trim());
+  }
+
+  formatSuggestionsUpdated(iso: string | null): string {
+    return formatAbsoluteTime(iso);
+  }
+
+  suggestionsUpdatedRelative(): string {
+    return formatRelativeTime(this.suggestionsUpdatedAt());
   }
 
   displayResults(): ChunkSearchResult[] {

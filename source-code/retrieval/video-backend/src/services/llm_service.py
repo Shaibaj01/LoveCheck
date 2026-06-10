@@ -7,23 +7,35 @@ The backend no longer requires a ConfigMap for the system prompt.
 import httpx
 import json
 import time
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
+from src.utils.stream_index import format_stream_time, stream_fields_from_row
 from src.config import get_settings
 from src.models.video import ChunkSearchResult
 
 
 # Fallback system prompt (only used if frontend doesn't send one)
-DEFAULT_SYSTEM_PROMPT = """Role: Video analyst answering from retrieved clip evidence only.
+DEFAULT_SYSTEM_PROMPT = """Role: Video analyst summarizing search results from retrieved clip evidence only.
+
+Output format (markdown, blank line between sections):
+
+**Answer**
+2–3 short sentences. Direct, objective reply to the query. No filenames.
+
+**Notable moments**
+- **0:25–0:30 (Clip 1)** — One factual sentence (max ~18 words).
+- **0:10–0:15 (Clip 3)** — …
+Use at most 5 bullets. Merge duplicate observations across clips. Skip generic scene filler.
+
+**Gaps** (omit section if not needed)
+One sentence only when evidence is weak or clips disagree.
 
 Rules:
-- Evidence is organized by uploaded video clip with a timeline of segment scene summaries (structured VLM output).
-- Use only facts present in scene_summary text and structured objects/actions/events. If evidence is insufficient, say so clearly.
-- Cite in-video time using segment time ranges (e.g. 0:15–0:20) when referencing events; note the best search match moment when relevant.
-- Direct answer first, then brief supporting detail.
-- Do not invent objects, people, actions, or timestamps that are not in the evidence.
-- If clips conflict, note the uncertainty.
-
-You may use a concise, readable tone, but accuracy and grounding take priority over style."""
+- Use only scene_summary / objects / actions / events from the evidence.
+- Reference clips as "Clip N" (numbers from evidence headers). Never paste .mp4 filenames in the body.
+- No clip inventory paragraphs ("Clip 1 (file.mp4), Clip 2 …").
+- No repeated boilerplate: urban setting, daylight, clear skies, no hazards, bustling street.
+- Stay under ~180 words unless the query truly needs more detail.
+- Accuracy over style; do not invent people, actions, or times."""
 
 
 class LLMService:
@@ -96,7 +108,8 @@ class LLMService:
 Video Clip Evidence (timeline scene summaries from structured VLM analysis):
 {summaries_text}
 
-Answer using only this evidence. Cite in-video times when relevant."""
+Write a concise summary using only this evidence. Follow the markdown sections in your system prompt.
+Use Clip N labels from the headers above; do not list filenames."""
         
         try:
             # Call NVIDIA API with the effective system prompt
@@ -179,6 +192,7 @@ Answer using only this evidence. Cite in-video times when relevant."""
                 "is_best_match": seg.is_best_match,
                 "query_highlight": seg.query_highlight,
                 "similarity_score": seg.similarity_score,
+                **stream_fields_from_row({"extra_metadata": getattr(seg, "extra_metadata", None)}),
             })
         return {
             "evidence_type": "chunk",
@@ -257,7 +271,17 @@ Answer using only this evidence. Cite in-video times when relevant."""
             if seg.get("query_highlight"):
                 flags.append("query hit")
             flag_str = f" [{', '.join(flags)}]" if flags else ""
-            block = [f"  Segment {sn} ({t0}–{t1}){flag_str}:", f"  scene_summary: {seg.get('scene_summary', '')}"]
+            stream = stream_fields_from_row(seg)
+            stream_note = ""
+            pos = stream.get("stream_position_sec")
+            if pos is not None:
+                try:
+                    stream_note = f" | stream @ {format_stream_time(float(pos))}"
+                except (TypeError, ValueError):
+                    pass
+            elif stream.get("chunk_index") is not None:
+                stream_note = f" | chunk {stream.get('chunk_index')}"
+            block = [f"  Segment {sn} ({t0}–{t1}){flag_str}{stream_note}:", f"  scene_summary: {seg.get('scene_summary', '')}"]
             objects = seg.get("objects") or []
             actions = seg.get("actions") or []
             events = seg.get("events") or []

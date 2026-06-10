@@ -19,6 +19,13 @@ class Settings(BaseModel):
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for Cosmos")
     
     max_video_size_mb: int = 100
+    # Optional VastDB settings for idempotency checks
+    vdbendpoint: str = ""
+    vdbbucket: str = ""
+    vdbschema: str = ""
+    vdbaccesskey: str = ""
+    vdbsecretkey: str = ""
+    vdbcollection: str = ""
     # Scenario for prompt selection
     # Options: surveillance, traffic, nhl, sports, retail, warehouse, general
     scenario: str = "general"

@@ -5,7 +5,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
 ## Features
 
 - Captures YouTube streams and VOD videos
-- Splits into configurable segments (default: 10 seconds)
+- Splits into configurable chunks (default: 30 seconds)
 - Uploads to S3 with metadata
 - Auto-triggers ingest pipeline
 - VOD auto-stops when video ends; live streams run until stopped
@@ -31,7 +31,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
   "secret_key": "...",
   "s3_endpoint": "http://...",
   "bucket_name": "video-chunks",
-  "capture_interval": 10,
+  "capture_interval": 30,
   "camera_id": "cam-01",
   "capture_type": "traffic",
   "location": "downtown",

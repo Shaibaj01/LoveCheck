@@ -117,7 +117,7 @@ import { StreamingService, StreamingStartRequest, StreamingPrefillConfig } from 
 
               <mat-form-field appearance="outline">
                 <mat-label>Capture Interval (seconds)</mat-label>
-                <input matInput type="number" formControlName="capture_interval" placeholder="10">
+                <input matInput type="number" formControlName="capture_interval" placeholder="30">
                 <mat-icon matSuffix>schedule</mat-icon>
               </mat-form-field>
 
@@ -698,7 +698,7 @@ export class StreamingConfigComponent {
       s3_endpoint: ['', [Validators.required]],
       bucket_name: ['', [Validators.required]],
       name: ['capture', [Validators.required]],
-      capture_interval: [10, [Validators.required, Validators.min(1), Validators.max(300)]],
+      capture_interval: [30, [Validators.required, Validators.min(1), Validators.max(300)]],
       // Stream capture metadata (optional)
       camera_id: [''],
       capture_type: [''],

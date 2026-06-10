@@ -1,9 +1,13 @@
 import logging
 import hashlib
+import json
 import vastdb
 import pyarrow as pa
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 from datetime import datetime
+
+from common import vastdb_patch  # noqa: F401 — apply SDK patch before select/insert
+from common.segment_index import pk_for_source
 
 
 def _resolve_segment_times(
@@ -62,9 +66,6 @@ class VastDBClient:
             ("object_counts", pa.utf8()),
             ("max_detection_conf", pa.float32()),
             ("perception_ok", pa.bool_()),
-            ("row_kind", pa.utf8()),
-            ("video_summary_json", pa.string()),
-            ("video_events_json", pa.string()),
             ("vectors", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.settings.embeddingdimensions)),
             ("vectors_visual", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.visual_dim)),
             ("cosmos_model", pa.utf8()),
@@ -89,6 +90,7 @@ class VastDBClient:
         ])
 
         self._initialize_connection()
+        self._schema_ready = False
 
     def _initialize_connection(self):
         """Initialize VastDB connection"""
@@ -105,6 +107,8 @@ class VastDBClient:
 
     def ensure_schema_and_table(self) -> bool:
         """Ensure schema and table exist, creating them if needed."""
+        if self._schema_ready:
+            return True
         try:
             with self.session.transaction() as tx:
                 bucket = tx.bucket(self.bucket)
@@ -125,6 +129,7 @@ class VastDBClient:
                         else:
                             raise
                 
+                self._schema_ready = True
                 return True
                 
         except Exception as e:
@@ -132,7 +137,7 @@ class VastDBClient:
             return False
 
     def store_vector(self, embedding_event: Dict[str, Any]) -> bool:
-        """Store video reasoning with vector in VastDB."""
+        """Store video reasoning with vector in VastDB. Skips duplicate source."""
         try:
             source = embedding_event.get("source", "")
             filename = embedding_event.get("filename", "")
@@ -151,8 +156,8 @@ class VastDBClient:
             if not embedding:
                 logging.warning("No embedding vector to store")
                 return False
-            
-            pk = hashlib.md5(source.encode()).hexdigest()
+
+            pk = pk_for_source(source)
             timestamp = datetime.utcnow().isoformat() + "Z"
             
             is_public = embedding_event.get("is_public", True)
@@ -216,6 +221,22 @@ class VastDBClient:
                 "visual_embedding_dimensions": len(visual_embedding),
                 "visual_embedding_ok": visual_embedding_ok,
             }
+            stream_id = str(embedding_event.get("stream_id") or "").strip()
+            if stream_id:
+                extra_metadata["stream_id"] = stream_id
+            if embedding_event.get("chunk_index") is not None:
+                extra_metadata["chunk_index"] = embedding_event.get("chunk_index")
+            chunk_start = embedding_event.get("chunk_start_sec")
+            if chunk_start is not None:
+                try:
+                    chunk_start_f = float(chunk_start)
+                    extra_metadata["chunk_start_sec"] = chunk_start_f
+                    extra_metadata["stream_position_sec"] = round(chunk_start_f + float(segment_start_sec), 3)
+                except (TypeError, ValueError):
+                    pass
+            ingest_kind = str(embedding_event.get("ingest_kind") or "").strip()
+            if ingest_kind:
+                extra_metadata["ingest_kind"] = ingest_kind
             
             record = {
                 "pk": pk,
@@ -233,9 +254,6 @@ class VastDBClient:
                 "object_counts": embedding_event.get("object_counts", "{}") or "{}",
                 "max_detection_conf": float(embedding_event.get("max_detection_conf") or 0.0),
                 "perception_ok": bool(embedding_event.get("perception_ok", False)),
-                "row_kind": embedding_event.get("row_kind", "segment") or "segment",
-                "video_summary_json": embedding_event.get("video_summary_json", "") or "",
-                "video_events_json": embedding_event.get("video_events_json", "") or "",
                 "vectors": embedding,
                 "vectors_visual": visual_embedding,
                 "cosmos_model": embedding_event.get("cosmos_model", ""),
@@ -255,7 +273,7 @@ class VastDBClient:
                 "camera_id": camera_id,
                 "capture_type": capture_type,
                 "location": location,
-                "extra_metadata": str(extra_metadata)
+                "extra_metadata": json.dumps(extra_metadata, ensure_ascii=False),
             }
             
             if not self.ensure_schema_and_table():
@@ -267,13 +285,27 @@ class VastDBClient:
                 bucket = tx.bucket(self.bucket)
                 schema = bucket.schema(self.schema_name)
                 table = schema.table(self.table_name)
+                if self._skip_or_dedupe_existing_segment(table, source):
+                    return True
                 table.insert(arrow_table)
-            
+
             return True
             
         except Exception as e:
             logging.error(f"Error storing vector: {e}")
             return False
+
+    def _skip_or_dedupe_existing_segment(self, table, source: str) -> bool:
+        """Return True when insert should be skipped. Runs inside an open transaction."""
+        existing = table.select(
+            predicate=(table["source"] == source),
+            columns=["source"],
+            internal_row_id=False,
+        ).read_all()
+        if existing.num_rows == 0:
+            return False
+        logging.info("[VASTDB] Skip duplicate index: %s", source)
+        return True
 
     def close(self):
         """Close VastDB connection"""
