@@ -133,3 +133,38 @@ export interface MetadataSchema {
   table: string;
 }
 
+export type VideoScope = 'all' | 'mine' | 'public';
+
+export interface ExploreUploadDay {
+  date: string;
+  chunk_count: number;
+}
+
+export interface ExploreResponse {
+  chunks: ChunkSearchResult[];
+  total: number;
+  uploads_by_day: ExploreUploadDay[];
+  scope: VideoScope;
+  selected_date?: string | null;
+  limit: number;
+  offset: number;
+  table_available?: boolean;
+  table_message?: string | null;
+}
+
+export interface VideoSynthesizeRequest {
+  original_video: string;
+  question?: string;
+  max_segments?: number;
+  system_prompt?: string;
+}
+
+export interface VideoSynthesizeResponse {
+  original_video: string;
+  segment_count: number;
+  segments_used: number;
+  answer: string;
+  llm_synthesis: LLMSynthesis;
+  generated_at: string;
+}
+

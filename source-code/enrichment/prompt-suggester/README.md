@@ -1,6 +1,9 @@
 # Prompt Suggester (DataEngine scheduled function)
 
-Reads recent segment captions from `vss2-collection`, calls Cosmos Reason2, writes search prompts and key events to `vss2-prompts-events`. Served by video-backend `GET /api/v1/suggestions`.
+Reads recent segment captions from `vss2-collection`, calls Cosmos Reason2, writes search prompts and key events to `vss2-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
+
+- **Search** empty state — clickable suggestion chips (fill query only)
+- **Dashboard** — key events table with in-place segment preview
 
 Structure matches other DataEngine functions (`vastdb-writer`, `fraud-detector`). See `.cursor/skills/dataengine-function/SKILL.md`.
 

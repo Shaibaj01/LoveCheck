@@ -242,6 +242,8 @@ class VastDBClient:
             if not q:
                 continue
             ov = str(ev.get("original_video") or "").strip()
+            if not ov:
+                continue
             if ov and ov in known_videos:
                 continue
             start = float(ev.get("segment_start_sec") or 0)

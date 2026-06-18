@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from src.schemas.search import VideoSearchRequest
+from src.schemas.search import VideoSearchRequest, VideoSearchResponse
 from src.services.auth_service import CurrentUser
 from src.services.llm_service import get_llm_service
 from src.services.vastdb_service import get_vastdb_service
@@ -93,5 +93,69 @@ async def agent_ask(request: AgentAskRequest, current_user: CurrentUser = None):
         evidence={
             "result_count": search_response.total,
             "top_sources": [r.source for r in search_response.results[:5]],
+        },
+    )
+
+
+def _answer_from_search(search_response: VideoSearchResponse) -> str:
+    if search_response.llm_synthesis:
+        synth = search_response.llm_synthesis
+        if isinstance(synth, dict):
+            return synth.get("response", "")
+        return getattr(synth, "response", "") or ""
+    if search_response.chunk_results:
+        chunk = search_response.chunk_results[0]
+        return chunk.dense_caption or chunk.reasoning_content or ""
+    if search_response.results:
+        hit = search_response.results[0]
+        return hit.dense_caption or hit.reasoning_content or ""
+    return "No matching segments found."
+
+
+def _chunk_evidence_summary(search_response: VideoSearchResponse) -> list:
+    summaries = []
+    for chunk in search_response.chunk_results[:10]:
+        summaries.append({
+            "original_video": chunk.original_video,
+            "filename": chunk.filename,
+            "similarity_score": chunk.similarity_score,
+            "best_match_start_sec": chunk.best_match_start_sec,
+            "best_match_end_sec": chunk.best_match_end_sec,
+            "matched_segment_count": chunk.matched_segment_count,
+            "preview_source": chunk.preview_source,
+        })
+    return summaries
+
+
+@router.post("/search-and-answer", response_model=AgentAskResponse)
+async def agent_search_and_answer(
+    request: VideoSearchRequest,
+    current_user: CurrentUser,
+):
+    """
+    Full hybrid search with filters (scope, time, metadata) then grounded answer.
+
+    Same request body as POST /search; returns agent-shaped response with chunk evidence.
+    """
+    search_response = await search_videos(request, current_user)
+    answer = _answer_from_search(search_response)
+
+    llm_synthesis = search_response.llm_synthesis
+    if llm_synthesis is not None and hasattr(llm_synthesis, "model_dump"):
+        llm_synthesis = llm_synthesis.model_dump()
+
+    return AgentAskResponse(
+        answer=answer,
+        tool_used="search_hybrid",
+        evidence={
+            "query": search_response.query,
+            "segment_hit_count": search_response.total,
+            "chunk_count": search_response.chunk_total,
+            "permission_filtered": search_response.permission_filtered,
+            "embedding_time_ms": search_response.embedding_time_ms,
+            "search_time_ms": search_response.search_time_ms,
+            "chunks": _chunk_evidence_summary(search_response),
+            "top_segment_sources": [r.source for r in search_response.results[:5]],
+            "llm_synthesis": llm_synthesis,
         },
     )

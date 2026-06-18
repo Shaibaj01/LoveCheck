@@ -1,57 +1,51 @@
 # Video Frontend
 
-An Angular web application that provides the user interface for the VSS Blueprint.
+Angular web UI for the VSS Blueprint: **Search**, **Explore**, and **Dashboard** modes from the toolbar.
 
-## What It Does
+## Application Modes
 
-- **Video Search**: Semantic search with **Text**, **Visual**, or **Hybrid** modes (dense caption vs frame embeddings)
-- **Video Upload**: Upload videos with metadata (camera_id, capture_type, location) and optional custom AI prompt
-- **Video Playback**: Play video segments with reasoning text overlays
-- **User Authentication**: Login with VAST credentials (username + password)
-- **Settings Management**: Configure LLM settings, system prompts, and video streaming
-- **Metadata Filtering**: Filter search results by camera, location, capture type, and time
+Three top-level modes share the same scope pills (**All Videos** / **My Videos** / **Public Only**) and a dedicated **Refresh** button (reloads the current view without switching mode).
 
-## Easy to Adjust
+| Mode | Route | Purpose |
+|------|-------|---------|
+| **Search** | `/search` | Hybrid semantic search; clip cards grouped by upload with segment timeline; LLM synthesis |
+| **Explore** | `/explore` | Browse indexed uploads by day — no query; metadata on cards; **Summarize Video** on demand |
+| **Dashboard** | `/dashboard` | VastDB stats, ingest quality, S3 pipeline inventory, key events from prompt-suggester |
 
-### Frontend Configuration
+### Search
 
-- **Backend API**: `/api/v1/config` for app settings; `/api/v1/suggestions` for live search examples and key events (from VastDB `vss2-prompts-events`, refreshed by the prompt-suggester DataEngine function)
+- Empty state shows **live search suggestions** from `GET /api/v1/suggestions` (prompt-suggester → `vss2-prompts-events`). Clicking a suggestion fills the search bar only (does not auto-run search).
+- After a search, results persist when navigating away and back; suggestions stay hidden while results are shown.
+- **Refresh** clears results and restores the suggestion panel.
 
-### User Settings (Browser Storage)
+### Explore
 
-Users can customize these settings in the UI (stored in browser localStorage):
+- Hero: **Browse by upload date** — indexed clips day by day; summarize any video on demand.
+- Date rail filters by upload day; cards show upload time, metadata (camera, capture type, location, tags), and object chips — no segment timeline on cards.
+- Player opens in explore mode (no jump-to-moment bar); **Summarize Video** runs `POST /api/v1/videos/synthesize`.
 
-- **Advanced Search & AI Settings**: max clip cards, LLM clips analyzed, caption/video weight, minimum similarity
-- **System Prompt**: Custom LLM system prompt for search result synthesis
-- **Time Filters**: Preset or custom date ranges for filtering
+### Dashboard
 
-### Build Configuration
+- Scope-scoped VastDB statistics; KPI panels hidden when the collection is unreadable (amber warning instead of misleading zeros).
+- **Key events** table: search icon opens the event clip directly via segment metadata (falls back to hybrid search); **Uploaded** column shows parent video upload time.
+- S3 pipeline panel compares chunk/segment MP4 counts to indexed clips.
 
-Edit `angular.json` or `package.json` for:
-- Build output directory
-- Development server port
-- Production build optimizations
+## Other Features
 
-## About the Application
+- **Video Upload**: metadata (camera_id, capture_type, location) + optional custom AI prompt
+- **Video Playback**: segment player with timeline (search mode) or browse player (explore mode)
+- **Authentication**: VAST username + password → app JWT
+- **Settings**: Advanced Search & AI, system prompt, streaming, batch sync
+- **Blueprint diagram**: Settings → Show Blueprint Diagram (`src/assets/blueprint.html`)
 
-- **Framework**: Angular 18
-- **UI Library**: Angular Material
-- **State Management**: Services with RxJS observables
-- **Authentication**: JWT tokens stored in localStorage
-- **API Communication**: REST API calls to backend service
-- **Features**:
-  - Search page with vector search and LLM synthesis
-  - Upload dialog with metadata input
-  - Video player with segment navigation
-  - Settings dialogs for customization
-  - Streaming service integration
+## Configuration
 
-## What Runs It
+- **Backend API**: `/api/v1/config`
+- **Suggestions / key events**: `/api/v1/suggestions` (polls every 5 min on Search + Dashboard)
 
-- **Runtime**: Nginx web server (containerized)
-- **Image**: `your.registry/vss-video-frontend:v1` (placeholder — build and push from this directory; see [K8s deployment guide](../../../deployments/vss-k8s-application/README.md#step-2-docker-images))
-- **Deployment**: Kubernetes deployment (see main README Part 2)
-- **Access**: Via ingress at `http://video-lab.<cluster_name>.vastdata.com`
-- **Build**: Angular CLI builds static files served by Nginx
-- **Dependencies**: Node.js for build, Nginx for serving
+User settings in browser `localStorage`: Advanced Search & AI, system prompt, time filters.
 
+## Stack
+
+- Angular 18 · Angular Material · RxJS services · JWT in localStorage
+- Deployed as static files behind Nginx — see [K8s deployment guide](../../../deployments/vss-k8s-application/README.md)

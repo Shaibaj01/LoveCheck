@@ -1,4 +1,4 @@
-import { Component, ViewChild, inject, signal, OnInit, OnDestroy, effect } from '@angular/core';
+import { Component, ViewChild, inject, signal, OnInit, OnDestroy, AfterViewInit, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
@@ -10,6 +10,7 @@ import { ChunkCardComponent } from './components/chunk-card.component';
 import { SearchAnimationComponent } from './components/search-animation.component';
 import { LLMSynthesisComponent } from './components/llm-synthesis.component';
 import { SearchService } from './services/search.service';
+import { PageRefreshService } from '../../shared/services/page-refresh.service';
 import { SearchRequest, ChunkSearchResult } from '../../shared/models/video.model';
 import { VideoPlayerComponent } from '../player/video-player.component';
 import { UploadDialogComponent } from '../upload/upload-dialog.component';
@@ -17,6 +18,10 @@ import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { AuthService } from '../auth/services/auth.service';
 import { SuggestionsService } from '../../shared/services/suggestions.service';
 import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
+import {
+  friendlyVastDbAccessMessage,
+  resolveApiAccessWarning,
+} from '../../shared/utils/api-access.util';
 
 @Component({
   selector: 'app-search-page',
@@ -43,7 +48,7 @@ import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.
         </div>
       }
 
-      @if (!hasSearched() && !searchService.state().loading) {
+      @if (showSuggestions()) {
         <div class="empty-state">
           <img src="assets/vast_logo.svg" alt="VAST" class="vast-logo-glow">
           <h2>What are you looking for?</h2>
@@ -64,10 +69,10 @@ import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.
                 <mat-spinner diameter="28"></mat-spinner>
                 <span>Loading search suggestions…</span>
               </div>
-            } @else if (suggestionsError()) {
+            } @else if (suggestionsAccessWarning()) {
               <p class="examples-hint examples-hint-warn">
                 <mat-icon>warning_amber</mat-icon>
-                Could not load suggestions. Check backend logs and VastDB access.
+                {{ suggestionsAccessWarning() }}
               </p>
             } @else if (!exampleQueries().length) {
               <p class="examples-hint">
@@ -488,7 +493,7 @@ import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.
     }
   `]
 })
-export class SearchPageComponent implements OnInit, OnDestroy {
+export class SearchPageComponent implements OnInit, OnDestroy, AfterViewInit {
   private static readonly PAGE_SIZE = 20;
   private static readonly SUGGESTIONS_POLL_MS = 300_000;
 
@@ -498,26 +503,44 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   dialog = inject(MatDialog);
   authService = inject(AuthService);
   suggestionsService = inject(SuggestionsService);
+  private pageRefresh = inject(PageRefreshService);
   
   hasSearched = signal(false);
   exampleQueries = signal<string[]>([]);
   suggestionsLoading = signal(true);
-  suggestionsError = signal(false);
+  suggestionsAccessWarning = signal<string | null>(null);
   suggestionsUpdatedAt = signal<string | null>(null);
   private suggestionsSub?: Subscription;
+  private pageRefreshSub?: Subscription;
   isOpeningDialog = signal(false);
   currentPage = signal(1);
   private uploadDialogRef: MatDialogRef<UploadDialogComponent> | null = null;
 
   ngOnInit() {
-    this.loadExampleQueries();
+    this.restoreSearchSession();
+    if (this.showSuggestions()) {
+      this.loadExampleQueries();
+    }
     this.suggestionsSub = interval(SearchPageComponent.SUGGESTIONS_POLL_MS).subscribe(
-      () => this.loadExampleQueries(true)
+      () => {
+        if (this.showSuggestions()) {
+          this.loadExampleQueries(true);
+        }
+      },
     );
+    this.pageRefreshSub = this.pageRefresh.refresh$.subscribe(() => this.resetSearchView());
+  }
+
+  ngAfterViewInit() {
+    const query = this.searchService.state().query?.trim();
+    if (query) {
+      this.searchBar?.setQuery(query);
+    }
   }
 
   ngOnDestroy() {
     this.suggestionsSub?.unsubscribe();
+    this.pageRefreshSub?.unsubscribe();
   }
 
   loadExampleQueries(silent = false) {
@@ -527,7 +550,17 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     this.suggestionsService.getSuggestions().subscribe({
       next: (data) => {
         this.suggestionsLoading.set(false);
-        this.suggestionsError.set(false);
+        if (data.prompts_table_available === false) {
+          this.suggestionsAccessWarning.set(
+            data.table_message?.trim() || friendlyVastDbAccessMessage('suggestions'),
+          );
+          if (!silent || !this.exampleQueries().length) {
+            this.exampleQueries.set([]);
+            this.suggestionsUpdatedAt.set(null);
+          }
+          return;
+        }
+        this.suggestionsAccessWarning.set(null);
         const prompts = (data.search_prompts ?? []).slice(0, 10);
         const genAt = data.generated_at ?? null;
         if (!prompts.length) {
@@ -549,7 +582,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.suggestionsLoading.set(false);
-        this.suggestionsError.set(true);
+        this.suggestionsAccessWarning.set(resolveApiAccessWarning(err, 'suggestions'));
         if (!silent) {
           console.error('Failed to load search suggestions', err);
         }
@@ -589,6 +622,32 @@ export class SearchPageComponent implements OnInit, OnDestroy {
 
   onExampleQueryClick(example: string) {
     this.searchBar?.setQuery(example.trim());
+  }
+
+  showSuggestions(): boolean {
+    const state = this.searchService.state();
+    return (
+      !this.hasSearched() &&
+      !state.loading &&
+      this.displayResults().length === 0
+    );
+  }
+
+  private restoreSearchSession() {
+    const state = this.searchService.state();
+    if (state.chunkResults.length > 0 || state.results.length > 0 || state.query?.trim()) {
+      this.hasSearched.set(true);
+    }
+  }
+
+  private resetSearchView() {
+    this.searchService.clearResults();
+    this.searchService.closeAnimation();
+    this.hasSearched.set(false);
+    this.currentPage.set(1);
+    this.suggestionsAccessWarning.set(null);
+    this.searchBar?.clearSearch();
+    this.loadExampleQueries();
   }
 
   formatSuggestionsUpdated(iso: string | null): string {

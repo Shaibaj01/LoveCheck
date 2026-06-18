@@ -16,6 +16,10 @@ export const routes: Routes = [
         loadComponent: () => import('./features/search/search-page.component').then(m => m.SearchPageComponent)
       },
       {
+        path: 'explore',
+        loadComponent: () => import('./features/explore/explore-page.component').then(m => m.ExplorePageComponent)
+      },
+      {
         path: 'dashboard',
         loadComponent: () => import('./features/dashboard/dashboard-page.component').then(m => m.DashboardPageComponent)
       },

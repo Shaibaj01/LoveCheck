@@ -10,7 +10,7 @@ import time
 import os
 import urllib.request
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 from src.config import get_settings
 from src.models.video import VideoSearchResult, ChunkSearchResult
 from src.models.user import User
@@ -1238,6 +1238,31 @@ class VastDBService:
         payload["scope"] = scope
         return payload
 
+    def map_upload_timestamps_by_video(
+        self,
+        original_videos: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Latest upload_timestamp per parent video from indexed segments."""
+        wanted = {v.strip() for v in (original_videos or set()) if v and str(v).strip()}
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[VASTDB] upload timestamp lookup failed: %s", exc)
+            return {}
+
+        out: Dict[str, Any] = {}
+        for row in raw_rows:
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if not ov or (wanted and ov not in wanted):
+                continue
+            ts = row.get("upload_timestamp")
+            if ts is None:
+                continue
+            prev = out.get(ov)
+            if prev is None or str(ts) > str(prev):
+                out[ov] = ts
+        return out
+
     def _fetch_dashboard_rows_sdk(self) -> List[dict]:
         """Read non-vector columns via the VastDB Python SDK (same path as metadata discovery)."""
         with self.client.transaction() as tx:
@@ -1298,6 +1323,7 @@ class VastDBService:
                 "vlm_structured": str(row.get("vlm_structured", "")),
                 "structured_parse_ok": bool(row.get("structured_parse_ok", False)),
                 "segment_number": int(row.get("segment_number") or 0),
+                "total_segments": int(row.get("total_segments") or 0),
                 "segment_start_sec": float(row.get("segment_start_sec") or 0),
                 "segment_end_sec": float(row.get("segment_end_sec") or 0),
                 "original_video": str(row.get("original_video", "")),
@@ -1305,9 +1331,213 @@ class VastDBService:
                 "is_public": bool(row.get("is_public", False)),
                 "upload_timestamp": row.get("upload_timestamp"),
                 "tags": self._safe_array_to_list(row.get("tags", [])),
+                "camera_id": str(row.get("camera_id") or ""),
+                "capture_type": str(row.get("capture_type") or ""),
+                "location": str(row.get("location") or ""),
+                "cosmos_model": str(row.get("cosmos_model") or ""),
+                "tokens_used": int(row.get("tokens_used") or 0) or None,
+                "cached_prompt_tokens": int(row.get("cached_prompt_tokens") or 0) or None,
+                "duration": float(row.get("duration") or 0),
             })
         segments.sort(key=lambda s: s["segment_number"])
         return dedupe_segment_dicts(segments)
+
+    def build_browse_chunk(self, original_video: str, user: User):
+        """Build a chunk card for explore/browse (no search query or match scores)."""
+        from src.models.video import ChunkSearchResult, TimelineSegment
+
+        segments = self.list_segments_for_video(original_video, user)
+        if not segments:
+            return None
+
+        first = segments[0]
+        timeline: List[TimelineSegment] = []
+        best_sn = int(first.get("segment_number") or 1)
+        for seg in segments:
+            sn = int(seg.get("segment_number") or 0)
+            timeline.append(
+                TimelineSegment(
+                    segment_number=sn,
+                    segment_start_sec=float(seg.get("segment_start_sec") or 0),
+                    segment_end_sec=float(seg.get("segment_end_sec") or 0),
+                    source=str(seg.get("source") or ""),
+                    dense_caption=str(seg.get("dense_caption") or "") or None,
+                    reasoning_content=str(seg.get("reasoning_content") or "") or None,
+                    vlm_structured=str(seg.get("vlm_structured") or "") or None,
+                    object_classes=str(seg.get("object_classes") or "") or None,
+                    similarity_score=0.0,
+                    is_search_match=False,
+                    query_highlight=False,
+                    is_best_match=False,
+                )
+            )
+
+        chunk_duration = max((t.segment_end_sec for t in timeline), default=0.0)
+        filename = original_video.rsplit("/", 1)[-1] if "/" in original_video else original_video
+        upload_ts = first.get("upload_timestamp")
+        for seg in segments:
+            ts = seg.get("upload_timestamp")
+            if ts is not None and (upload_ts is None or str(ts) > str(upload_ts)):
+                upload_ts = ts
+
+        tags = first.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        for seg in segments:
+            seg_tags = seg.get("tags") or []
+            if isinstance(seg_tags, list):
+                for tag in seg_tags:
+                    t = str(tag).strip()
+                    if t and t not in tags:
+                        tags.append(t)
+
+        def _meta(key: str) -> Optional[str]:
+            for seg in segments:
+                val = str(seg.get(key) or "").strip()
+                if val:
+                    return val
+            return None
+
+        if upload_ts is not None and not hasattr(upload_ts, "isoformat"):
+            try:
+                from datetime import datetime
+                upload_ts = datetime.fromisoformat(str(upload_ts).replace("Z", "+00:00"))
+            except Exception:
+                upload_ts = datetime.utcnow()
+
+        return ChunkSearchResult(
+            original_video=original_video,
+            filename=filename,
+            chunk_duration_sec=chunk_duration,
+            total_segments=int(first.get("total_segments") or len(timeline)),
+            similarity_score=1.0,
+            best_segment_number=best_sn,
+            best_match_start_sec=float(first.get("segment_start_sec") or 0),
+            best_match_end_sec=float(first.get("segment_end_sec") or 0),
+            preview_source=str(first.get("source") or ""),
+            reasoning_content=str(first.get("reasoning_content") or ""),
+            dense_caption=str(first.get("dense_caption") or "") or None,
+            is_public=bool(first.get("is_public", True)),
+            upload_timestamp=upload_ts,
+            tags=tags,
+            matched_segment_count=0,
+            query="",
+            timeline=timeline,
+            camera_id=_meta("camera_id"),
+            capture_type=_meta("capture_type"),
+            location=_meta("location"),
+            cosmos_model=_meta("cosmos_model"),
+            tokens_used=next(
+                (int(seg.get("tokens_used") or 0) for seg in segments if int(seg.get("tokens_used") or 0)),
+                None,
+            ),
+            cached_prompt_tokens=next(
+                (
+                    int(seg.get("cached_prompt_tokens") or 0)
+                    for seg in segments
+                    if int(seg.get("cached_prompt_tokens") or 0)
+                ),
+                None,
+            ),
+        )
+
+    def list_explore_chunks(
+        self,
+        user: User,
+        scope: str = "all",
+        date: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Browse indexed parent videos by upload date (no vector search)."""
+        from collections import Counter
+
+        from src.utils.dashboard_stats import _parse_upload_day
+
+        include_public = scope in ("all", "public")
+        public_only = scope == "public"
+
+        table_available = True
+        table_message: Optional[str] = None
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[EXPLORE] VastDB scan failed: %s", exc)
+            raw_rows = []
+            table_available = False
+            table_message = (
+                "Could not read VastDB collection. "
+                "Verify vdb_bucket, vdb_schema, and vdb_collection in backend config."
+            )
+
+        if table_available and not raw_rows:
+            table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
+
+        by_video: dict[str, dict] = {}
+        for row in raw_rows:
+            if not self._user_has_access(row, user, include_public, public_only):
+                continue
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if not ov:
+                continue
+            day = _parse_upload_day(row.get("upload_timestamp"))
+            entry = by_video.get(ov)
+            if entry is None:
+                by_video[ov] = {
+                    "original_video": ov,
+                    "upload_day": day,
+                    "upload_timestamp": row.get("upload_timestamp"),
+                }
+                continue
+            ts = row.get("upload_timestamp")
+            if ts is not None and (
+                entry["upload_timestamp"] is None or str(ts) > str(entry["upload_timestamp"])
+            ):
+                entry["upload_timestamp"] = ts
+                if day:
+                    entry["upload_day"] = day
+
+        day_counter: Counter[str] = Counter()
+        for entry in by_video.values():
+            if entry.get("upload_day"):
+                day_counter[str(entry["upload_day"])] += 1
+
+        if table_available and raw_rows and not by_video:
+            table_message = "Rows exist in VastDB but none are visible for the selected scope."
+
+        uploads_by_day = [
+            {"date": day, "chunk_count": count}
+            for day, count in sorted(day_counter.items(), reverse=True)
+        ]
+
+        videos = sorted(
+            by_video.values(),
+            key=lambda item: str(item.get("upload_timestamp") or ""),
+            reverse=True,
+        )
+        if date:
+            videos = [v for v in videos if v.get("upload_day") == date]
+
+        total = len(videos)
+        page = videos[offset : offset + limit]
+
+        chunks = []
+        for item in page:
+            chunk = self.build_browse_chunk(item["original_video"], user)
+            if chunk:
+                chunks.append(chunk)
+
+        return {
+            "chunks": chunks,
+            "total": total,
+            "uploads_by_day": uploads_by_day,
+            "scope": scope,
+            "selected_date": date,
+            "limit": limit,
+            "offset": offset,
+            "table_available": table_available,
+            "table_message": table_message,
+        }
 
     def get_table_schema(self):
         """

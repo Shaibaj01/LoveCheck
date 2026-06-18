@@ -1160,7 +1160,7 @@ export class SearchBarComponent {
     this.search.emit(request);
   }
 
-  /** Put text in the search field and focus it (e.g. empty-state example clicks). Does not run search. */
+  /** Put text in the search field and focus it (e.g. suggestion chips). */
   setQuery(query: string) {
     this.searchForm.patchValue({ query });
     this.cdr.markForCheck();

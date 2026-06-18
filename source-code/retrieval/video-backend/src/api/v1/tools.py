@@ -8,9 +8,11 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.schemas.search import VideoSearchRequest, VideoSearchResponse
+from src.schemas.explore import ExploreResponse, VideoSynthesizeRequest, VideoSynthesizeResponse
 from src.services.auth_service import CurrentUser
 from src.services.vastdb_service import get_vastdb_service
 from src.api.v1 import search as search_api
+from src.api.v1 import videos as videos_api
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["Agent Tools"])
@@ -61,3 +63,33 @@ async def tool_search(
 ):
     """Hybrid/text/visual search (agent tool: search_hybrid)."""
     return await search_api.search_videos(request, current_user)
+
+
+@router.get("/explore", response_model=ExploreResponse)
+async def tool_explore(
+    current_user: CurrentUser,
+    scope: str = Query(default="all", pattern="^(all|mine|public)$"),
+    date: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload date (YYYY-MM-DD)",
+    ),
+    limit: int = Query(default=48, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Browse indexed videos by upload date without a query (agent tool: explore_timeline)."""
+    return await videos_api.explore_videos(
+        current_user=current_user,
+        scope=scope,
+        date=date,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/synthesize", response_model=VideoSynthesizeResponse)
+async def tool_synthesize(
+    body: VideoSynthesizeRequest,
+    current_user: CurrentUser,
+):
+    """On-demand LLM synthesis over all segments for one parent video (agent tool: synthesize_video)."""
+    return await videos_api.synthesize_video_chunk(body, current_user)

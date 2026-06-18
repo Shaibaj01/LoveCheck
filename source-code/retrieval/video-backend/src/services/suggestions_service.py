@@ -9,6 +9,7 @@ import vastdb
 import vastdb._internal as _internal
 
 from src.config import get_settings
+from src.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -75,21 +76,29 @@ class SuggestionsService:
             self.settings, "vdb_prompts_collection", "vss2-prompts-events"
         )
 
-    def _read_all_rows(self) -> List[dict]:
+    def _read_all_rows(self) -> tuple[List[dict], bool, Optional[str]]:
+        table_ref = (
+            f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}"
+        )
         with self._session.transaction() as tx:
             bucket = tx.bucket(self.settings.vdb_bucket)
             db_schema = bucket.schema(self.settings.vdb_schema)
             try:
                 table = db_schema.table(self._table_name)
-            except Exception:
-                return []
-            result = table.select(columns=list(PROMPT_COLUMNS), internal_row_id=False)
-            arrow = result.read_all()
+            except Exception as exc:
+                logger.warning("[SUGGESTIONS] Prompts table missing: %s", exc)
+                return [], False, f"Could not read prompts table {table_ref}."
+            try:
+                result = table.select(columns=list(PROMPT_COLUMNS), internal_row_id=False)
+                arrow = result.read_all()
+            except Exception as exc:
+                logger.warning("[SUGGESTIONS] Prompts table read failed: %s", exc)
+                return [], False, f"Could not read prompts table {table_ref}."
         if arrow.num_rows == 0:
-            return []
+            return [], True, None
         import pandas as pd
 
-        return [row.to_dict() for _, row in arrow.to_pandas().iterrows()]
+        return [row.to_dict() for _, row in arrow.to_pandas().iterrows()], True, None
 
     @staticmethod
     def _ts_sort_key(ts: Any) -> float:
@@ -198,20 +207,57 @@ class SuggestionsService:
         )
         return kept
 
-    def _key_events_for_batch(self, rows: List[dict], batch_id: str) -> List[Dict[str, Any]]:
-        """Latest batch only (legacy helper)."""
-        event_rows = [
-            r for r in rows
-            if str(r.get("kind") or "") == "key_event"
-            and r.get("is_active")
-            and str(r.get("batch_id") or "") == batch_id
-        ]
-        return self._dedupe_key_event_rows(event_rows)
+    def _attach_upload_timestamps(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not events:
+            return events
+        from src.services.vastdb_service import get_vastdb_service
 
-    def get_suggestions(self) -> Dict[str, Any]:
-        rows = self._read_all_rows()
+        needed = {
+            str(e.get("original_video") or "").strip()
+            for e in events
+            if str(e.get("original_video") or "").strip() and not e.get("upload_timestamp")
+        }
+        ts_map: Dict[str, Any] = {}
+        if needed:
+            ts_map = get_vastdb_service().map_upload_timestamps_by_video(needed)
+
+        for ev in events:
+            ov = str(ev.get("original_video") or "").strip()
+            raw = ev.get("upload_timestamp") or (ts_map.get(ov) if ov else None)
+            ev["upload_timestamp"] = normalize_generated_at(raw)
+        return events
+
+    def _filter_events_by_user(self, events: List[Dict[str, Any]], user: User) -> List[Dict[str, Any]]:
+        if not events:
+            return events
+        from src.services.vastdb_service import get_vastdb_service
+
+        vastdb = get_vastdb_service()
+        visible: List[Dict[str, Any]] = []
+        for ev in events:
+            ov = str(ev.get("original_video") or "").strip()
+            if not ov:
+                continue
+            if vastdb.list_segments_for_video(ov, user):
+                visible.append(ev)
+        return visible
+
+    def get_suggestions(self, user: User) -> Dict[str, Any]:
+        rows, table_available, table_message = self._read_all_rows()
         active = [r for r in rows if r.get("is_active")]
         table = f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}"
+
+        if not table_available:
+            return {
+                "batch_id": None,
+                "generated_at": None,
+                "search_prompts": [],
+                "key_events": [],
+                "key_events_count": 0,
+                "table": table,
+                "prompts_table_available": False,
+                "table_message": table_message,
+            }
 
         if not active:
             return {
@@ -221,6 +267,8 @@ class SuggestionsService:
                 "key_events": [],
                 "key_events_count": 0,
                 "table": table,
+                "prompts_table_available": True,
+                "table_message": None,
             }
 
         prompt_rows = sorted(
@@ -241,6 +289,8 @@ class SuggestionsService:
 
         event_rows = [r for r in active if str(r.get("kind") or "") == "key_event"]
         events = self._dedupe_key_event_rows(event_rows)
+        events = self._attach_upload_timestamps(events)
+        events = self._filter_events_by_user(events, user)
 
         newest = max(active, key=lambda r: self._ts_sort_key(r.get("generated_at")))
         batch_id = str(newest.get("batch_id") or "") or None
@@ -253,6 +303,8 @@ class SuggestionsService:
             "key_events": events,
             "key_events_count": len(events),
             "table": table,
+            "prompts_table_available": True,
+            "table_message": None,
         }
 
 

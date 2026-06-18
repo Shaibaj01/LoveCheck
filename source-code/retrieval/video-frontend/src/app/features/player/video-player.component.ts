@@ -9,7 +9,7 @@ import {
   computed,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
@@ -24,12 +24,14 @@ import {
   parseStructuredObjects,
   segmentDisplayCaption,
 } from '../../shared/utils/query-highlight.util';
+import { VideoSummarizeDialogComponent } from '../explore/components/video-summarize-dialog.component';
 
 export interface VideoPlayerData {
   chunk?: ChunkSearchResult;
   video?: VideoSearchResult;
   query?: string;
   initialSeekSec?: number;
+  mode?: 'search' | 'explore';
 }
 
 @Component({
@@ -60,13 +62,24 @@ export interface VideoPlayerData {
         </button>
       </div>
 
-      @if (chunk()) {
+      @if (chunk() && isExplore()) {
+        <div class="explore-actions-bar">
+          <button mat-raised-button color="primary" class="summarize-btn" (click)="summarizeVideo()">
+            <mat-icon>auto_awesome</mat-icon>
+            Summarize Video
+          </button>
+        </div>
+      }
+
+      @if (chunk() && !isExplore()) {
         <div class="jump-bar">
           <button mat-stroked-button class="jump-btn" (click)="seekToBestMatch()">
             <mat-icon>my_location</mat-icon>
             Jump to moment · {{ formatTime(chunk()!.best_match_start_sec) }}
           </button>
-          <span class="jump-query">Searching: "{{ chunk()!.query }}"</span>
+          @if (chunk()!.query?.trim()) {
+            <span class="jump-query">Searching: "{{ chunk()!.query }}"</span>
+          }
         </div>
       }
 
@@ -108,7 +121,7 @@ export interface VideoPlayerData {
         <div class="moment-timeline">
           <div class="timeline-header">
             <mat-icon>timeline</mat-icon>
-            <span>Jump to moment</span>
+            <span>{{ isExplore() ? 'Segment timeline' : 'Jump to moment' }}</span>
             <span class="playhead">{{ formatTime(currentTime()) }} / {{ formatTime(chunk()!.chunk_duration_sec) }}</span>
           </div>
           <div class="timeline-track">
@@ -118,9 +131,9 @@ export interface VideoPlayerData {
                 class="timeline-seg"
                 [style.flex]="segmentFlex(seg)"
                 [class.active]="activeSegmentNumber() === seg.segment_number"
-                [class.search-match]="seg.is_search_match"
-                [class.query-hit]="seg.query_highlight"
-                [class.best-match]="seg.is_best_match"
+                [class.search-match]="!isExplore() && seg.is_search_match"
+                [class.query-hit]="!isExplore() && seg.query_highlight"
+                [class.best-match]="!isExplore() && seg.is_best_match"
                 (click)="seekToSegment(seg)"
                 [matTooltip]="segmentTooltip(seg)">
                 <span class="seg-num">{{ seg.segment_number }}</span>
@@ -139,10 +152,12 @@ export interface VideoPlayerData {
               (click)="seekToSegment(seg)">
               <div class="seg-time">
                 <span class="seg-range">{{ formatTime(seg.segment_start_sec) }}–{{ formatTime(seg.segment_end_sec) }}</span>
-                @if (seg.is_best_match) {
-                  <span class="best-pill">Best match</span>
-                } @else if (seg.query_highlight) {
-                  <span class="hit-pill">Query hit</span>
+                @if (!isExplore()) {
+                  @if (seg.is_best_match) {
+                    <span class="best-pill">Best match</span>
+                  } @else if (seg.query_highlight) {
+                    <span class="hit-pill">Query hit</span>
+                  }
                 }
               </div>
               <p class="seg-caption" [innerHTML]="highlightHtml(segmentDisplayCaption(seg))"></p>
@@ -153,7 +168,7 @@ export interface VideoPlayerData {
                   }
                 </div>
               }
-              @if (seg.is_search_match && seg.similarity_score > 0) {
+              @if (!isExplore() && seg.is_search_match && seg.similarity_score > 0) {
                 <span class="seg-score">{{ (seg.similarity_score * 100).toFixed(0) }}% relevance</span>
               }
             </button>
@@ -235,6 +250,20 @@ export interface VideoPlayerData {
     .jump-query {
       font-size: 0.78rem;
       color: var(--text-secondary);
+    }
+
+    .explore-actions-bar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0.55rem 1rem;
+      background: rgba(115, 200, 253, 0.08);
+      border-bottom: 1px solid rgba(115, 200, 253, 0.22);
+    }
+
+    .summarize-btn {
+      background: var(--button-bg-primary) !important;
+      color: var(--button-text) !important;
     }
 
     .video-section {
@@ -435,6 +464,7 @@ export class VideoPlayerComponent implements OnInit {
   private videoService = inject(VideoService);
   private sanitizer = inject(DomSanitizer);
   private dialogRef = inject(MatDialogRef<VideoPlayerComponent>);
+  private dialog = inject(MatDialog);
 
   @ViewChild('videoPlayer') videoPlayer?: ElementRef<HTMLVideoElement>;
 
@@ -445,6 +475,7 @@ export class VideoPlayerComponent implements OnInit {
   chunk = signal<ChunkSearchResult | null>(null);
   legacyVideo = signal<VideoSearchResult | null>(null);
   queryTerms = signal<string[]>([]);
+  mode = signal<'search' | 'explore'>('search');
   pendingSeekSec: number | null = null;
 
   title = computed(() => this.chunk()?.filename ?? this.legacyVideo()?.filename ?? 'Video');
@@ -466,6 +497,7 @@ export class VideoPlayerComponent implements OnInit {
   constructor(@Inject(MAT_DIALOG_DATA) public data: VideoPlayerData) {}
 
   ngOnInit() {
+    this.mode.set(this.data.mode ?? 'search');
     if (this.data.chunk) {
       this.chunk.set(this.data.chunk);
       this.queryTerms.set(extractHighlightTerms(this.data.query ?? this.data.chunk.query));
@@ -606,6 +638,22 @@ export class VideoPlayerComponent implements OnInit {
       this.legacyVideo.set({ ...v, source: newSource, segment_number: n });
     }
     this.loadVideo();
+  }
+
+  isExplore(): boolean {
+    return this.mode() === 'explore';
+  }
+
+  summarizeVideo() {
+    const c = this.chunk();
+    if (!c) return;
+    this.dialog.open(VideoSummarizeDialogComponent, {
+      width: '720px',
+      maxWidth: '95vw',
+      maxHeight: '90vh',
+      panelClass: 'video-summarize-dialog',
+      data: { chunk: c },
+    });
   }
 
   close() {

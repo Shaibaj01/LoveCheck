@@ -3,8 +3,9 @@ export interface KeyEventSuggestion {
   label: string;
   original_video: string;
   filename: string;
-  segment_start_sec: number;
+    segment_start_sec: number;
   segment_end_sec: number;
+  upload_timestamp?: string | null;
   generated_at?: string | null;
   batch_id?: string;
 }
@@ -16,4 +17,6 @@ export interface SuggestionsResponse {
   key_events: KeyEventSuggestion[];
   key_events_count?: number;
   table?: string;
+  prompts_table_available?: boolean;
+  table_message?: string | null;
 }

@@ -52,6 +52,10 @@ The system has two main parts:
 | **Custom AI Prompts** | Per-video custom prompts (max 800 chars) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
 | **Metadata Filters** | Filter by camera_id, location, capture_type | [ingest](source-code/ingest/README.md) |
 | **Advanced Search & AI Settings** | Max clip cards, LLM clips analyzed, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
+| **Explore mode** | Browse indexed uploads by day — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
+| **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
+| **Search suggestions & key events** | LLM-generated prompts from prompt-suggester → VastDB `vss2-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
+| **Agent APIs** | Tool wrappers + grounded Q&A for external agents | [video-backend](source-code/retrieval/video-backend/README.md#agent-apis) |
 | **Time Filtering** | Filter by upload time (presets or custom range) | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Video Streaming** | Capture YouTube videos to S3 | [video-streaming](source-code/video-streaming/README.md) |
 | **Batch Sync** | Copy MP4 files between S3 buckets | [video-batch-sync](source-code/video-batch-sync/README.md) |
@@ -64,7 +68,8 @@ The system has two main parts:
 | Component | Description |
 |-----------|-------------|
 | [video-backend](source-code/retrieval/video-backend/README.md) | REST API, authentication, search |
-| [video-frontend](source-code/retrieval/video-frontend/README.md) | Angular web UI |
+| [video-frontend](source-code/retrieval/video-frontend/README.md) | Angular web UI (Search, Explore, Dashboard) |
+| [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Scheduled LLM prompts + key events → VastDB |
 | [video-streaming](source-code/video-streaming/README.md) | YouTube capture service |
 | [video-batch-sync](source-code/video-batch-sync/README.md) | S3 batch copy service |
 | [video-segmenter](source-code/ingest/video-segmenter/README.md) | Splits videos into segments |
@@ -90,9 +95,19 @@ Upload Video → video-chunks bucket
             vastdb-writer (segment rows in VastDB)
                     ↓
               Search Ready
+                    ↓
+         prompt-suggester (optional enrichment)
+                    ↓
+         vss2-prompts-events (search prompts + key events)
 ```
 
 **Search flow:** query embed → hybrid caption+video search → group by upload (clip cards + timeline) → always-on LLM synthesis → jump-to-moment playback
+
+**Explore flow:** browse by upload date (scope: all / mine / public) → clip cards with metadata → open player or **Summarize Video** on demand (no query)
+
+**Dashboard flow:** VastDB KPIs + ingest quality + S3 vs index alignment → key events table (from prompt-suggester) with in-place segment preview
+
+**Agent flow:** `GET/POST /api/v1/tools/*` for VastDB/search/explore/synthesize → `POST /api/v1/agent/ask` or `/search-and-answer` for grounded answers
 
 Interactive diagram: open **Show Blueprint Diagram** in the app, or `source-code/retrieval/video-frontend/src/assets/blueprint.html`
 

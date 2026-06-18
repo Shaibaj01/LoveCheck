@@ -473,6 +473,51 @@
         </div>
       </section>
 
+      <!-- UI Modes -->
+      <section class="pipeline-section">
+        <div class="section-title"><span class="material-icons">apps</span> Web UI Modes</div>
+        <div class="section-subtitle"><span class="material-icons">info</span> Toolbar: Search · Explore · Dashboard · Refresh (reload current view)</div>
+        <div class="pipeline-flow">
+          <div class="component-box"><div class="component-icon"><span class="material-icons">search</span></div><div class="component-title">Search</div><div class="component-desc">Hybrid query → clip cards + timeline + LLM</div><div class="component-badge">/search</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">explore</span></div><div class="component-title">Explore</div><div class="component-desc">Browse by upload day; summarize on demand</div><div class="component-badge">/explore</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">dashboard</span></div><div class="component-title">Dashboard</div><div class="component-desc">VastDB stats, S3 health, key events</div><div class="component-badge">/dashboard</div></div>
+        </div>
+        <div class="section-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
+          <span class="material-icons">lightbulb</span>
+          Search suggestions &amp; dashboard key events come from <strong>prompt-suggester</strong> → <strong>vss2-prompts-events</strong> (scheduled DataEngine function)
+        </div>
+      </section>
+
+      <!-- Enrichment -->
+      <section class="pipeline-section">
+        <div class="section-title"><span class="material-icons">auto_fix_high</span> Enrichment Pipeline</div>
+        <div class="section-subtitle"><span class="material-icons">info</span> Scheduled LLM pass over recent VastDB segments → prompts table</div>
+        <div class="pipeline-flow">
+          <div class="component-box"><div class="component-icon"><span class="material-icons">grid_view</span></div><div class="component-title">VastDB</div><div class="component-desc">vss2-collection segments</div><div class="component-badge">Read</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">schedule</span></div><div class="component-title">Schedule Trigger</div><div class="component-desc">DataEngine cron</div><div class="component-badge">DataEngine</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Prompt Suggester</div><div class="component-desc">Search prompts + key events</div><div class="component-badge nim">Cosmos-Reason2</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">save</span></div><div class="component-title">vss2-prompts-events</div><div class="component-desc">UI suggestions API</div><div class="component-badge">VastDB</div></div>
+        </div>
+      </section>
+
+      <!-- Agent APIs -->
+      <section class="pipeline-section">
+        <div class="section-title"><span class="material-icons">smart_toy</span> Agent APIs</div>
+        <div class="section-subtitle"><span class="material-icons">info</span> REST tools for AgentEngine / external agents — same auth as UI</div>
+        <div class="pipeline-flow">
+          <div class="component-box"><div class="component-icon"><span class="material-icons">build</span></div><div class="component-title">/tools/*</div><div class="component-desc">segments, search, explore, synthesize</div><div class="component-badge">Tools</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">forum</span></div><div class="component-title">/agent/ask</div><div class="component-desc">Q&amp;A on video or global search</div><div class="component-badge">Agent</div></div>
+          <div class="arrow-right"></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">manage_search</span></div><div class="component-title">/agent/search-and-answer</div><div class="component-desc">Full search + chunk evidence</div><div class="component-badge">Agent</div></div>
+        </div>
+      </section>
+
     </div>
   </div>
   <script>

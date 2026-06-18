@@ -14,6 +14,7 @@ from src.services.s3_service import (
 )
 from src.services.vastdb_service import get_vastdb_service
 from src.config import get_settings
+from src.schemas.explore import ExploreResponse, VideoSynthesizeRequest, VideoSynthesizeResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/videos", tags=["Videos"])
@@ -305,6 +306,102 @@ async def get_playback_presigned_url(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate playback URL: {str(e)}",
         )
+
+
+CHUNK_SUMMARIZE_SYSTEM_PROMPT = """You are a video analyst summarizing ONE parent video chunk from segment evidence only.
+
+Output markdown with:
+**Overview** — 2–4 factual sentences covering the full clip in chronological order.
+
+**Timeline** — up to 8 bullets: `start–end sec` — what happened (use segment timestamps from evidence).
+
+Rules:
+- Use only facts from the provided segment evidence.
+- Do not invent people, actions, or times outside segment ranges.
+- No generic filler (urban setting, daylight, clear skies).
+- Stay under ~250 words unless the user question requires more detail."""
+
+
+@router.get("/explore", response_model=ExploreResponse)
+async def explore_videos(
+    current_user: CurrentUser,
+    scope: str = Query(default="all", pattern="^(all|mine|public)$"),
+    date: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload date (YYYY-MM-DD)",
+    ),
+    limit: int = Query(default=48, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Browse indexed video chunks by upload date without a search query."""
+    logger.info(
+        "Explore request from %s: scope=%s date=%s limit=%s offset=%s",
+        current_user.username,
+        scope,
+        date,
+        limit,
+        offset,
+    )
+    vastdb = get_vastdb_service()
+    payload = vastdb.list_explore_chunks(
+        current_user, scope=scope, date=date, limit=limit, offset=offset
+    )
+    return ExploreResponse(**payload)
+
+
+@router.post("/synthesize", response_model=VideoSynthesizeResponse)
+async def synthesize_video_chunk(
+    body: VideoSynthesizeRequest,
+    current_user: CurrentUser,
+):
+    """On-demand LLM synthesis over all segments for one parent video (no VastDB write)."""
+    from datetime import datetime, timezone
+
+    from src.services.llm_service import get_llm_service
+
+    logger.info(
+        "Synthesize request from %s: video='%s'",
+        current_user.username,
+        body.original_video,
+    )
+    vastdb = get_vastdb_service()
+    segments = vastdb.list_segments_for_video(body.original_video, current_user)
+    if not segments:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No accessible segments found for video: {body.original_video}",
+        )
+
+    capped = segments[: body.max_segments]
+    top_results = []
+    for seg in capped:
+        top_results.append({
+            "summary": seg.get("dense_caption") or seg.get("reasoning_content") or "",
+            "vlm_structured": seg.get("vlm_structured") or "",
+            "dense_caption": seg.get("dense_caption") or "",
+            "reasoning_content": seg.get("reasoning_content") or "",
+            "original_video": body.original_video,
+            "segment_number": seg.get("segment_number"),
+            "segment_start_sec": seg.get("segment_start_sec"),
+            "segment_end_sec": seg.get("segment_end_sec"),
+            "similarity_score": 1.0,
+        })
+
+    llm = get_llm_service()
+    synthesis = llm.synthesize_search_results(
+        query=body.question,
+        top_results=top_results,
+        custom_system_prompt=body.system_prompt or CHUNK_SUMMARIZE_SYSTEM_PROMPT,
+    )
+
+    return VideoSynthesizeResponse(
+        original_video=body.original_video,
+        segment_count=len(segments),
+        segments_used=len(capped),
+        answer=synthesis.get("response", ""),
+        llm_synthesis=synthesis,
+        generated_at=datetime.now(timezone.utc),
+    )
 
 
 @router.get("/metadata")

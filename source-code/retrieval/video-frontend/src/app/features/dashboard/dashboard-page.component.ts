@@ -1,15 +1,14 @@
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { Subscription, interval } from 'rxjs';
 import { DashboardService } from '../../shared/services/dashboard.service';
+import { PageRefreshService } from '../../shared/services/page-refresh.service';
 import { SuggestionsService } from '../../shared/services/suggestions.service';
 import {
   DashboardScope,
@@ -17,7 +16,13 @@ import {
   UploadDayItem,
 } from '../../shared/models/dashboard.model';
 import { KeyEventSuggestion } from '../../shared/models/suggestions.model';
+import { KeyEventSearchFloatComponent } from './components/key-event-search-float.component';
+import { ScopePillsComponent } from '../../shared/components/scope-pills.component';
 import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
+import {
+  friendlyVastDbAccessMessage,
+  resolveApiAccessWarning,
+} from '../../shared/utils/api-access.util';
 
 interface DashboardKpiCard {
   label: string;
@@ -31,14 +36,14 @@ interface DashboardKpiCard {
   standalone: true,
   imports: [
     CommonModule,
-    RouterLink,
     MatButtonModule,
     MatCardModule,
     MatIconModule,
     MatProgressSpinnerModule,
     MatSlideToggleModule,
     MatTooltipModule,
-    MatSnackBarModule,
+    KeyEventSearchFloatComponent,
+    ScopePillsComponent,
   ],
   template: `
     <div class="dashboard-page">
@@ -53,23 +58,11 @@ interface DashboardKpiCard {
       </header>
 
       <div class="toolbar-card">
-        <div class="scope-filter">
-          <span class="scope-label">Show data:</span>
-          <div class="scope-pills">
-            <button type="button" class="scope-pill" [class.active]="scope() === 'all'" (click)="setScope('all')">
-              <mat-icon>visibility</mat-icon>
-              <span>All visible</span>
-            </button>
-            <button type="button" class="scope-pill" [class.active]="scope() === 'mine'" (click)="setScope('mine')">
-              <mat-icon>person</mat-icon>
-              <span>My uploads</span>
-            </button>
-            <button type="button" class="scope-pill" [class.active]="scope() === 'public'" (click)="setScope('public')">
-              <mat-icon>public</mat-icon>
-              <span>Public only</span>
-            </button>
-          </div>
-        </div>
+        <app-scope-pills
+          label="Show data:"
+          [scope]="scope()"
+          (scopeChange)="setScope($event)">
+        </app-scope-pills>
         <div class="toolbar-actions">
           <mat-slide-toggle class="dash-toggle" [checked]="autoRefresh()" (change)="toggleAutoRefresh($event.checked)">
             Auto-refresh (30s)
@@ -78,21 +71,20 @@ interface DashboardKpiCard {
             <mat-icon>refresh</mat-icon>
             Refresh
           </button>
-          <a mat-stroked-button class="dash-btn" routerLink="/search">
-            <mat-icon>search</mat-icon>
-            Search
-          </a>
         </div>
       </div>
 
-      @if (error()) {
-        <div class="error-banner">
-          <mat-icon>error_outline</mat-icon>
-          <span>{{ error() }}</span>
+      @if (accessWarning() && !stats()) {
+        <div class="access-warn-panel">
+          <mat-icon>warning_amber</mat-icon>
+          <div>
+            <p>{{ accessWarning() }}</p>
+            <span class="access-hint">Upload a video or confirm <code>vss2-collection</code> exists in VastDB.</span>
+          </div>
         </div>
       }
 
-      @if (stats()?.table_message && !error()) {
+      @if (stats()?.table_message) {
         <div class="info-banner" [class.warn]="!stats()?.table_available">
           <mat-icon>{{ stats()?.table_available ? 'info' : 'warning_amber' }}</mat-icon>
           <span>{{ stats()!.table_message }}</span>
@@ -121,6 +113,7 @@ interface DashboardKpiCard {
           <span class="meta-chip"><mat-icon>speed</mat-icon>{{ data.query_time_ms.toFixed(0) }} ms</span>
         </div>
 
+        @if (data.table_available) {
         <section class="kpi-grid">
           @for (card of kpiCards(data); track card.label) {
             <mat-card class="kpi-card" [class.warn]="card.warn">
@@ -132,8 +125,15 @@ interface DashboardKpiCard {
             </mat-card>
           }
         </section>
+        }
 
-        @if (data.s3_inventory) {
+        @if (data.s3_inventory && data.table_available) {
+          @if (data.s3_inventory.errors) {
+            <div class="info-banner warn">
+              <mat-icon>warning_amber</mat-icon>
+              <span>Could not read some S3 buckets: {{ formatS3Errors(data.s3_inventory.errors) }}</span>
+            </div>
+          }
           <mat-card class="panel pipeline-panel">
             <mat-card-header>
               <mat-card-title>S3 pipeline inventory</mat-card-title>
@@ -172,6 +172,7 @@ interface DashboardKpiCard {
           </mat-card>
         }
 
+        @if (data.table_available) {
         <section class="panel-grid">
           <mat-card class="panel">
             <mat-card-header>
@@ -270,12 +271,13 @@ interface DashboardKpiCard {
             </mat-card-content>
           </mat-card>
         </section>
+        }
 
         <mat-card class="panel key-events-panel">
           <mat-card-header>
             <mat-card-title>Key events</mat-card-title>
             <mat-card-subtitle>
-              {{ keyEvents().length }} events — click to copy query
+              {{ keyEvents().length }} events — search icon opens the event clip
               @if (suggestionsGeneratedAt()) {
                 · updated {{ formatRelativeTime(suggestionsGeneratedAt()) }}
               }
@@ -286,20 +288,25 @@ interface DashboardKpiCard {
               <table class="data-table key-events-table">
                 <thead>
                   <tr>
+                    <th class="col-action"></th>
                     <th>Event</th>
-                    <th>Time</th>
+                    <th>Uploaded</th>
                     <th>Video</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (ev of keyEvents(); track eventTrackKey(ev)) {
-                    <tr
-                      class="key-event-row"
-                      tabindex="0"
-                      role="button"
-                      (click)="copyKeyEvent(ev)"
-                      (keydown.enter)="copyKeyEvent(ev)"
-                      [matTooltip]="'Copy: ' + ev.query_text">
+                    <tr class="key-event-row">
+                      <td class="col-action">
+                        <button
+                          type="button"
+                          class="event-search-btn"
+                          (click)="searchKeyEvent(ev)"
+                          [matTooltip]="'Search & preview: ' + ev.query_text"
+                          aria-label="Search this event">
+                          <mat-icon>search</mat-icon>
+                        </button>
+                      </td>
                       <td class="col-event">
                         <mat-icon class="row-icon">bolt</mat-icon>
                         <div class="event-text">
@@ -309,8 +316,8 @@ interface DashboardKpiCard {
                           }
                         </div>
                       </td>
-                      <td class="col-time">
-                        {{ formatEventTime(ev.segment_start_sec) }} – {{ formatEventTime(ev.segment_end_sec) }}
+                      <td class="col-time" [matTooltip]="formatTimestamp(ev.upload_timestamp)">
+                        {{ formatKeyEventUploaded(ev) }}
                       </td>
                       <td class="col-muted" [matTooltip]="ev.filename || ev.original_video">
                         {{ truncate(ev.filename || ev.original_video, 32) }}
@@ -319,6 +326,16 @@ interface DashboardKpiCard {
                   }
                 </tbody>
               </table>
+            } @else if (keyEventsAccessWarning()) {
+              <p class="empty-panel access-hint-warn">
+                <mat-icon>warning_amber</mat-icon>
+                {{ keyEventsAccessWarning() }}
+              </p>
+            } @else if (promptsTableAvailable() === false) {
+              <p class="empty-panel access-hint-warn">
+                <mat-icon>warning_amber</mat-icon>
+                {{ promptsTableMessage() || 'Could not read prompts table. Check backend logs and VastDB access.' }}
+              </p>
             } @else {
               <p class="empty-panel">
                 No key events yet. Run the prompt-suggester scheduled function after segments are indexed.
@@ -327,6 +344,7 @@ interface DashboardKpiCard {
           </mat-card-content>
         </mat-card>
 
+        @if (data.table_available) {
         <mat-card class="panel recent-panel">
           <mat-card-header>
             <mat-card-title>Recent videos in index</mat-card-title>
@@ -390,8 +408,14 @@ interface DashboardKpiCard {
             }
           </mat-card-content>
         </mat-card>
+        }
       }
     </div>
+
+    <app-key-event-search-float
+      [event]="activeKeyEvent()"
+      (closed)="onKeyEventFloatClosed()">
+    </app-key-event-search-float>
   `,
   styles: [`
     .dashboard-page {
@@ -435,63 +459,6 @@ interface DashboardKpiCard {
       background: var(--bg-card);
       border: 1px solid var(--border-color);
       border-radius: 12px;
-    }
-
-    .scope-filter {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-
-    .scope-label {
-      color: var(--text-secondary);
-      font-size: 0.9rem;
-      font-weight: 500;
-    }
-
-    .scope-pills {
-      display: flex;
-      gap: 0.35rem;
-      background: var(--bg-secondary);
-      padding: 0.25rem;
-      border-radius: 12px;
-      border: 1px solid var(--border-color);
-    }
-
-    .scope-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.55rem 1rem;
-      background: transparent;
-      border: none;
-      border-radius: 10px;
-      color: var(--text-secondary);
-      font-size: 0.875rem;
-      font-weight: 500;
-      font-family: inherit;
-      cursor: pointer;
-      transition: all 0.2s ease;
-
-      mat-icon {
-        font-size: 1.1rem;
-        width: 1.1rem;
-        height: 1.1rem;
-      }
-
-      &:hover:not(.active) {
-        background: var(--bg-card-hover);
-        color: var(--text-primary);
-      }
-
-      &.active {
-        background: var(--accent-primary);
-        color: var(--color-blue-1000);
-        box-shadow: var(--shadow);
-
-        mat-icon { color: var(--color-blue-1000); }
-      }
     }
 
     .toolbar-actions {
@@ -933,13 +900,43 @@ interface DashboardKpiCard {
     }
 
     .key-events-table .key-event-row {
-      cursor: pointer;
       transition: background 0.15s ease;
+    }
 
-      &:hover,
-      &:focus-visible {
-        background: var(--bg-card-hover);
-        outline: none;
+    .col-action {
+      width: 3rem;
+      padding-right: 0.25rem !important;
+    }
+
+    .event-search-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--accent-primary);
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+
+      mat-icon {
+        font-size: 1.1rem;
+        width: 1.1rem;
+        height: 1.1rem;
+        pointer-events: none;
+      }
+
+      &:hover {
+        background: rgba(115, 200, 253, 0.15);
+        border-color: var(--accent-primary);
+        transform: translateY(-1px);
+      }
+
+      &:active {
+        transform: translateY(0);
       }
     }
 
@@ -974,7 +971,7 @@ interface DashboardKpiCard {
       font-size: 0.85rem;
     }
 
-    .loading-state, .error-banner {
+    .loading-state {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -983,14 +980,51 @@ interface DashboardKpiCard {
       color: var(--text-secondary);
     }
 
-    .error-banner {
-      justify-content: flex-start;
+    .access-warn-panel {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
       margin-bottom: 1rem;
-      padding: 0.75rem 1rem;
-      border: 1px solid rgba(232, 111, 111, 0.4);
-      border-radius: 8px;
-      background: rgba(232, 111, 111, 0.08);
-      color: #f4a5a5;
+      padding: 1rem 1.15rem;
+      border: 1px solid rgba(232, 175, 111, 0.45);
+      border-radius: 12px;
+      background: rgba(232, 175, 111, 0.1);
+      color: var(--text-secondary);
+
+      mat-icon {
+        color: var(--accent-warning, #e8af6f);
+        flex-shrink: 0;
+      }
+
+      p {
+        margin: 0 0 0.35rem;
+        color: var(--text-primary);
+        font-weight: 500;
+      }
+
+      .access-hint {
+        font-size: 0.88rem;
+        color: var(--text-muted);
+
+        code {
+          color: var(--accent-primary);
+          font-size: 0.82rem;
+        }
+      }
+    }
+
+    .access-hint-warn {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      color: var(--accent-warning, #e8af6f);
+
+      mat-icon {
+        font-size: 1.1rem;
+        width: 1.1rem;
+        height: 1.1rem;
+        flex-shrink: 0;
+      }
     }
 
     .info-banner {
@@ -1024,15 +1058,19 @@ interface DashboardKpiCard {
 export class DashboardPageComponent implements OnInit, OnDestroy {
   private dashboardService = inject(DashboardService);
   private suggestionsService = inject(SuggestionsService);
-  private snackBar = inject(MatSnackBar);
+  private pageRefresh = inject(PageRefreshService);
 
   stats = signal<DashboardStatsResponse | null>(null);
   loading = signal(false);
-  error = signal<string | null>(null);
+  accessWarning = signal<string | null>(null);
+  keyEventsAccessWarning = signal<string | null>(null);
   scope = signal<DashboardScope>('all');
   autoRefresh = signal(true);
   keyEvents = signal<KeyEventSuggestion[]>([]);
+  activeKeyEvent = signal<KeyEventSuggestion | null>(null);
   suggestionsGeneratedAt = signal<string | null>(null);
+  promptsTableAvailable = signal<boolean | null>(null);
+  promptsTableMessage = signal<string | null>(null);
 
   metadataFields = [
     { key: 'camera_id', label: 'Camera ID' },
@@ -1041,6 +1079,7 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   ];
 
   private refreshSub?: Subscription;
+  private pageRefreshSub?: Subscription;
   private keyEventsSub?: Subscription;
   private static readonly KEY_EVENTS_POLL_MS = 300_000;
 
@@ -1055,11 +1094,18 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     this.keyEventsSub = interval(DashboardPageComponent.KEY_EVENTS_POLL_MS).subscribe(() => {
       this.loadKeyEvents(true);
     });
+    this.pageRefreshSub = this.pageRefresh.refresh$.subscribe(() => this.reloadView());
   }
 
   ngOnDestroy() {
     this.refreshSub?.unsubscribe();
+    this.pageRefreshSub?.unsubscribe();
     this.keyEventsSub?.unsubscribe();
+  }
+
+  private reloadView() {
+    this.loadStats();
+    this.loadKeyEvents();
   }
 
   setScope(scope: DashboardScope) {
@@ -1074,35 +1120,49 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   loadStats(silent = false) {
     if (!silent) {
       this.loading.set(true);
-      this.error.set(null);
+      this.accessWarning.set(null);
     }
     this.dashboardService.getStats(this.scope()).subscribe({
       next: (data) => {
         this.stats.set(data);
         this.loading.set(false);
+        if (data.table_available === false) {
+          this.accessWarning.set(null);
+        }
       },
       error: (err) => {
-        this.error.set(err?.error?.detail || err?.message || 'Failed to load dashboard');
+        this.accessWarning.set(resolveApiAccessWarning(err, 'dashboard'));
+        this.stats.set(null);
         this.loading.set(false);
       },
     });
   }
 
   loadKeyEvents(silent = false) {
+    if (!silent) {
+      this.keyEventsAccessWarning.set(null);
+    }
     this.suggestionsService.getSuggestions().subscribe({
       next: (data) => {
         const events = data.key_events ?? [];
         const genAt = data.generated_at ?? null;
+        this.promptsTableAvailable.set(data.prompts_table_available ?? true);
+        this.promptsTableMessage.set(data.table_message ?? null);
+        if (data.prompts_table_available === false) {
+          this.keyEvents.set([]);
+          this.keyEventsAccessWarning.set(null);
+          return;
+        }
         if (silent && genAt === this.suggestionsGeneratedAt()) {
           return;
         }
         this.keyEvents.set(events);
         this.suggestionsGeneratedAt.set(genAt);
+        this.keyEventsAccessWarning.set(null);
       },
-      error: () => {
-        if (!silent) {
-          this.keyEvents.set([]);
-        }
+      error: (err) => {
+        this.keyEvents.set([]);
+        this.keyEventsAccessWarning.set(resolveApiAccessWarning(err, 'suggestions'));
       },
     });
   }
@@ -1129,17 +1189,13 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     return '';
   }
 
-  copyKeyEvent(ev: KeyEventSuggestion) {
-    const text = ev.query_text?.trim();
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(
-      () => {
-        this.snackBar.open('Search query copied', 'Close', { duration: 2500 });
-      },
-      () => {
-        this.snackBar.open('Could not copy to clipboard', 'Close', { duration: 3000 });
-      },
-    );
+  searchKeyEvent(ev: KeyEventSuggestion) {
+    this.activeKeyEvent.set(null);
+    queueMicrotask(() => this.activeKeyEvent.set({ ...ev }));
+  }
+
+  onKeyEventFloatClosed() {
+    this.activeKeyEvent.set(null);
   }
 
   formatEventTime(sec: number): string {
@@ -1147,6 +1203,13 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  formatKeyEventUploaded(ev: KeyEventSuggestion): string {
+    if (ev.upload_timestamp) {
+      return formatAbsoluteTime(ev.upload_timestamp);
+    }
+    return '—';
   }
 
   kpiCards(data: DashboardStatsResponse): DashboardKpiCard[] {
@@ -1168,7 +1231,7 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
         warn: (o.re_ingest_rows ?? o.duplicate_segment_rows) > 0,
       },
     ];
-    if (s3) {
+    if (s3 && data.table_available) {
       cards.splice(
         2,
         0,
@@ -1189,6 +1252,12 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
 
   formatCount(value?: number | null): string | number {
     return value == null ? '—' : value;
+  }
+
+  formatS3Errors(errors: Record<string, string>): string {
+    return Object.entries(errors)
+      .map(([bucket, msg]) => `${bucket}: ${msg}`)
+      .join('; ');
   }
 
   barWidth(day: UploadDayItem, all: UploadDayItem[]): number {

@@ -14,7 +14,7 @@ router = APIRouter(prefix="/suggestions", tags=["Suggestions"])
 async def get_suggestions(current_user: CurrentUser):
     """Latest batch of search prompts + key events for UI."""
     try:
-        return get_suggestions_service().get_suggestions()
+        return get_suggestions_service().get_suggestions(current_user)
     except Exception as exc:
         logger.error("[SUGGESTIONS] %s", exc, exc_info=True)
         raise HTTPException(

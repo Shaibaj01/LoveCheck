@@ -55,13 +55,24 @@ import {
         <div class="play-overlay" [class.hidden]="isPlaying">
           <mat-icon>play_circle_filled</mat-icon>
         </div>
-        <div class="jump-badge">
-          <mat-icon>my_location</mat-icon>
-          Jump to {{ formatTime(chunk.best_match_start_sec) }}
+        <div class="jump-badge" [class.explore-start]="mode === 'explore'">
+          <mat-icon>{{ mode === 'explore' ? 'play_arrow' : 'my_location' }}</mat-icon>
+          @if (mode === 'explore') {
+            Play from start
+          } @else {
+            Jump to {{ formatTime(chunk.best_match_start_sec) }}
+          }
         </div>
-        <div class="score-badge">
-          {{ (chunk.similarity_score * 100).toFixed(0) }}% match
-        </div>
+        @if (mode === 'search') {
+          <div class="score-badge">
+            {{ (chunk.similarity_score * 100).toFixed(0) }}% match
+          </div>
+        } @else {
+          <div class="upload-badge">
+            <mat-icon>schedule</mat-icon>
+            {{ formatUploadDate(chunk.upload_timestamp) }}
+          </div>
+        }
       </div>
 
       <mat-card-content>
@@ -70,15 +81,24 @@ import {
           <span class="duration-chip">{{ formatTime(chunk.chunk_duration_sec) }}</span>
         </div>
 
-        <p class="match-line">
-          Best moment
-          <strong>{{ formatTime(chunk.best_match_start_sec) }}–{{ formatTime(chunk.best_match_end_sec) }}</strong>
-          · segment {{ chunk.best_segment_number }}/{{ chunk.total_segments }}
-          @if (chunk.matched_segment_count > 1) {
-            <span class="multi-hit">· {{ chunk.matched_segment_count }} hits</span>
-          }
-        </p>
+        @if (mode === 'search') {
+          <p class="match-line">
+            Best moment
+            <strong>{{ formatTime(chunk.best_match_start_sec) }}–{{ formatTime(chunk.best_match_end_sec) }}</strong>
+            · segment {{ chunk.best_segment_number }}/{{ chunk.total_segments }}
+            @if (chunk.matched_segment_count > 1) {
+              <span class="multi-hit">· {{ chunk.matched_segment_count }} hits</span>
+            }
+          </p>
+        } @else {
+          <p class="match-line explore-line">
+            <mat-icon>movie</mat-icon>
+            {{ chunk.total_segments }} segment{{ chunk.total_segments === 1 ? '' : 's' }}
+            · {{ formatTime(chunk.chunk_duration_sec) }} total
+          </p>
+        }
 
+        @if (mode === 'search') {
         <div class="timeline-section">
           <div class="timeline-label">
             <mat-icon>timeline</mat-icon>
@@ -107,6 +127,7 @@ import {
             <span class="legend-item"><span class="dot hit"></span> Query / match</span>
           </div>
         </div>
+        }
 
         <div class="reasoning-content">
           <mat-icon class="reasoning-icon">psychology</mat-icon>
@@ -123,6 +144,9 @@ import {
           @if (chunk.camera_id?.trim()) {
             <span class="metadata-item"><mat-icon>videocam</mat-icon>{{ chunk.camera_id }}</span>
           }
+          @if (chunk.capture_type?.trim()) {
+            <span class="metadata-item"><mat-icon>category</mat-icon>{{ chunk.capture_type }}</span>
+          }
           @if (chunk.location?.trim()) {
             <span class="metadata-item"><mat-icon>location_on</mat-icon>{{ chunk.location }}</span>
           }
@@ -132,10 +156,24 @@ import {
           </span>
         </div>
 
+        @if (chunk.tags?.length) {
+          <div class="tag-chips">
+            @for (tag of chunk.tags; track tag) {
+              <span class="tag-chip">{{ tag }}</span>
+            }
+          </div>
+        }
+
         <button mat-stroked-button class="open-btn" (click)="onOpen($event)">
           <mat-icon>play_arrow</mat-icon>
           Open with timeline
         </button>
+        @if (mode === 'explore') {
+          <button mat-raised-button color="primary" class="summarize-btn" (click)="onSummarize($event)">
+            <mat-icon>auto_awesome</mat-icon>
+            Summarize Video
+          </button>
+        }
       </mat-card-content>
     </mat-card>
   `,
@@ -210,6 +248,34 @@ import {
       }
     }
 
+    .jump-badge.explore-start {
+      background: rgba(115, 200, 253, 0.92);
+      color: #0e1a35;
+      box-shadow: 0 2px 12px rgba(115, 200, 253, 0.45);
+    }
+
+    .upload-badge {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.3rem 0.55rem;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #a5f3fc;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border: 1px solid rgba(115, 200, 253, 0.35);
+
+      mat-icon {
+        font-size: 0.9rem;
+        width: 0.9rem;
+        height: 0.9rem;
+      }
+    }
+
     .score-badge {
       position: absolute;
       top: 10px;
@@ -259,6 +325,19 @@ import {
 
       strong { color: #22c55e; }
       .multi-hit { color: var(--text-muted); }
+
+      &.explore-line {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+
+        mat-icon {
+          font-size: 1rem;
+          width: 1rem;
+          height: 1rem;
+          color: var(--accent-primary);
+        }
+      }
     }
 
     .timeline-section {
@@ -430,10 +509,33 @@ import {
       }
     }
 
+    .tag-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .tag-chip {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background: rgba(115, 200, 253, 0.12);
+      border: 1px solid rgba(115, 200, 253, 0.35);
+      color: var(--accent-primary);
+    }
+
     .open-btn {
       width: 100%;
       border-color: rgba(34, 197, 94, 0.45) !important;
       color: #22c55e !important;
+      margin-bottom: 0.5rem;
+    }
+
+    .summarize-btn {
+      width: 100%;
+      background: var(--button-bg-primary) !important;
+      color: var(--button-text) !important;
     }
   `],
 })
@@ -442,8 +544,10 @@ export class ChunkCardComponent implements OnChanges {
   private sanitizer = inject(DomSanitizer);
 
   @Input({ required: true }) chunk!: ChunkSearchResult;
+  @Input() mode: 'search' | 'explore' = 'search';
   @Output() open = new EventEmitter<ChunkSearchResult>();
   @Output() jumpTo = new EventEmitter<{ chunk: ChunkSearchResult; seekSec: number }>();
+  @Output() summarize = new EventEmitter<ChunkSearchResult>();
 
   @ViewChild('videoElement') videoElement?: ElementRef<HTMLVideoElement>;
 
@@ -472,6 +576,24 @@ export class ChunkCardComponent implements OnChanges {
   onOpen(event?: Event) {
     event?.stopPropagation();
     this.open.emit(this.chunk);
+  }
+
+  onSummarize(event: Event) {
+    event.stopPropagation();
+    this.summarize.emit(this.chunk);
+  }
+
+  formatUploadDate(ts: string): string {
+    if (!ts) return '';
+    try {
+      return new Date(ts).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    } catch {
+      return ts.slice(0, 10);
+    }
   }
 
   onSegmentClick(event: Event, seekSec: number) {

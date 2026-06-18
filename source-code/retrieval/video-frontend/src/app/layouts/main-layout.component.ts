@@ -1,5 +1,5 @@
 import { Component, inject, ViewChild, signal, OnInit, OnDestroy } from '@angular/core';
-import { RouterOutlet, Router, RouterLink, RouterLinkActive } from '@angular/router';
+import { RouterOutlet, Router } from '@angular/router';
 import { AuthService } from '../features/auth/services/auth.service';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
@@ -18,13 +18,14 @@ import { AdvancedLLMSettingsDialogComponent } from '../features/settings/advance
 import { BatchSyncService } from '../shared/services/batch-sync.service';
 import { StreamingService } from '../shared/services/streaming.service';
 import { ThemeService } from '../shared/services/theme.service';
+import { PageRefreshService } from '../shared/services/page-refresh.service';
 import { interval } from 'rxjs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
 @Component({
   selector: 'app-main-layout',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatMenuModule, MatDividerModule, MatTooltipModule, ConfigPopoverComponent],
+  imports: [RouterOutlet, CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatMenuModule, MatDividerModule, MatTooltipModule, ConfigPopoverComponent],
   template: `
     <mat-toolbar class="app-toolbar">
       <img src="assets/vast_logo.svg" alt="VAST" class="logo">
@@ -34,14 +35,38 @@ import { MatTooltipModule } from '@angular/material/tooltip';
       </div>
       <span class="spacer"></span>
       <nav class="main-nav">
-        <a mat-stroked-button routerLink="/search" routerLinkActive="active-nav">
-          <mat-icon>search</mat-icon>
-          Search
-        </a>
-        <a mat-stroked-button routerLink="/dashboard" routerLinkActive="active-nav">
-          <mat-icon>dashboard</mat-icon>
-          Dashboard
-        </a>
+        <div class="nav-pills">
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/search')"
+                  (click)="onNavClick('/search')">
+            <mat-icon>search</mat-icon>
+            <span>Search</span>
+          </button>
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/explore')"
+                  (click)="onNavClick('/explore')">
+            <mat-icon>explore</mat-icon>
+            <span>Explore</span>
+          </button>
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/dashboard')"
+                  (click)="onNavClick('/dashboard')">
+            <mat-icon>dashboard</mat-icon>
+            <span>Dashboard</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          class="nav-refresh-btn"
+          matTooltip="Refresh current view"
+          aria-label="Refresh current view"
+          (click)="refreshCurrentView()">
+          <mat-icon>refresh</mat-icon>
+          <span>Refresh</span>
+        </button>
       </nav>
       <span class="spacer nav-spacer"></span>
       <div class="user-info">
@@ -145,9 +170,13 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         -ms-user-select: none !important;
       }
       
-      // Override for logout button only
+      // Override for interactive toolbar controls
       .logout-button,
-      .logout-button * {
+      .logout-button *,
+      .nav-pill,
+      .nav-pill *,
+      .nav-refresh-btn,
+      .nav-refresh-btn * {
         cursor: pointer !important;
         user-select: none !important;
       }
@@ -215,20 +244,112 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 
     .main-nav {
       display: flex;
-      gap: 0.5rem;
       align-items: center;
+      gap: 0.5rem;
+    }
 
-      a {
+    .nav-pills {
+      display: flex;
+      gap: 0.5rem;
+      background: var(--bg-secondary);
+      padding: 0.25rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .nav-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.55rem 1.15rem;
+      background: transparent;
+      border: none;
+      border-radius: 10px;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      font-family: 'Roboto', sans-serif;
+      cursor: pointer !important;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+      mat-icon,
+      span {
+        font-size: 1.2rem;
+        width: 1.2rem;
+        height: 1.2rem;
         cursor: pointer !important;
-        color: var(--text-primary) !important;
-        border-color: var(--border-color) !important;
-        height: 38px;
+        pointer-events: none;
       }
 
-      a.active-nav {
-        border-color: var(--accent-primary) !important;
-        color: var(--accent-primary) !important;
-        background: rgba(0, 206, 209, 0.12) !important;
+      span {
+        width: auto;
+        height: auto;
+        font-size: 0.9rem;
+      }
+
+      &:hover:not(.active) {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+      }
+
+      &.active {
+        background: var(--color-lightblue-400);
+        color: var(--color-blue-1000);
+        box-shadow: var(--shadow);
+
+        mat-icon {
+          color: var(--color-blue-1000);
+        }
+      }
+    }
+
+    .nav-refresh-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      height: 40px;
+      padding: 0 0.9rem 0 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      font-family: 'Roboto', sans-serif;
+      cursor: pointer !important;
+      transition: all 0.25s ease;
+      flex-shrink: 0;
+
+      mat-icon {
+        font-size: 1.25rem;
+        width: 1.25rem;
+        height: 1.25rem;
+        cursor: pointer !important;
+        pointer-events: none;
+        transition: transform 0.35s ease;
+      }
+
+      span {
+        cursor: pointer !important;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      &:hover {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        border-color: var(--border-hover);
+        transform: translateY(-1px);
+
+        mat-icon {
+          transform: rotate(180deg);
+        }
+      }
+
+      &:active mat-icon {
+        transform: rotate(360deg);
       }
     }
 
@@ -454,6 +575,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   streamingService = inject(StreamingService);
   themeService = inject(ThemeService);
   router = inject(Router);
+  pageRefresh = inject(PageRefreshService);
   
   @ViewChild('configPopover') configPopover!: ConfigPopoverComponent;
 
@@ -611,6 +733,23 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
     // Switch to dark mode before logout to ensure login screen displays correctly
     this.themeService.setTheme('dark');
     this.authService.logout();
+  }
+
+  isNavActive(path: string): boolean {
+    const current = this.router.url.split('?')[0].replace(/\/$/, '') || '/';
+    const target = path.replace(/\/$/, '') || '/';
+    return current === target;
+  }
+
+  onNavClick(path: string): void {
+    if (this.isNavActive(path)) {
+      return;
+    }
+    void this.router.navigateByUrl(path);
+  }
+
+  refreshCurrentView(): void {
+    this.pageRefresh.requestRefresh();
   }
 }
 

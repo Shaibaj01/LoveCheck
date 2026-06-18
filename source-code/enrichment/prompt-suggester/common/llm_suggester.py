@@ -38,7 +38,8 @@ Goals:
    - SKIP idle parked vehicles, mannequins, generic pedestrians unless tied to action/hazard.
    - Prefer: conflicts, blocking, deliveries, jaywalking, construction hazards, brands/signs, near-misses.
    - label: 3–8 word headline, Title Case, MUST differ from query_text.
-   - query_text: one rich search sentence (action + who/what + where + detail).
+   - query_text: SHORT search phrase only — max 6 words, like search_prompts (who/what + action).
+     NOT a full caption. No filler about daylight, urban setting, or buildings.
 
 Keep JSON compact. No markdown. Close all brackets.
 Schema:
@@ -155,11 +156,79 @@ def _new_batch_id() -> str:
 
 
 def _normalize_key_event(ev: KeyEventSuggestion) -> KeyEventSuggestion:
-    q = ev.query_text.strip()
+    from .event_dedupe import normalize_search_prompt
+
+    q = normalize_search_prompt(ev.query_text.strip(), max_words=8) or ev.query_text.strip()[:80]
     lbl = (ev.label or "").strip()
     if not lbl or lbl.lower() == q.lower():
         lbl = ""
-    return ev.model_copy(update={"query_text": q, "label": lbl})
+    if len(lbl) > 80:
+        lbl = " ".join(lbl.split()[:8])
+    return ev.model_copy(
+        update={
+            "query_text": q,
+            "label": lbl,
+            "original_video": (ev.original_video or "").strip(),
+            "filename": (ev.filename or "").strip(),
+        }
+    )
+
+
+def _enrich_events_from_segments(
+    events: List[Dict[str, Any]],
+    segments: List[dict],
+) -> List[Dict[str, Any]]:
+    """Attach original_video/filename from corpus when the LLM omits them."""
+    from .event_dedupe import similar_text
+
+    enriched: List[Dict[str, Any]] = []
+    for ev in events:
+        ov = str(ev.get("original_video") or "").strip()
+        if ov:
+            if not str(ev.get("filename") or "").strip():
+                for seg in segments:
+                    seg_ov, seg_fn = _video_meta(seg)
+                    if seg_ov == ov:
+                        ev = {**ev, "filename": seg_fn}
+                        break
+            enriched.append(ev)
+            continue
+
+        needle = str(ev.get("label") or ev.get("query_text") or "").strip()
+        if not needle:
+            continue
+        start = float(ev.get("segment_start_sec") or 0)
+        best_seg: Optional[dict] = None
+        best_score = 0.0
+        for seg in segments:
+            seg_start = float(seg.get("segment_start_sec") or 0)
+            if abs(seg_start - start) > 10:
+                continue
+            cap = str(seg.get("dense_caption") or seg.get("reasoning_content") or "")
+            if similar_text(needle, cap, threshold=0.28):
+                score = len(_tokens_overlap(needle, cap))
+                if score > best_score:
+                    best_score = score
+                    best_seg = seg
+        if not best_seg:
+            logger.warning("[SUGGEST] Dropping key_event without video: %s", needle[:72])
+            continue
+        seg_ov, seg_fn = _video_meta(best_seg)
+        enriched.append({
+            **ev,
+            "original_video": seg_ov,
+            "filename": seg_fn,
+            "segment_start_sec": float(best_seg.get("segment_start_sec") or start),
+            "segment_end_sec": float(
+                best_seg.get("segment_end_sec") or float(best_seg.get("segment_start_sec") or start) + 5
+            ),
+        })
+    return enriched
+
+
+def _tokens_overlap(a: str, b: str) -> set:
+    from .event_dedupe import _tokens
+    return _tokens(a) & _tokens(b)
 
 
 def generate_suggestions(
@@ -232,6 +301,7 @@ def generate_suggestions(
         normalized = _normalize_key_event(KeyEventSuggestion.model_validate(ev))
         llm_events.append(normalized.model_dump())
 
+    llm_events = _enrich_events_from_segments(llm_events, segments)
     events = dedupe_key_events(llm_events)
     events.sort(
         key=lambda e: (
