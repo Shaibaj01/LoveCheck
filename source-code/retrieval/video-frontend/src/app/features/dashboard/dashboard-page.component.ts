@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -23,6 +23,7 @@ import {
   friendlyVastDbAccessMessage,
   resolveApiAccessWarning,
 } from '../../shared/utils/api-access.util';
+import { IngestMetadataService } from '../../shared/services/ingest-metadata.service';
 
 interface DashboardKpiCard {
   label: string;
@@ -253,7 +254,7 @@ interface DashboardKpiCard {
               <mat-card-subtitle>camera_id · capture_type · location</mat-card-subtitle>
             </mat-card-header>
             <mat-card-content class="metadata-columns">
-              @for (field of metadataFields; track field.key) {
+              @for (field of metadataFields(); track field.key) {
                 <div class="metadata-block">
                   <h3>{{ field.label }}</h3>
                   @if (data.metadata[field.key]?.length) {
@@ -1057,6 +1058,7 @@ interface DashboardKpiCard {
 })
 export class DashboardPageComponent implements OnInit, OnDestroy {
   private dashboardService = inject(DashboardService);
+  private metadataService = inject(IngestMetadataService);
   private suggestionsService = inject(SuggestionsService);
   private pageRefresh = inject(PageRefreshService);
 
@@ -1072,11 +1074,9 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   promptsTableAvailable = signal<boolean | null>(null);
   promptsTableMessage = signal<string | null>(null);
 
-  metadataFields = [
-    { key: 'camera_id', label: 'Camera ID' },
-    { key: 'capture_type', label: 'Capture Type' },
-    { key: 'location', label: 'Location' },
-  ];
+  metadataFields = computed(
+    () => this.metadataService.config()?.filterable_fields ?? []
+  );
 
   private refreshSub?: Subscription;
   private pageRefreshSub?: Subscription;
@@ -1084,6 +1084,7 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   private static readonly KEY_EVENTS_POLL_MS = 300_000;
 
   ngOnInit() {
+    void this.metadataService.ensureLoaded();
     this.loadStats();
     this.loadKeyEvents();
     this.refreshSub = interval(30_000).subscribe(() => {

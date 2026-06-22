@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from src.utils.stream_index import row_source_key, stream_fields_from_row
+from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
 
 # Matches video-segmenter default output_bucket_suffix.
 SEGMENTER_OUTPUT_BUCKET_SUFFIX = "-segments"
@@ -49,6 +50,35 @@ def _metadata_label(value: Any) -> str:
     return text if text else "(empty)"
 
 
+def filter_rows_by_metadata_label(
+    rows: List[dict],
+    field: str,
+    label: Optional[str],
+) -> List[dict]:
+    """Keep rows whose metadata field normalizes to the given label."""
+    if not label:
+        return rows
+    return [row for row in rows if _metadata_label(row.get(field)) == label]
+
+
+def build_location_filter_options(rows: List[dict], limit: int = 30) -> List[Dict[str, Any]]:
+    """Video counts per location label (for explore filter pills)."""
+    by_video: Dict[str, str] = {}
+    for row in rows:
+        ov = str(row.get("original_video") or row.get("source") or "").strip()
+        if not ov:
+            continue
+        label = _metadata_label(row.get("location"))
+        prev = by_video.get(ov)
+        if prev is None or (prev == "(empty)" and label != "(empty)"):
+            by_video[ov] = label
+    counter: Counter[str] = Counter(by_video.values())
+    return [
+        {"label": label, "chunk_count": count}
+        for label, count in counter.most_common(limit)
+    ]
+
+
 def _group_key(row: dict) -> str:
     stream = stream_fields_from_row(row)
     stream_id = str(stream.get("stream_id") or "").strip()
@@ -81,7 +111,7 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
         for label in _split_object_classes(row.get("object_classes")):
             object_counter[label] += 1
 
-    metadata_fields = ("camera_id", "capture_type", "location")
+    metadata_fields = FILTERABLE_METADATA_COLUMNS
     metadata_breakdown: Dict[str, List[Dict[str, Any]]] = {}
     for field in metadata_fields:
         counter: Counter[str] = Counter()

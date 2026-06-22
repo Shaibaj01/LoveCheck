@@ -37,12 +37,17 @@ Set `scenario` in ingest secret or per-video via S3 metadata:
 |----------|----------|
 | `surveillance` | Security cameras, safety monitoring |
 | `traffic` | Traffic cameras, vehicle detection |
+| `live_driving` | Dashcam / patrol — violations, hazards, pedestrians, trucks, signals |
 | `nhl` | Hockey game analysis |
 | `sports` | General sports footage |
 | `retail` | Store cameras, customer behavior |
 | `warehouse` | Industrial safety, PPE compliance |
+| `nyc_control` | NYC command-and-control / public-safety monitoring |
+| `nyc_safety_surveillance` | NYC street surveillance — detailed structured street safety JSON |
 | `egocentric` | First-person perspective |
 | `general` | Generic video description (default) |
+
+GUI dropdown labels for all scenarios live in [`source-code/shared/ingest_metadata.py`](../../shared/ingest_metadata.py) (`ANALYSIS_SCENARIO_LABELS`).
 
 ### Per-Video Override
 
@@ -68,14 +73,16 @@ Metadata={"custom-prompt": "Analyze safety violations..."}
 Or use the GUI:
 - **Manual Upload / Streaming / Batch Sync**: Check "Use custom prompt"
 
-Max 800 characters. URL-encoded automatically.
+Max 800 characters (`CUSTOM_PROMPT_MAX_LENGTH` in [`ingest_metadata.py`](../../shared/ingest_metadata.py)). URL-encoded automatically.
 
 ### Adding New Scenarios
 
-1. Edit `source-code/ingest/video-reasoner/common/prompts.py`
-2. Add to `SCENARIO_PROMPTS` dictionary
-3. Update ingest secret with new scenario name
-4. Redeploy in DataEngine UI
+1. Edit `source-code/ingest/video-reasoner/common/prompts.py` — add prompt to `SCENARIO_PROMPTS`
+2. Edit `source-code/shared/ingest_metadata.py` — add UI label to `ANALYSIS_SCENARIO_LABELS`
+3. Rebuild **video-reasoner** (prompt), **video-backend**, **video-streaming**, **video-batch-sync**, **video-frontend**
+4. Redeploy DataEngine + retrieval stack
+
+Local Python dev: run [`link-ingest-metadata.sh`](../../scripts/link-ingest-metadata.sh) once to symlink `shared/ingest_metadata.py` into service `src/` directories.
 
 ---
 

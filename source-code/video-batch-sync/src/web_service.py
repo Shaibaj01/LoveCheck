@@ -17,8 +17,9 @@ from flask import Flask, request, jsonify
 import boto3
 from botocore.exceptions import ClientError
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
 from boto3.s3.transfer import TransferConfig
+
+from ingest_metadata import build_s3_ingest_metadata
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -272,34 +273,22 @@ class BatchSyncService:
                 job.end_time = datetime.utcnow()
                 return
             
-            # Prepare metadata
-            metadata = {
-                'owner': job.username,
-                'is-public': 'true' if config.get('is_public', True) else 'false',
-                'upload-timestamp': datetime.utcnow().isoformat()
-            }
-            
-            # Add tags
-            if config.get('tags'):
-                metadata['tags'] = ','.join(config['tags'])
-            
-            # Add allowed users
             allowed_users = [job.username]
             if config.get('allowed_users'):
                 allowed_users.extend([u for u in config['allowed_users'] if u and u != job.username])
-            metadata['allowed-users'] = ','.join(allowed_users)
-            
-            # Add streaming metadata if provided
-            if config.get('camera_id'):
-                metadata['camera-id'] = config['camera_id']
-            if config.get('capture_type'):
-                metadata['capture-type'] = config['capture_type']
-            if config.get('location'):
-                metadata['location'] = config['location']
-            if config.get('scenario'):
-                metadata['scenario'] = config['scenario']
-            if config.get('custom_prompt'):
-                metadata['custom-prompt'] = quote(config['custom_prompt'], safe='')
+
+            metadata = build_s3_ingest_metadata(
+                owner=job.username,
+                is_public=config.get('is_public', True),
+                upload_timestamp=datetime.utcnow().isoformat(),
+                tags=config.get('tags') or None,
+                allowed_users=allowed_users,
+                camera_id=config.get('camera_id'),
+                capture_type=config.get('capture_type'),
+                location=config.get('location'),
+                scenario=config.get('scenario'),
+                custom_prompt=config.get('custom_prompt'),
+            )
             
             # Copy files with rate limiting
             # batch_size is now delay in seconds between files (not files per second)

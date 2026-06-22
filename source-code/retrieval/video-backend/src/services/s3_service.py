@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from typing import Dict, Iterator, Optional, Tuple, Union, Literal
 import uuid
 from datetime import datetime
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 from src.config import get_settings
 from src.models.user import User
+from src.ingest_metadata import build_s3_ingest_metadata
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -219,31 +220,18 @@ class S3Service:
                 all_allowed_users.extend([u for u in allowed_users if u and u != username])
             
             # Prepare metadata (keys match ingest video-segmenter S3ObjectMetadataModel)
-            metadata = {
-                'is-public': 'true' if actual_is_public else 'false',
-                'allowed-users': ','.join(all_allowed_users),  # Always populated
-                'original-filename': file.filename,
-                'upload-timestamp': datetime.utcnow().isoformat()
-            }
-            
-            # Add tags if present
-            if tags:
-                metadata['tags'] = ','.join(tags)
-            
-            # Add scenario if present
-            if scenario:
-                metadata['scenario'] = scenario
-            
-            # Add custom prompt if present (URL-encoded to handle newlines and special chars)
-            if custom_prompt:
-                metadata['custom-prompt'] = quote(custom_prompt, safe='')
-            
-            if camera_id:
-                metadata['camera-id'] = camera_id
-            if capture_type:
-                metadata['capture-type'] = capture_type
-            if location:
-                metadata['location'] = location
+            metadata = build_s3_ingest_metadata(
+                is_public=actual_is_public,
+                allowed_users=all_allowed_users,
+                original_filename=file.filename,
+                upload_timestamp=datetime.utcnow().isoformat(),
+                tags=tags or None,
+                scenario=scenario or None,
+                custom_prompt=custom_prompt,
+                camera_id=camera_id,
+                capture_type=capture_type,
+                location=location,
+            )
             
             logger.info(f"Uploading {file.filename} to s3://{self.settings.s3_upload_bucket}/{object_key}")
             logger.info(f"Metadata to set: {metadata}")

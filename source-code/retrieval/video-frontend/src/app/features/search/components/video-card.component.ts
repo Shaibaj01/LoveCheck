@@ -4,28 +4,36 @@ import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { VideoSearchResult } from '../../../shared/models/video.model';
 import { VideoService } from '../../../shared/services/video.service';
+import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPreview } from '../../../shared/utils/video-hover-preview.util';
 
 @Component({
   selector: 'app-video-card',
   standalone: true,
-  imports: [CommonModule, MatCardModule, MatIconModule, MatChipsModule, MatTooltipModule],
+  imports: [CommonModule, MatCardModule, MatIconModule, MatChipsModule, MatTooltipModule, MatProgressSpinnerModule],
   template: `
     <mat-card class="video-card" (click)="onPlay()" 
               (mouseenter)="onHoverStart()" 
               (mouseleave)="onHoverEnd()">
       <div class="video-preview-container">
         <video #videoElement
-               [src]="videoUrl"
+               [src]="videoUrl || null"
                class="video-preview"
-               [muted]="true"
+               muted
                [loop]="true"
                playsinline
-               preload="auto"
+               preload="metadata"
+               (loadedmetadata)="onPreviewFrameReady()"
                (loadeddata)="onVideoLoaded()">
         </video>
-        <div class="play-overlay" [class.hidden]="isPlaying">
+        @if (previewLoading) {
+          <div class="preview-loading">
+            <mat-spinner diameter="32"></mat-spinner>
+          </div>
+        }
+        <div class="play-overlay" [class.hidden]="isPlaying || previewFrameReady">
           <mat-icon>play_circle_filled</mat-icon>
         </div>
       </div>
@@ -143,6 +151,17 @@ import { VideoService } from '../../../shared/services/video.service';
       height: 200px;
       background: #000;
       overflow: hidden;
+    }
+
+    .preview-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      z-index: 2;
     }
 
     .video-preview {
@@ -354,16 +373,15 @@ export class VideoCardComponent implements OnInit {
   isPlaying = false;
   isVideoLoaded = false;
   isExpanded = false;
+  previewLoading = false;
+  previewFrameReady = false;
   videoUrl: string = '';
+  private hoverAbort?: AbortController;
 
   ngOnInit() {
-    // Get authentication token and generate proper stream URL
     const token = localStorage.getItem('video_lab_token');
-    if (token) {
+    if (token && this.video.source?.trim()) {
       this.videoUrl = this.videoService.getStreamUrl(this.video.source, token);
-      console.log('[VIDEO CARD] Stream URL generated for hover preview:', this.videoUrl);
-    } else {
-      console.error('[VIDEO CARD] No token found for video preview');
     }
   }
 
@@ -391,55 +409,48 @@ export class VideoCardComponent implements OnInit {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 
+  onPreviewFrameReady() {
+    this.previewFrameReady = true;
+  }
+
   onVideoLoaded() {
     this.isVideoLoaded = true;
-    console.log('[VIDEO CARD] Video loaded and ready for hover preview');
+    if (this.previewLoading) {
+      this.previewLoading = false;
+    }
   }
 
   async onHoverStart() {
-    if (!this.videoElement?.nativeElement) {
-      console.log('[VIDEO CARD] Video element not available yet');
-      return;
-    }
+    const video = this.videoElement?.nativeElement;
+    if (!video || !this.videoUrl) return;
 
-    const video = this.videoElement.nativeElement;
-    console.log('[VIDEO CARD] Hover start - readyState:', video.readyState, 'isVideoLoaded:', this.isVideoLoaded);
-    
-    try {
-      if (video.readyState >= 2) { 
-        // Video has enough data to start playing
-        console.log('[VIDEO CARD] Video ready, attempting play...');
-        await video.play();
-        this.isPlaying = true;
-        console.log('[VIDEO CARD] Video playing on hover');
-      } else {
-        // Wait for video to be ready
-        console.log('[VIDEO CARD] Video not ready, waiting for canplay event...');
-        const playWhenReady = async () => {
-          try {
-            console.log('[VIDEO CARD] canplay event fired, attempting play...');
-            await video.play();
-            this.isPlaying = true;
-            console.log('[VIDEO CARD] Video playing after canplay');
-          } catch (err) {
-            console.error('[VIDEO CARD] Play failed after canplay:', err);
-          }
-        };
-        video.addEventListener('canplay', playWhenReady, { once: true });
+    claimHoverPreview(video);
+
+    this.hoverAbort?.abort();
+    this.hoverAbort = new AbortController();
+    const signal = this.hoverAbort.signal;
+
+    this.previewLoading = true;
+    const played = await playHoverPreview(video, this.videoUrl, { signal });
+    if (!signal.aborted) {
+      this.previewLoading = false;
+      this.isPlaying = played;
+      if (played) {
+        claimHoverPreview(video);
       }
-    } catch (err) {
-      console.error('[VIDEO CARD] Play failed on hover:', err);
     }
   }
 
   onHoverEnd() {
-    if (this.videoElement?.nativeElement) {
-      const video = this.videoElement.nativeElement;
-      console.log('[VIDEO CARD] Hover end - pausing and resetting video');
-      video.pause();
-      video.currentTime = 0;
-      this.isPlaying = false;
-    }
+    this.hoverAbort?.abort();
+    this.hoverAbort = undefined;
+    this.previewLoading = false;
+
+    const video = this.videoElement?.nativeElement;
+    if (!video) return;
+    stopHoverPreview(video);
+    releaseHoverPreview(video);
+    this.isPlaying = false;
   }
 }
 

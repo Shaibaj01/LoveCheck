@@ -12,12 +12,19 @@ class ExploreUploadDay(BaseModel):
     chunk_count: int
 
 
+class ExploreLocationItem(BaseModel):
+    label: str
+    chunk_count: int
+
+
 class ExploreResponse(BaseModel):
     chunks: List[ChunkSearchResult]
     total: int
     uploads_by_day: List[ExploreUploadDay]
+    locations: List[ExploreLocationItem] = Field(default_factory=list)
     scope: str
     selected_date: Optional[str] = None
+    selected_location: Optional[str] = None
     limit: int
     offset: int
     table_available: bool = True

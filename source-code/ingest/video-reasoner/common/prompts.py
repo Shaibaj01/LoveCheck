@@ -2,6 +2,8 @@
 Preconfigured prompts for different video analysis scenarios.
 Set the 'scenario' key in your secret to switch between them.
 All scenario prompts request structured JSON output (see structured_output.py).
+
+GUI labels & capture types: source-code/shared/ingest_metadata.py (exposed via GET /api/v1/metadata/ingest-config)
 """
 
 from .structured_output import wrap_prompt_with_structured_output
@@ -10,6 +12,30 @@ SCENARIO_PROMPTS = {
     "surveillance": """Analyze this surveillance footage. Focus on people, unusual behavior, safety hazards, abandoned objects, vehicles, crowds, and security concerns. Be specific about locations within the frame.""",
 
     "traffic": """Analyze this traffic camera footage. Focus on vehicles, traffic flow, violations, pedestrians, congestion, accidents or near-misses, and road conditions.""",
+
+    "live_driving": """You are analyzing a ~5 second clip from live driving footage (dashcam, patrol vehicle, or mobile road camera—camera moves with the vehicle or pans the roadway). Output structured JSON only (schema appended below).
+
+Goal: capture violations, dangers, pedestrian activity, blocking vehicles, trucks, street context, and traffic controls for later search. Describe ONLY what is clearly visible—never guess intent, speed, or text you cannot read.
+
+scene_summary: One sentence—road type (highway, arterial, residential, intersection), direction of travel if inferable from motion, lighting/weather, dominant activity.
+
+objects (REQUIRED—separate entry per distinct type; numeric count; notes ≤15 words each):
+• Road & controls: traffic lights (color/state if visible—red/yellow/green, arrow), stop signs, yield, speed limit, lane markings, crosswalks, medians, barriers, cones, construction zones, potholes, debris.
+• Signage: street/road names, highway shields, exit signs, business names, construction warnings—transcribe readable text exactly.
+• Vehicles ahead/beside/oncoming: cars, SUVs, taxis, buses, motorcycles, bicycles—color, type, lane position, stopped vs moving, brake/turn signals if visible.
+• Trucks & heavy: box trucks, semi/trailer, delivery vans, garbage trucks, buses, emergency vehicles (police/fire/ambulance)—size, livery/logos when readable (UPS, FedEx, etc.), lane occupancy, wide turns.
+• People: pedestrians on sidewalk or in roadway, cyclists in bike lane or travel lane, crossing at crosswalk or mid-block, workers in road—count, clothing colors, proximity to moving traffic.
+• Blocking/obstruction: double-parked cars, vehicle in crosswalk, truck loading zone blocking lane, stalled vehicle, lane closure.
+
+actions (REQUIRED): Driving context and others—vehicle turning, merging, changing lanes, braking hard, accelerating, idling in intersection, pedestrian crossing, cyclist weaving, truck backing, emergency lights active, honking implied by context, loading/unloading.
+
+events: Violations and incidents when visible—red-light run, stop-sign roll-through, wrong-way or wrong-lane movement, illegal U-turn, tailgating, unsafe lane change, jaywalking, pedestrian near-miss, cyclist in travel lane, double-parking blocking traffic, truck encroaching adjacent lane, school-bus stop arm (if visible), emergency vehicle passage. Set severity low/medium/high for plausible safety or enforcement relevance.
+
+hazards: Concrete risks—pedestrian in travel lane, vehicle stopped in live lane, oncoming drift, obscured intersection, missing signal visibility, construction with poor channelization, wet/icy surface if visible, aggressive proximity, blind merge. [] if none.
+
+attributes: setting (highway merge, 4-way stop, downtown block), camera mount (dash forward, side, rear), approximate time of day, weather, traffic density (light/moderate/heavy).
+
+Prioritize: traffic signal state, readable street/sign text, truck and bus presence, lane-blocking vehicles, pedestrian/cyclist interactions with traffic, and any visible violation or near-miss.""",
 
     "nhl": """Analyze this NHL hockey game footage. Focus on key plays, player actions, penalties, goaltending, special teams, face-offs, and team formations. Note jersey numbers and team colors when visible.""",
 

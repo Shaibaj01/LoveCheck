@@ -1,7 +1,5 @@
 """Live VastDB data dashboard API."""
 import logging
-import time
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
 

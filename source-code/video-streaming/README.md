@@ -14,7 +14,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
 
 1. Navigate to **Settings → Start Video Stream**
 2. Enter YouTube URL (S3 credentials are pre-filled from backend config)
-3. Configure segment duration and metadata (camera_id, capture_type, location)
+3. Configure segment duration and metadata (camera_id, capture_type, location, scenario) — same options as Upload; labels from backend ingest-config
 4. Click "Start Stream"
 5. Use "Stop Stream" to stop capture
 
@@ -57,5 +57,6 @@ Health check.
 
 - **Format**: MP4 (H.264)
 - **Resolution**: Up to 720p
-- **Image**: `your.registry/vss-video-streaming:v1` (placeholder — build and push from this directory with `docker build`; see [K8s deployment guide](../../deployments/vss-k8s-application/README.md#step-2-docker-images))
+- **Image**: `your.registry/vss-video-streaming:v1` — build from `source-code/` (see [shared README](../shared/README.md#docker-builds))
 - **Internal**: `video-stream-capture-service:5000`
+- **S3 metadata**: built via `build_s3_ingest_metadata()` from [`shared/ingest_metadata.py`](../shared/ingest_metadata.py)

@@ -27,7 +27,7 @@ class Settings(BaseModel):
     vdbsecretkey: str = ""
     vdbcollection: str = ""
     # Scenario for prompt selection
-    # Options: surveillance, traffic, nhl, sports, retail, warehouse, general
+    # Options: surveillance, traffic, live_driving, nhl, sports, retail, warehouse, general
     scenario: str = "general"
 
     # Perception lite (always on — short VLM object pass before main reasoning)

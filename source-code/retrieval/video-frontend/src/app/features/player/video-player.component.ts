@@ -24,6 +24,7 @@ import {
   parseStructuredObjects,
   segmentDisplayCaption,
 } from '../../shared/utils/query-highlight.util';
+import { playVideoMuted, seekVideoAndWait } from '../../shared/utils/video-hover-preview.util';
 import { VideoSummarizeDialogComponent } from '../explore/components/video-summarize-dialog.component';
 
 export interface VideoPlayerData {
@@ -97,8 +98,12 @@ export interface VideoPlayerData {
             [src]="streamUrl()"
             controls
             playsinline
-            [muted]="true"
-            (loadedmetadata)="onVideoLoaded()"
+            preload="auto"
+            muted
+            (loadedmetadata)="onLoadedMetadata()"
+            (canplay)="onCanPlay()"
+            (waiting)="onVideoWaiting()"
+            (playing)="onVideoPlaying()"
             (timeupdate)="onTimeUpdate()"
             (error)="onVideoError($event)"
             class="video-player">
@@ -477,6 +482,10 @@ export class VideoPlayerComponent implements OnInit {
   queryTerms = signal<string[]>([]);
   mode = signal<'search' | 'explore'>('search');
   pendingSeekSec: number | null = null;
+  private metadataReady = false;
+  private autoPlayPending = true;
+  private playbackPrepared = false;
+  private usingSegmentPreview = false;
 
   title = computed(() => this.chunk()?.filename ?? this.legacyVideo()?.filename ?? 'Video');
 
@@ -501,25 +510,48 @@ export class VideoPlayerComponent implements OnInit {
     if (this.data.chunk) {
       this.chunk.set(this.data.chunk);
       this.queryTerms.set(extractHighlightTerms(this.data.query ?? this.data.chunk.query));
-      this.pendingSeekSec =
+      const targetSeek =
         this.data.initialSeekSec ??
         this.data.chunk.best_match_start_sec ??
         0;
+      this.pendingSeekSec = targetSeek;
+      if (this.shouldOpenWithSegmentPreview(targetSeek)) {
+        this.usingSegmentPreview = true;
+        this.pendingSeekSec = 0;
+      }
     } else if (this.data.video) {
       this.legacyVideo.set(this.data.video);
     }
     this.loadVideo();
   }
 
+  private shouldOpenWithSegmentPreview(targetSeek: number): boolean {
+    const c = this.data.chunk;
+    if (!c?.preview_source?.trim()) return false;
+    const previewAt = c.best_match_start_sec ?? 0;
+    return Math.abs(targetSeek - previewAt) < 0.5;
+  }
+
+  private resolvePlaybackSource(): string {
+    const c = this.chunk();
+    if (this.usingSegmentPreview && c?.preview_source?.trim()) {
+      return c.preview_source.trim();
+    }
+    return c?.original_video ?? this.legacyVideo()?.source ?? '';
+  }
+
   loadVideo() {
     this.loading.set(true);
     this.error.set(null);
+    this.metadataReady = false;
+    this.autoPlayPending = true;
+    this.playbackPrepared = false;
 
     try {
       const token = localStorage.getItem('video_lab_token');
       if (!token) throw new Error('No authentication token found');
 
-      const source = this.chunk()?.original_video ?? this.legacyVideo()?.source ?? '';
+      const source = this.resolvePlaybackSource();
       const streamUrl = this.videoService.getStreamUrl(source, token);
       this.streamUrl.set(this.sanitizer.bypassSecurityTrustResourceUrl(streamUrl));
     } catch (err: any) {
@@ -528,11 +560,65 @@ export class VideoPlayerComponent implements OnInit {
     }
   }
 
-  onVideoLoaded() {
+  private loadFullChunkVideo(seekSec: number) {
+    const c = this.chunk();
+    if (!c?.original_video?.trim()) return;
+
+    this.usingSegmentPreview = false;
+    this.pendingSeekSec = seekSec;
+    this.metadataReady = false;
+    this.autoPlayPending = true;
+    this.playbackPrepared = false;
+    this.loading.set(true);
+
+    const token = localStorage.getItem('video_lab_token');
+    if (!token) return;
+
+    const streamUrl = this.videoService.getStreamUrl(c.original_video, token);
+    this.streamUrl.set(this.sanitizer.bypassSecurityTrustResourceUrl(streamUrl));
+  }
+
+  onLoadedMetadata() {
+    this.metadataReady = true;
+    void this.prepareAndPlay();
+  }
+
+  onCanPlay() {
+    void this.prepareAndPlay();
+  }
+
+  onVideoWaiting() {
+    const el = this.videoPlayer?.nativeElement;
+    if (el && !el.paused && this.playbackPrepared) {
+      this.loading.set(true);
+    }
+  }
+
+  onVideoPlaying() {
     this.loading.set(false);
-    if (this.pendingSeekSec != null && this.videoPlayer?.nativeElement) {
-      this.videoPlayer.nativeElement.currentTime = this.pendingSeekSec;
-      this.pendingSeekSec = null;
+  }
+
+  private async prepareAndPlay() {
+    if (!this.metadataReady || this.playbackPrepared || !this.autoPlayPending) return;
+
+    const el = this.videoPlayer?.nativeElement;
+    if (!el) return;
+
+    const seekSec = this.pendingSeekSec ?? 0;
+    this.pendingSeekSec = null;
+
+    if (seekSec > 0.05) {
+      this.loading.set(true);
+      await seekVideoAndWait(el, seekSec);
+    }
+
+    this.playbackPrepared = true;
+    this.autoPlayPending = false;
+
+    try {
+      await playVideoMuted(el);
+    } catch {
+      this.loading.set(false);
     }
   }
 
@@ -558,10 +644,23 @@ export class VideoPlayerComponent implements OnInit {
   }
 
   seekTo(sec: number) {
+    const c = this.chunk();
+    if (c && this.usingSegmentPreview) {
+      this.loadFullChunkVideo(sec + 0.05);
+      return;
+    }
+
     const el = this.videoPlayer?.nativeElement;
     if (!el) return;
-    el.currentTime = sec;
-    el.play().catch(() => undefined);
+    void (async () => {
+      this.loading.set(true);
+      await seekVideoAndWait(el, sec);
+      try {
+        await playVideoMuted(el);
+      } catch {
+        this.loading.set(false);
+      }
+    })();
   }
 
   segmentFlex(seg: TimelineSegment): string {

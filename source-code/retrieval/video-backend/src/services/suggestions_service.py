@@ -60,6 +60,14 @@ PROMPT_COLUMNS = (
 )
 
 
+class _PromptsTableMissing(Exception):
+    pass
+
+
+class _PromptsTableReadError(Exception):
+    pass
+
+
 class SuggestionsService:
     def __init__(self):
         self.settings = get_settings()
@@ -77,6 +85,20 @@ class SuggestionsService:
         )
 
     def _read_all_rows(self) -> tuple[List[dict], bool, Optional[str]]:
+        from src.utils.row_cache import PROMPTS_CACHE_TTL_SEC, cached_prompt_rows
+
+        cache_key = (
+            f"prompts:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:{self._table_name}"
+        )
+        try:
+            rows = cached_prompt_rows(cache_key, PROMPTS_CACHE_TTL_SEC, self._load_prompt_rows)
+            return rows, True, None
+        except _PromptsTableMissing as exc:
+            return [], False, str(exc)
+        except _PromptsTableReadError as exc:
+            return [], False, str(exc)
+
+    def _load_prompt_rows(self) -> List[dict]:
         table_ref = (
             f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self._table_name}"
         )
@@ -87,18 +109,20 @@ class SuggestionsService:
                 table = db_schema.table(self._table_name)
             except Exception as exc:
                 logger.warning("[SUGGESTIONS] Prompts table missing: %s", exc)
-                return [], False, f"Could not read prompts table {table_ref}."
+                raise _PromptsTableMissing(f"Could not read prompts table {table_ref}.") from exc
             try:
                 result = table.select(columns=list(PROMPT_COLUMNS), internal_row_id=False)
                 arrow = result.read_all()
             except Exception as exc:
                 logger.warning("[SUGGESTIONS] Prompts table read failed: %s", exc)
-                return [], False, f"Could not read prompts table {table_ref}."
+                raise _PromptsTableReadError(f"Could not read prompts table {table_ref}.") from exc
         if arrow.num_rows == 0:
-            return [], True, None
-        import pandas as pd
-
-        return [row.to_dict() for _, row in arrow.to_pandas().iterrows()], True, None
+            return []
+        try:
+            return arrow.to_pylist()
+        except Exception:
+            import pandas as pd
+            return [row.to_dict() for _, row in arrow.to_pandas().iterrows()]
 
     @staticmethod
     def _ts_sort_key(ts: Any) -> float:
@@ -232,13 +256,11 @@ class SuggestionsService:
             return events
         from src.services.vastdb_service import get_vastdb_service
 
-        vastdb = get_vastdb_service()
+        accessible = get_vastdb_service().accessible_original_videos(user)
         visible: List[Dict[str, Any]] = []
         for ev in events:
             ov = str(ev.get("original_video") or "").strip()
-            if not ov:
-                continue
-            if vastdb.list_segments_for_video(ov, user):
+            if ov and ov in accessible:
                 visible.append(ev)
         return visible
 

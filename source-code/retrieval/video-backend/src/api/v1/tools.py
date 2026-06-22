@@ -73,6 +73,10 @@ async def tool_explore(
         default=None,
         description="Filter chunks by upload date (YYYY-MM-DD)",
     ),
+    location: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload metadata location label",
+    ),
     limit: int = Query(default=48, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -81,6 +85,7 @@ async def tool_explore(
         current_user=current_user,
         scope=scope,
         date=date,
+        location=location,
         limit=limit,
         offset=offset,
     )

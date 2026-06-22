@@ -18,11 +18,12 @@ import subprocess
 import tempfile
 import re
 from datetime import datetime
-from urllib.parse import quote
 from flask import Flask, request, jsonify
 import boto3
 from botocore.exceptions import ClientError
 import uuid
+
+from ingest_metadata import build_s3_ingest_metadata
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -107,6 +108,30 @@ class VideoCaptureService:
         s3_metadata["chunk_start_sec"] = f"{float(chunk_start_sec):.3f}"
         s3_metadata["ingest_kind"] = "stream_chunk"
         return s3_metadata
+
+    def _build_capture_s3_metadata(
+        self,
+        config,
+        camera_id,
+        capture_type,
+        location,
+        scenario,
+        custom_prompt,
+        capture_timestamp,
+        chunk_index,
+        chunk_start_sec,
+    ):
+        s3_metadata = build_s3_ingest_metadata(
+            camera_id=camera_id,
+            capture_type=capture_type,
+            location=location,
+            scenario=scenario,
+            custom_prompt=custom_prompt,
+            capture_timestamp=capture_timestamp,
+        )
+        return self._attach_stream_metadata(
+            config, s3_metadata, chunk_index, chunk_start_sec
+        )
         
     def is_youtube_url(self, url):
         """Check if the URL is a YouTube URL."""
@@ -413,21 +438,16 @@ class VideoCaptureService:
                 if result.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     logger.info(f"✓ Downloaded segment #{capture_count + 1}: {filename}")
                     
-                    # Prepare S3 metadata
-                    s3_metadata = {}
-                    if camera_id:
-                        s3_metadata['camera-id'] = camera_id
-                    if capture_type:
-                        s3_metadata['capture-type'] = capture_type
-                    if location:
-                        s3_metadata['location'] = location
-                    if scenario:
-                        s3_metadata['scenario'] = scenario
-                    if custom_prompt:
-                        s3_metadata['custom-prompt'] = quote(custom_prompt, safe='')
-                    s3_metadata['capture-timestamp'] = timestamp
-                    s3_metadata = self._attach_stream_metadata(
-                        config, s3_metadata, capture_count, float(segment_start)
+                    s3_metadata = self._build_capture_s3_metadata(
+                        config,
+                        camera_id,
+                        capture_type,
+                        location,
+                        scenario,
+                        custom_prompt,
+                        timestamp,
+                        capture_count,
+                        float(segment_start),
                     )
 
                     # Upload to S3
@@ -684,21 +704,16 @@ class VideoCaptureService:
                 if frame_count > 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     logger.info(f"✓ Captured #{capture_count + 1}: {filename} ({frame_count} frames, {actual_duration:.2f}s)")
                     
-                    # Prepare S3 metadata
-                    s3_metadata = {}
-                    if camera_id:
-                        s3_metadata['camera-id'] = camera_id
-                    if capture_type:
-                        s3_metadata['capture-type'] = capture_type
-                    if location:
-                        s3_metadata['location'] = location
-                    if scenario:
-                        s3_metadata['scenario'] = scenario
-                    if custom_prompt:
-                        s3_metadata['custom-prompt'] = quote(custom_prompt, safe='')
-                    s3_metadata['capture-timestamp'] = timestamp
-                    s3_metadata = self._attach_stream_metadata(
-                        config, s3_metadata, capture_count, chunk_start_sec
+                    s3_metadata = self._build_capture_s3_metadata(
+                        config,
+                        camera_id,
+                        capture_type,
+                        location,
+                        scenario,
+                        custom_prompt,
+                        timestamp,
+                        capture_count,
+                        chunk_start_sec,
                     )
                     
                     # Upload to S3 with metadata

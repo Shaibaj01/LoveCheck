@@ -12,6 +12,7 @@ from typing import Optional, List
 from src.services.auth_service import get_current_user
 from src.models.user import User
 from src.config import get_settings
+from src.ingest_metadata import truncate_custom_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -243,7 +244,7 @@ async def start_batch_sync(
             "capture_type": request.capture_type or "",
             "location": request.location or "",
             "scenario": request.scenario or "",
-            "custom_prompt": (request.custom_prompt or "")[:800]
+            "custom_prompt": truncate_custom_prompt(request.custom_prompt) or ""
         }
         
         logger.info(f"[BATCH_SYNC] Destination: s3://{dest_bucket}")

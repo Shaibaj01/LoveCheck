@@ -23,6 +23,7 @@ import { environment } from '../../../../environments/environment';
 import { KeyEventSuggestion } from '../../../shared/models/suggestions.model';
 import { VideoSearchResult } from '../../../shared/models/video.model';
 import { VideoService } from '../../../shared/services/video.service';
+import { playVideoMuted } from '../../../shared/utils/video-hover-preview.util';
 import {
   extractHighlightTerms,
   highlightQueryTerms,
@@ -569,7 +570,7 @@ export class KeyEventSearchFloatComponent implements OnChanges {
     const el = this.videoEl?.nativeElement;
     if (el) {
       el.currentTime = 0;
-      el.play().catch(() => undefined);
+      void playVideoMuted(el).catch(() => undefined);
     }
   }
 

@@ -15,6 +15,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatButtonModule } from '@angular/material/button';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ChunkSearchResult } from '../../../shared/models/video.model';
 import { VideoService } from '../../../shared/services/video.service';
@@ -25,6 +26,7 @@ import {
   parseStructuredObjects,
   previewCaption,
 } from '../../../shared/utils/query-highlight.util';
+import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPreview } from '../../../shared/utils/video-hover-preview.util';
 
 @Component({
   selector: 'app-chunk-card',
@@ -36,6 +38,7 @@ import {
     MatChipsModule,
     MatTooltipModule,
     MatButtonModule,
+    MatProgressSpinnerModule,
   ],
   template: `
         <mat-card class="chunk-card" (click)="onOpen()"
@@ -44,15 +47,21 @@ import {
       <div class="video-preview-container">
         <video
           #videoElement
-          [src]="previewUrl"
+          [src]="previewUrl || null"
           class="video-preview"
-          [muted]="true"
+          muted
           [loop]="true"
           playsinline
           preload="metadata"
+          (loadedmetadata)="onPreviewFrameReady()"
           (loadeddata)="onVideoLoaded()">
         </video>
-        <div class="play-overlay" [class.hidden]="isPlaying">
+        @if (previewLoading) {
+          <div class="preview-loading">
+            <mat-spinner diameter="32"></mat-spinner>
+          </div>
+        }
+        <div class="play-overlay" [class.hidden]="isPlaying || previewFrameReady">
           <mat-icon>play_circle_filled</mat-icon>
         </div>
         <div class="jump-badge" [class.explore-start]="mode === 'explore'">
@@ -198,6 +207,17 @@ import {
       height: 200px;
       background: #000;
       overflow: hidden;
+    }
+
+    .preview-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      z-index: 2;
     }
 
     .video-preview {
@@ -553,7 +573,10 @@ export class ChunkCardComponent implements OnChanges {
 
   previewUrl = '';
   isPlaying = false;
+  previewLoading = false;
+  previewFrameReady = false;
   private queryTerms: string[] = [];
+  private hoverAbort?: AbortController;
 
   ngOnChanges(changes: SimpleChanges) {
     if (changes['chunk']) {
@@ -563,8 +586,15 @@ export class ChunkCardComponent implements OnChanges {
 
   private syncFromChunk() {
     const token = localStorage.getItem('video_lab_token');
-    if (token) {
-      this.previewUrl = this.videoService.getStreamUrl(this.chunk.preview_source, token);
+    const source =
+      this.chunk.preview_source?.trim() ||
+      this.chunk.timeline?.[0]?.source?.trim() ||
+      '';
+    this.previewFrameReady = false;
+    if (token && source) {
+      this.previewUrl = this.videoService.getStreamUrl(source, token);
+    } else {
+      this.previewUrl = '';
     }
     this.queryTerms = extractHighlightTerms(this.chunk.query);
   }
@@ -642,26 +672,46 @@ export class ChunkCardComponent implements OnChanges {
     return objectMatchesQuery(label, this.queryTerms);
   }
 
+  onPreviewFrameReady() {
+    this.previewFrameReady = true;
+  }
+
   onVideoLoaded() {
-    // preview ready
+    if (this.previewLoading) {
+      this.previewLoading = false;
+    }
   }
 
   async onHoverStart() {
     const video = this.videoElement?.nativeElement;
-    if (!video) return;
-    try {
-      await video.play();
-      this.isPlaying = true;
-    } catch {
-      // autoplay blocked
+    if (!video || !this.previewUrl) return;
+
+    claimHoverPreview(video);
+
+    this.hoverAbort?.abort();
+    this.hoverAbort = new AbortController();
+    const signal = this.hoverAbort.signal;
+
+    this.previewLoading = true;
+    const played = await playHoverPreview(video, this.previewUrl, { signal });
+    if (!signal.aborted) {
+      this.previewLoading = false;
+      this.isPlaying = played;
+      if (played) {
+        claimHoverPreview(video);
+      }
     }
   }
 
   onHoverEnd() {
+    this.hoverAbort?.abort();
+    this.hoverAbort = undefined;
+    this.previewLoading = false;
+
     const video = this.videoElement?.nativeElement;
     if (!video) return;
-    video.pause();
-    video.currentTime = 0;
+    stopHoverPreview(video);
+    releaseHoverPreview(video);
     this.isPlaying = false;
   }
 }

@@ -45,7 +45,7 @@ vim vss-gui-secret-file-template.yaml
 | **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port`, `cosmos_model`) |
 | **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
-| **Processing** | `segment_duration`, `scenario` |
+| **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
 
@@ -103,7 +103,7 @@ vim vss-cli-secret-file-template.yaml
 | **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port`, `cosmos_model`) |
 | **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
-| **Processing** | `segment_duration`, `scenario` |
+| **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
 
@@ -191,30 +191,40 @@ vastde pipelines create \
 
 ## Build ingest function images
 
-Build each DataEngine function image with the [VAST DataEngine CLI](https://github.com/vast-data/dataengine-cli) (`vastde`) from the blueprint source directories, then push to your registry. DataEngine workloads typically target `linux/amd64`.
+Build all pipeline function images with the helper script (recommended):
+
+```bash
+ECR=your.registry/vss TAG=v2 source-code/scripts/build-vastde-functions.sh
+```
+
+This runs `vastde functions build` for segmenter, reasoner, embedder, vastdb-writer, and prompt-suggester, then tags and pushes to your registry. DataEngine workloads typically target `linux/amd64`.
+
+Manual builds with the [VAST DataEngine CLI](https://github.com/vast-data/dataengine-cli) (`vastde`):
 
 From `vss-blueprint/`:
 
 ```bash
 # video-segmenter
 cd source-code/ingest/video-segmenter
-vastde build -t your.registry/vss-video-segmenter:v1 . --platform linux/amd64
-docker push your.registry/vss-video-segmenter:v1
+vastde build -t your.registry/vss-video-segmenter:v2 . --platform linux/amd64
+docker push your.registry/vss-video-segmenter:v2
 
 # video-reasoner
 cd ../video-reasoner
-vastde build -t your.registry/vss-video-reasoner:v1 . --platform linux/amd64
-docker push your.registry/vss-video-reasoner:v1
+vastde build -t your.registry/vss-video-reasoner:v2 . --platform linux/amd64
+docker push your.registry/vss-video-reasoner:v2
 
 # video-embedder
 cd ../video-embedder
-vastde build -t your.registry/vss-video-embedder:v1 . --platform linux/amd64
-docker push your.registry/vss-video-embedder:v1
+vastde build -t your.registry/vss-video-embedder:v2 . --platform linux/amd64
+docker push your.registry/vss-video-embedder:v2
 
 # vastdb-writer (image name vss-vastdb-writer)
 cd ../vastdb-writer
-vastde build -t your.registry/vss-vastdb-writer:v1 . --platform linux/amd64
-docker push your.registry/vss-vastdb-writer:v1
+vastde build -t your.registry/vss-vastdb-writer:v2 . --platform linux/amd64
+docker push your.registry/vss-vastdb-writer:v2
 ```
 
 Replace `your.registry` with your real registry. Use the same names and tags in the DataEngine UI, in `vastde functions create` (see Step 3), and in your VMS registry configuration.
+
+See [scripts README](../../source-code/scripts/README.md) for `ECR` / `TAG` overrides.

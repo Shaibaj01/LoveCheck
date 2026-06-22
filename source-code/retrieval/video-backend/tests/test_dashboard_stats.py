@@ -4,7 +4,9 @@ import unittest
 from src.utils.dashboard_stats import (
     attach_s3_inventory,
     build_dashboard_stats,
+    build_location_filter_options,
     empty_dashboard_stats,
+    filter_rows_by_metadata_label,
     segmenter_output_bucket,
 )
 
@@ -145,6 +147,22 @@ class DashboardStatsTests(unittest.TestCase):
         self.assertEqual(payload["pipeline_alignment"]["pending_index"], 53)
         self.assertFalse(payload["pipeline_alignment"]["segments_bucket_matches_segmenter"])
         self.assertFalse(payload["pipeline_alignment"]["healthy"])
+
+    def test_filter_rows_by_location_label(self):
+        rows = [
+            {"location": "midtown", "source": "a", "original_video": "v1"},
+            {"location": "", "source": "b", "original_video": "v2"},
+            {"location": "downtown", "source": "c", "original_video": "v3"},
+        ]
+        options = build_location_filter_options(rows)
+        labels = {item["label"]: item["chunk_count"] for item in options}
+        self.assertEqual(labels["midtown"], 1)
+        self.assertEqual(labels["(empty)"], 1)
+        self.assertEqual(labels["downtown"], 1)
+
+        filtered = filter_rows_by_metadata_label(rows, "location", "midtown")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["source"], "a")
 
 
 if __name__ == "__main__":

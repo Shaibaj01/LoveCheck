@@ -48,11 +48,12 @@ The system has two main parts:
 
 | Feature | Description | Documentation |
 |---------|-------------|---------------|
-| **Video Analysis Prompts** | Configurable AI scenarios (surveillance, traffic, sports, etc.) | [video-reasoner](source-code/ingest/video-reasoner/README.md) |
-| **Custom AI Prompts** | Per-video custom prompts (max 800 chars) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
+| **Video Analysis Prompts** | Configurable AI scenarios (surveillance, traffic, live_driving, etc.) | [video-reasoner](source-code/ingest/video-reasoner/README.md) |
+| **Ingest metadata config** | Single definition for upload metadata UI + S3 mapping (`ingest_metadata.py`) | [shared](source-code/shared/README.md) |
+| **Custom AI Prompts** | Per-video custom prompts (max length in `ingest_metadata.py`) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
 | **Metadata Filters** | Filter by camera_id, location, capture_type | [ingest](source-code/ingest/README.md) |
 | **Advanced Search & AI Settings** | Max clip cards, LLM clips analyzed, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
-| **Explore mode** | Browse indexed uploads by day — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
+| **Explore mode** | Browse indexed uploads by day and location — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Search suggestions & key events** | LLM-generated prompts from prompt-suggester → VastDB `vss2-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
 | **Agent APIs** | Tool wrappers + grounded Q&A for external agents | [video-backend](source-code/retrieval/video-backend/README.md#agent-apis) |
@@ -67,6 +68,8 @@ The system has two main parts:
 
 | Component | Description |
 |-----------|-------------|
+| [shared](source-code/shared/README.md) | Cross-service modules (`ingest_metadata.py` — upload metadata UI + S3) |
+| [scripts](source-code/scripts/README.md) | Build scripts for retrieval images and DataEngine functions |
 | [video-backend](source-code/retrieval/video-backend/README.md) | REST API, authentication, search |
 | [video-frontend](source-code/retrieval/video-frontend/README.md) | Angular web UI (Search, Explore, Dashboard) |
 | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Scheduled LLM prompts + key events → VastDB |
@@ -103,7 +106,7 @@ Upload Video → video-chunks bucket
 
 **Search flow:** query embed → hybrid caption+video search → group by upload (clip cards + timeline) → always-on LLM synthesis → jump-to-moment playback
 
-**Explore flow:** browse by upload date (scope: all / mine / public) → clip cards with metadata → open player or **Summarize Video** on demand (no query)
+**Explore flow:** browse by upload date and **location** (scope: all / mine / public) → clip cards with metadata → hover preview (first frame + muted play) → open player (segment-first for fast start) or **Summarize Video** on demand (no query)
 
 **Dashboard flow:** VastDB KPIs + ingest quality + S3 vs index alignment → key events table (from prompt-suggester) with in-place segment preview
 

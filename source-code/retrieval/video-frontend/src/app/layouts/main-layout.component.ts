@@ -19,6 +19,7 @@ import { BatchSyncService } from '../shared/services/batch-sync.service';
 import { StreamingService } from '../shared/services/streaming.service';
 import { ThemeService } from '../shared/services/theme.service';
 import { PageRefreshService } from '../shared/services/page-refresh.service';
+import { IngestMetadataService } from '../shared/services/ingest-metadata.service';
 import { interval } from 'rxjs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
@@ -576,6 +577,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   themeService = inject(ThemeService);
   router = inject(Router);
   pageRefresh = inject(PageRefreshService);
+  private ingestMetadata = inject(IngestMetadataService);
   
   @ViewChild('configPopover') configPopover!: ConfigPopoverComponent;
 
@@ -590,6 +592,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   private statusCheckInterval: any;
 
   ngOnInit() {
+    void this.ingestMetadata.ensureLoaded();
     // Check for active batch sync and streaming every 2 seconds
     this.statusCheckInterval = interval(2000).subscribe(() => {
       this.checkBatchSyncStatus();

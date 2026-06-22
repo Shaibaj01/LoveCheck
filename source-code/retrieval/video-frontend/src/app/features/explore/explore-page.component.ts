@@ -82,6 +82,35 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
             }
           </div>
         </div>
+
+        @if (locationOptions().length) {
+          <div class="date-rail">
+            <span class="date-label">Location:</span>
+            <div class="date-pills">
+              <button
+                type="button"
+                class="date-pill"
+                [class.active]="!selectedLocation()"
+                (click)="selectLocation(null)">
+                <mat-icon>place</mat-icon>
+                <span>All locations</span>
+                <span class="count">{{ totalLocationVideos() }}</span>
+              </button>
+              @for (item of locationOptions(); track item.label) {
+                <button
+                  type="button"
+                  class="date-pill"
+                  [class.active]="selectedLocation() === item.label"
+                  (click)="selectLocation(item.label)"
+                  [matTooltip]="item.label">
+                  <mat-icon>location_on</mat-icon>
+                  <span>{{ formatLocationLabel(item.label) }}</span>
+                  <span class="count">{{ item.chunk_count }}</span>
+                </button>
+              }
+            </div>
+          </div>
+        }
       </section>
 
       @if (accessWarning()) {
@@ -117,6 +146,9 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
               {{ formatDay(selectedDate()!) }}
             } @else {
               All uploads
+            }
+            @if (selectedLocation()) {
+              · {{ formatLocationLabel(selectedLocation()!) }}
             }
           </h2>
           <div class="results-meta">
@@ -456,10 +488,28 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
       align-items: center;
       gap: 1rem;
       margin-top: 1.75rem;
+
+      button {
+        color: var(--text-primary) !important;
+        border-color: var(--border-color) !important;
+
+        mat-icon {
+          color: var(--text-primary) !important;
+        }
+
+        &:disabled {
+          color: var(--text-muted) !important;
+          opacity: 0.55;
+
+          mat-icon {
+            color: var(--text-muted) !important;
+          }
+        }
+      }
     }
 
     .page-indicator {
-      color: var(--text-secondary);
+      color: var(--text-primary);
       font-size: 0.9rem;
     }
 
@@ -480,6 +530,8 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
 
   scope = signal<VideoScope>('all');
   selectedDate = signal<string | null>(null);
+  selectedLocation = signal<string | null>(null);
+  locationOptions = signal<{ label: string; chunk_count: number }[]>([]);
   chunks = signal<ChunkSearchResult[]>([]);
   uploadsByDay = signal<ExploreUploadDay[]>([]);
   total = signal(0);
@@ -506,6 +558,10 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
     return this.uploadsByDay().reduce((sum, d) => sum + d.chunk_count, 0);
   }
 
+  totalLocationVideos(): number {
+    return this.locationOptions().reduce((sum, item) => sum + item.chunk_count, 0);
+  }
+
   onScopeChange(next: VideoScope) {
     this.scope.set(next);
     this.offset.set(0);
@@ -518,6 +574,12 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
     this.load();
   }
 
+  selectLocation(location: string | null) {
+    this.selectedLocation.set(location);
+    this.offset.set(0);
+    this.load();
+  }
+
   load() {
     this.loading.set(true);
     this.accessWarning.set(null);
@@ -526,6 +588,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
       .explore({
         scope: this.scope(),
         date: this.selectedDate(),
+        location: this.selectedLocation(),
         limit: ExplorePageComponent.PAGE_SIZE,
         offset: this.offset(),
       })
@@ -533,6 +596,11 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
         next: (res) => {
           this.chunks.set(res.chunks);
           this.uploadsByDay.set(res.uploads_by_day);
+          if (res.locations?.length) {
+            this.locationOptions.set(res.locations);
+          } else if (!this.selectedLocation()) {
+            this.locationOptions.set([]);
+          }
           this.total.set(res.total);
           this.loading.set(false);
           if (res.table_available === false) {
@@ -562,6 +630,13 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   formatDayShort(iso: string): string {
     const d = new Date(iso + 'T12:00:00');
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  formatLocationLabel(value: string): string {
+    const text = (value || '').trim();
+    if (!text || text === '(empty)') return 'Not set';
+    if (text.length <= 36) return text;
+    return text.slice(0, 35) + '…';
   }
 
   trackChunk(_i: number, chunk: ChunkSearchResult): string {

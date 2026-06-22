@@ -9,18 +9,17 @@ from src.models.user import User
 from src.services.auth_service import get_current_user
 from src.services.vastdb_service import get_vastdb_service
 from src.config import get_settings
+from src.ingest_metadata import (
+    FILTERABLE_METADATA_COLUMNS,
+    METADATA_FIELD_LABELS,
+    ingest_config_for_api,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # User-facing upload metadata only (hide pipeline / perception / audit columns from GUI filters).
-FILTERABLE_METADATA_COLUMNS = ("camera_id", "capture_type", "location")
-
-METADATA_FIELD_LABELS = {
-    "camera_id": "Camera ID",
-    "capture_type": "Capture Type",
-    "location": "Location",
-}
+# Canonical definitions: source-code/shared/ingest_metadata.py (COPY into image at build)
 
 # Internal columns — never exposed in Advanced Filters (also blocks /metadata/values).
 _EXCLUDED_METADATA_COLUMNS = {
@@ -59,6 +58,16 @@ _EXCLUDED_METADATA_COLUMNS = {
 }
 
 
+@router.get("/ingest-config")
+async def get_ingest_metadata_config():
+    """
+    Canonical ingest metadata definitions for upload, streaming, and batch-sync UIs.
+
+    Public static configuration — no auth required (same data for all users).
+    """
+    return ingest_config_for_api()
+
+
 @router.get("/schema")
 async def get_metadata_schema(
     current_user: User = Depends(get_current_user)
@@ -78,6 +87,8 @@ async def get_metadata_schema(
         arrow_schema = vastdb_service.get_table_schema()
         schema_by_name = {field.name: field for field in arrow_schema}
 
+        distinct_map = vastdb_service.get_distinct_values_map(list(FILTERABLE_METADATA_COLUMNS))
+
         schema = []
 
         for col_name in FILTERABLE_METADATA_COLUMNS:
@@ -95,23 +106,15 @@ async def get_metadata_schema(
                 "ui_type": "select",
                 "label": METADATA_FIELD_LABELS.get(col_name, col_name.replace("_", " ").title()),
             }
-            
-            # Get distinct values for dropdown options
-            try:
-                distinct_values = vastdb_service.get_distinct_values(col_name)
-                if distinct_values and len(distinct_values) > 0 and len(distinct_values) <= 100:
-                    # Has predefined values - use dropdown
-                    field_info["options"] = distinct_values
-                    field_info["ui_type"] = "select"
-                else:
-                    # No values or too many - use text input
-                    # This is expected for free-form fields like camera_id, location
-                    field_info["ui_type"] = "text"
-                    logger.info(f"[METADATA] Column {col_name} will use text input (no predefined values)")
-            except Exception as e:
-                logger.warning(f"Failed to get distinct values for {col_name}: {e}")
-                field_info["ui_type"] = "text"  # Fallback to text input
-            
+
+            distinct_values = distinct_map.get(col_name) or []
+            if distinct_values and len(distinct_values) <= 100:
+                field_info["options"] = distinct_values
+                field_info["ui_type"] = "select"
+            else:
+                field_info["ui_type"] = "text"
+                logger.info(f"[METADATA] Column {col_name} will use text input (no predefined values)")
+
             schema.append(field_info)
         
         logger.info(f"[METADATA] Returning {len(schema)} filterable columns: {[s['name'] for s in schema]}")

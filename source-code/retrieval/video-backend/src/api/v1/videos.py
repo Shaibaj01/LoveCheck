@@ -15,6 +15,7 @@ from src.services.s3_service import (
 from src.services.vastdb_service import get_vastdb_service
 from src.config import get_settings
 from src.schemas.explore import ExploreResponse, VideoSynthesizeRequest, VideoSynthesizeResponse
+from src.ingest_metadata import parse_comma_list, truncate_custom_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/videos", tags=["Videos"])
@@ -98,14 +99,14 @@ async def upload_video(
     await sem.acquire()
     try:
         s3_service = get_s3_service()
-        tags_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
-        allowed_users_list = [u.strip() for u in allowed_users.split(',') if u.strip()] if allowed_users else []
+        tags_list = parse_comma_list(tags)
+        allowed_users_list = parse_comma_list(allowed_users)
         scenario_value = scenario.strip() if scenario else ""
 
         camera_id_value = camera_id.strip() if camera_id else None
         capture_type_value = capture_type.strip() if capture_type else None
         location_value = location.strip() if location else None
-        custom_prompt_value = custom_prompt.strip()[:800] if custom_prompt else None
+        custom_prompt_value = truncate_custom_prompt(custom_prompt)
         
         object_key = await s3_service.upload_file(
             file=file,
@@ -330,6 +331,10 @@ async def explore_videos(
         default=None,
         description="Filter chunks by upload date (YYYY-MM-DD)",
     ),
+    location: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload metadata location label",
+    ),
     limit: int = Query(default=48, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -344,7 +349,7 @@ async def explore_videos(
     )
     vastdb = get_vastdb_service()
     payload = vastdb.list_explore_chunks(
-        current_user, scope=scope, date=date, limit=limit, offset=offset
+        current_user, scope=scope, date=date, location=location, limit=limit, offset=offset
     )
     return ExploreResponse(**payload)
 

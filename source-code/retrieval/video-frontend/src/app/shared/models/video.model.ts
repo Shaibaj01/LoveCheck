@@ -140,12 +140,19 @@ export interface ExploreUploadDay {
   chunk_count: number;
 }
 
+export interface ExploreLocationItem {
+  label: string;
+  chunk_count: number;
+}
+
 export interface ExploreResponse {
   chunks: ChunkSearchResult[];
   total: number;
   uploads_by_day: ExploreUploadDay[];
+  locations?: ExploreLocationItem[];
   scope: VideoScope;
   selected_date?: string | null;
+  selected_location?: string | null;
   limit: number;
   offset: number;
   table_available?: boolean;

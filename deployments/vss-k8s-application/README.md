@@ -43,25 +43,25 @@ vim backend-secret.yaml
 
 ## Step 2: Docker Images
 
-Build the imager using Dockerfile and replace `your.registry` in each `*-deployment.yaml` with your own registry host.
-From the repo root (`vss-blueprint/`), build and push (adjust tags and platform as needed for your cluster):
+Build images with the helper script (recommended) or manually. Replace registry paths in each `*-deployment.yaml`.
 
 ```bash
-# Backend
-docker build -t your.registry/vss-video-backend:v1 -f source-code/retrieval/video-backend/Dockerfile source-code/retrieval/video-backend
-docker push your.registry/vss-video-backend:v1
+# Recommended — sets ECR/TAG; builds backend, frontend, streaming, batch-sync
+ECR=your.registry/vss TAG=v2 source-code/scripts/build-retrieval-images.sh
+```
 
-# Frontend
-docker build -t your.registry/vss-video-frontend:v1 -f source-code/retrieval/video-frontend/Dockerfile source-code/retrieval/video-frontend
-docker push your.registry/vss-video-frontend:v1
+Manual builds from `source-code/` as context (see [shared README](../source-code/shared/README.md#docker-builds)):
 
-# Video streaming
-docker build -t your.registry/vss-video-streaming:v1 -f source-code/video-streaming/Dockerfile source-code/video-streaming
-docker push your.registry/vss-video-streaming:v1
+```bash
+cd source-code
 
-# Video batch sync
-docker build -t your.registry/vss-video-batch-sync:v1 -f source-code/video-batch-sync/Dockerfile source-code/video-batch-sync
-docker push your.registry/vss-video-batch-sync:v1
+docker buildx build -f retrieval/video-backend/Dockerfile -t your.registry/vss-video-backend:v2 --push .
+
+docker buildx build -f retrieval/video-frontend/Dockerfile -t your.registry/vss-video-frontend:v2 --push retrieval/video-frontend
+
+docker buildx build -f video-streaming/Dockerfile -t your.registry/vss-video-streaming:v2 --push .
+
+docker buildx build -f video-batch-sync/Dockerfile -t your.registry/vss-video-batch-sync:v2 --push .
 ```
 
 If your cluster requires a specific architecture (for example `linux/amd64`), add `--platform linux/amd64` to each `docker build`. Ensure your registry is reachable from the cluster (image pull secrets if the registry is private).

@@ -13,6 +13,8 @@ import { MatSelectModule } from '@angular/material/select';
 import { BatchSyncService, BatchSyncStartRequest, BatchSyncCheckObjectsRequest } from '../../shared/services/batch-sync.service';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { IngestMetadataFieldsComponent } from '../../shared/components/ingest-metadata-fields.component';
+import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/ingest-metadata.util';
 
 @Component({
   selector: 'app-batch-sync-dialog',
@@ -28,7 +30,8 @@ import { environment } from '../../../environments/environment';
     MatCheckboxModule,
     MatProgressSpinnerModule,
     MatSliderModule,
-    MatSelectModule
+    MatSelectModule,
+    IngestMetadataFieldsComponent,
   ],
   template: `
     <div class="batch-sync-dialog">
@@ -172,65 +175,8 @@ import { environment } from '../../../environments/environment';
             </mat-form-field>
           }
 
-          <!-- Streaming Metadata (Optional) -->
-          <h3 class="section-title">
-            <mat-icon>videocam</mat-icon>
-            <span>Stream Metadata (Optional)</span>
-          </h3>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Camera ID</mat-label>
-            <input matInput formControlName="camera_id" placeholder="e.g., CAM-001, manhattan-cam-1">
-            <mat-icon matSuffix>videocam</mat-icon>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Capture Type</mat-label>
-            <input matInput formControlName="capture_type" placeholder="traffic, streets, crowds, malls, general, sports, robotics, warehouse, retail">
-            <mat-icon matSuffix>category</mat-icon>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Location</mat-label>
-            <input matInput formControlName="location" placeholder="e.g., Midtown, Downtown">
-            <mat-icon matSuffix>location_on</mat-icon>
-          </mat-form-field>
-
-          <mat-form-field appearance="outline">
-            <mat-label>Analysis Scenario</mat-label>
-            <mat-select formControlName="scenario">
-              <mat-option [value]="">-- Use Default (from settings) --</mat-option>
-              <mat-option value="surveillance">Incident & Safety Detection</mat-option>
-              <mat-option value="traffic">Vehicle & Pedestrian Monitoring</mat-option>
-              <mat-option value="nhl">Hockey Game Analysis</mat-option>
-              <mat-option value="sports">General Sports Analysis</mat-option>
-              <mat-option value="retail">Retail Store Monitoring</mat-option>
-              <mat-option value="warehouse">Warehouse Safety & Operations</mat-option>
-              <mat-option value="nyc_control">NYC Traffic & Public Safety</mat-option>
-              <mat-option value="egocentric">First-Person Activity Analysis</mat-option>
-              <mat-option value="general">General Video Analysis</mat-option>
-            </mat-select>
-            <mat-icon matSuffix>psychology</mat-icon>
-          </mat-form-field>
-
-          <div class="custom-prompt-toggle">
-            <label class="toggle-wrapper">
-              <input type="checkbox" formControlName="useCustomPrompt" class="toggle-checkbox">
-              <span class="toggle-label">Use custom prompt (overrides scenario)</span>
-            </label>
-          </div>
-
-          @if (useCustomPrompt()) {
-            <mat-form-field appearance="outline" class="custom-prompt-field">
-              <mat-label>Custom Prompt</mat-label>
-              <textarea matInput formControlName="custom_prompt" 
-                        placeholder="Enter your custom reasoning prompt for the AI model..."
-                        rows="4"
-                        maxlength="800"></textarea>
-              <mat-icon matSuffix>edit_note</mat-icon>
-              <mat-hint align="end">{{ customPromptLength() }}/800</mat-hint>
-            </mat-form-field>
-          }
+          <app-ingest-metadata-fields [form]="syncForm" fields="all" variant="material">
+          </app-ingest-metadata-fields>
 
           @if (error()) {
             <div class="error-message">
@@ -757,14 +703,6 @@ export class BatchSyncDialogComponent implements OnInit {
       custom_prompt: ['']
     });
 
-    // Disable/enable scenario based on custom prompt toggle
-    this.syncForm.get('useCustomPrompt')?.valueChanges.subscribe((useCustom: boolean | null) => {
-      if (useCustom) {
-        this.syncForm.get('scenario')?.disable();
-      } else {
-        this.syncForm.get('scenario')?.enable();
-      }
-    });
   }
 
   ngOnInit() {
@@ -789,14 +727,6 @@ export class BatchSyncDialogComponent implements OnInit {
 
   getDestinationBucket(): string {
     return this.defaultConfig?.bucket_name || 'default-bucket';
-  }
-
-  useCustomPrompt(): boolean {
-    return this.syncForm.get('useCustomPrompt')?.value || false;
-  }
-
-  customPromptLength(): number {
-    return this.syncForm.get('custom_prompt')?.value?.length || 0;
   }
 
   onUseDefaultChange() {
@@ -936,24 +866,17 @@ export class BatchSyncDialogComponent implements OnInit {
     // The check result is only needed for validation, not for submission
 
     const formValue = this.syncForm.value;
+    const rawFormValue = this.syncForm.getRawValue();
+    const meta = pickIngestMetadataPayload(rawFormValue);
 
     // Use actual secret key if "use default" was checked
     const actualSecretKey = (this as any).actualSecretKey;
     const sourceSecretKey = actualSecretKey || formValue.source_secret_key;
 
-    // Parse tags and allowed users
-    const tags = formValue.tags
-      ? formValue.tags.split(',').map((t: string) => t.trim()).filter((t: string) => t)
-      : [];
-
-    const allowedUsers = formValue.allowedUsers
-      ? formValue.allowedUsers.split(',').map((u: string) => u.trim()).filter((u: string) => u)
-      : [];
+    const tags = parseCommaList(formValue.tags);
+    const allowedUsers = parseCommaList(formValue.allowedUsers);
 
     const { bucket, prefix } = this.parseBucketPath(formValue.source_bucket_path);
-    
-    // Get raw form value (including disabled fields)
-    const rawFormValue = this.syncForm.getRawValue();
     
     const request: BatchSyncStartRequest = {
       source_access_key: formValue.source_access_key,
@@ -966,11 +889,11 @@ export class BatchSyncDialogComponent implements OnInit {
       is_public: !formValue.isPrivate,
       tags: tags.length > 0 ? tags : undefined,
       allowed_users: allowedUsers.length > 0 ? allowedUsers : undefined,
-      camera_id: formValue.camera_id || undefined,
-      capture_type: formValue.capture_type || undefined,
-      location: formValue.location || undefined,
-      scenario: rawFormValue.useCustomPrompt ? undefined : (rawFormValue.scenario || undefined),
-      custom_prompt: rawFormValue.useCustomPrompt ? (rawFormValue.custom_prompt || undefined) : undefined
+      camera_id: meta.camera_id,
+      capture_type: meta.capture_type,
+      location: meta.location,
+      scenario: meta.scenario,
+      custom_prompt: meta.custom_prompt,
     };
 
     this.batchSyncService.start(request).subscribe({

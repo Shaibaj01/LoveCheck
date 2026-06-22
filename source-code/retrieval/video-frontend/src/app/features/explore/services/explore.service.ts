@@ -16,6 +16,7 @@ export class ExploreService {
   explore(params: {
     scope: VideoScope;
     date?: string | null;
+    location?: string | null;
     limit?: number;
     offset?: number;
   }): Observable<ExploreResponse> {
@@ -25,6 +26,9 @@ export class ExploreService {
       .set('offset', String(params.offset ?? 0));
     if (params.date) {
       httpParams = httpParams.set('date', params.date);
+    }
+    if (params.location) {
+      httpParams = httpParams.set('location', params.location);
     }
     return this.http.get<ExploreResponse>(`${environment.apiUrl}/videos/explore`, {
       params: httpParams,

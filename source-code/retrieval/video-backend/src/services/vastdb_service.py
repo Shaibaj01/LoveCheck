@@ -66,6 +66,8 @@ DASHBOARD_SCAN_COLUMNS = (
     "segment_start_sec", "segment_end_sec", "extra_metadata",
     "upload_timestamp", "camera_id", "capture_type", "location",
     "object_classes", "structured_parse_ok", "perception_ok", "is_public", "allowed_users",
+    # Browse / explore chunk cards (one scan avoids per-video queries)
+    "reasoning_content", "dense_caption", "vlm_structured", "tags", "duration",
 )
 
 settings = get_settings()
@@ -1167,6 +1169,7 @@ class VastDBService:
             segmenter_output_bucket,
         )
         from src.services.s3_service import get_s3_service
+        from src.utils.row_cache import S3_COUNT_CACHE_TTL_SEC, cached_s3_mp4_count
 
         start = time.time()
         include_public = scope in ("all", "public")
@@ -1217,7 +1220,11 @@ class VastDBService:
         s3 = get_s3_service()
         for bucket in sorted(buckets_to_scan):
             try:
-                bucket_counts[bucket] = s3.count_mp4_objects(bucket)
+                bucket_counts[bucket] = cached_s3_mp4_count(
+                    bucket,
+                    S3_COUNT_CACHE_TTL_SEC,
+                    lambda b=bucket: s3.count_mp4_objects(b),
+                )
             except Exception as exc:
                 logger.warning("[DASHBOARD] S3 MP4 count failed for %s: %s", bucket, exc)
                 bucket_errors[bucket] = str(exc)
@@ -1263,8 +1270,39 @@ class VastDBService:
                 out[ov] = ts
         return out
 
+    def accessible_original_videos(
+        self,
+        user: User,
+        *,
+        include_public: bool = True,
+        public_only: bool = False,
+    ) -> Set[str]:
+        """Parent video URIs visible to the user (from cached table scan)."""
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[VASTDB] accessible video lookup failed: %s", exc)
+            return set()
+        out: Set[str] = set()
+        for row in raw_rows:
+            if not self._user_has_access(row, user, include_public, public_only):
+                continue
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if ov:
+                out.add(ov)
+        return out
+
     def _fetch_dashboard_rows_sdk(self) -> List[dict]:
-        """Read non-vector columns via the VastDB Python SDK (same path as metadata discovery)."""
+        """Read non-vector columns via the VastDB Python SDK (cached)."""
+        from src.utils.row_cache import ROW_CACHE_TTL_SEC, cached_table_rows
+
+        cache_key = (
+            f"vdb-rows:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:"
+            f"{self.settings.vdb_collection}"
+        )
+        return cached_table_rows(cache_key, ROW_CACHE_TTL_SEC, self._load_dashboard_rows_sdk)
+
+    def _load_dashboard_rows_sdk(self) -> List[dict]:
         with self.client.transaction() as tx:
             bucket = tx.bucket(self.settings.vdb_bucket)
             db_schema = bucket.schema(self.settings.vdb_schema)
@@ -1290,6 +1328,13 @@ class VastDBService:
             if arrow_table.num_rows == 0:
                 return []
 
+            return self._arrow_rows_to_dicts(arrow_table)
+
+    @staticmethod
+    def _arrow_rows_to_dicts(arrow_table) -> List[dict]:
+        try:
+            return arrow_table.to_pylist()
+        except Exception:
             df = arrow_table.to_pandas()
             return [row.to_dict() for _, row in df.iterrows()]
 
@@ -1344,11 +1389,46 @@ class VastDBService:
 
     def build_browse_chunk(self, original_video: str, user: User):
         """Build a chunk card for explore/browse (no search query or match scores)."""
-        from src.models.video import ChunkSearchResult, TimelineSegment
-
         segments = self.list_segments_for_video(original_video, user)
         if not segments:
             return None
+        return self._build_browse_chunk_from_segments(original_video, segments)
+
+    def build_browse_chunk_from_rows(self, original_video: str, rows: List[dict]) -> Optional[ChunkSearchResult]:
+        """Build explore chunk from in-memory segment rows (no extra VastDB query)."""
+        if not rows:
+            return None
+        segments = []
+        for row in rows:
+            segments.append({
+                "filename": str(row.get("filename") or ""),
+                "source": str(row.get("source") or ""),
+                "reasoning_content": str(row.get("reasoning_content") or ""),
+                "dense_caption": str(row.get("dense_caption") or ""),
+                "vlm_structured": str(row.get("vlm_structured") or ""),
+                "segment_number": int(row.get("segment_number") or 0),
+                "total_segments": int(row.get("total_segments") or 0),
+                "segment_start_sec": float(row.get("segment_start_sec") or 0),
+                "segment_end_sec": float(row.get("segment_end_sec") or 0),
+                "original_video": str(row.get("original_video") or original_video),
+                "upload_timestamp": row.get("upload_timestamp"),
+                "tags": row.get("tags") or [],
+                "camera_id": str(row.get("camera_id") or ""),
+                "capture_type": str(row.get("capture_type") or ""),
+                "location": str(row.get("location") or ""),
+                "object_classes": str(row.get("object_classes") or ""),
+                "is_public": bool(row.get("is_public", True)),
+                "duration": float(row.get("duration") or 0),
+            })
+        segments.sort(key=lambda s: s["segment_number"])
+        segments = dedupe_segment_dicts(segments)
+        if not segments:
+            return None
+        return self._build_browse_chunk_from_segments(original_video, segments)
+
+    def _build_browse_chunk_from_segments(self, original_video: str, segments: List[dict]):
+        """Shared chunk-card builder for explore/browse."""
+        from src.models.video import ChunkSearchResult, TimelineSegment
 
         first = segments[0]
         timeline: List[TimelineSegment] = []
@@ -1446,13 +1526,18 @@ class VastDBService:
         user: User,
         scope: str = "all",
         date: Optional[str] = None,
+        location: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
-        """Browse indexed parent videos by upload date (no vector search)."""
-        from collections import Counter
+        """Browse indexed parent videos by upload date and location (no vector search)."""
+        from collections import Counter, defaultdict
 
-        from src.utils.dashboard_stats import _parse_upload_day
+        from src.utils.dashboard_stats import (
+            _metadata_label,
+            _parse_upload_day,
+            build_location_filter_options,
+        )
 
         include_public = scope in ("all", "public")
         public_only = scope == "public"
@@ -1473,6 +1558,7 @@ class VastDBService:
         if table_available and not raw_rows:
             table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
 
+        rows_by_video: dict[str, List[dict]] = defaultdict(list)
         by_video: dict[str, dict] = {}
         for row in raw_rows:
             if not self._user_has_access(row, user, include_public, public_only):
@@ -1480,13 +1566,16 @@ class VastDBService:
             ov = str(row.get("original_video") or row.get("source") or "").strip()
             if not ov:
                 continue
+            rows_by_video[ov].append(row)
             day = _parse_upload_day(row.get("upload_timestamp"))
+            loc = _metadata_label(row.get("location"))
             entry = by_video.get(ov)
             if entry is None:
                 by_video[ov] = {
                     "original_video": ov,
                     "upload_day": day,
                     "upload_timestamp": row.get("upload_timestamp"),
+                    "location_label": loc,
                 }
                 continue
             ts = row.get("upload_timestamp")
@@ -1496,6 +1585,8 @@ class VastDBService:
                 entry["upload_timestamp"] = ts
                 if day:
                     entry["upload_day"] = day
+            if entry.get("location_label") == "(empty)" and loc != "(empty)":
+                entry["location_label"] = loc
 
         day_counter: Counter[str] = Counter()
         for entry in by_video.values():
@@ -1509,6 +1600,8 @@ class VastDBService:
             {"date": day, "chunk_count": count}
             for day, count in sorted(day_counter.items(), reverse=True)
         ]
+        accessible_flat = [row for rows in rows_by_video.values() for row in rows]
+        locations = build_location_filter_options(accessible_flat) if by_video else []
 
         videos = sorted(
             by_video.values(),
@@ -1517,22 +1610,30 @@ class VastDBService:
         )
         if date:
             videos = [v for v in videos if v.get("upload_day") == date]
+        if location:
+            videos = [v for v in videos if v.get("location_label") == location]
 
         total = len(videos)
         page = videos[offset : offset + limit]
 
         chunks = []
         for item in page:
-            chunk = self.build_browse_chunk(item["original_video"], user)
+            ov = item["original_video"]
+            chunk = self.build_browse_chunk_from_rows(ov, rows_by_video.get(ov, []))
             if chunk:
                 chunks.append(chunk)
+
+        if table_available and location and by_video and not videos:
+            table_message = f"No videos match location filter: {location}"
 
         return {
             "chunks": chunks,
             "total": total,
             "uploads_by_day": uploads_by_day,
+            "locations": locations,
             "scope": scope,
             "selected_date": date,
+            "selected_location": location,
             "limit": limit,
             "offset": offset,
             "table_available": table_available,
@@ -1562,106 +1663,57 @@ class VastDBService:
             logger.error(f"Error getting table schema: {str(e)}")
             raise
     
+    def get_distinct_values_map(
+        self,
+        column_names: List[str],
+        limit_per_column: int = 100,
+    ) -> Dict[str, List[str]]:
+        """Distinct values for multiple metadata columns from one cached table scan."""
+        from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
+        from src.utils.dashboard_stats import _metadata_label
+        from src.utils.row_cache import DISTINCT_VALUES_CACHE_TTL_SEC, cached_distinct_values
+
+        wanted = [c for c in column_names if c in FILTERABLE_METADATA_COLUMNS]
+        if not wanted:
+            return {}
+
+        cache_key = (
+            f"distinct:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:"
+            f"{self.settings.vdb_collection}:{','.join(sorted(wanted))}"
+        )
+
+        def _load() -> Dict[str, List[str]]:
+            try:
+                rows = self._fetch_dashboard_rows_sdk()
+            except Exception as exc:
+                logger.warning("[DISTINCT] Cached scan failed: %s", exc)
+                return {col: [] for col in wanted}
+            out: Dict[str, set[str]] = {col: set() for col in wanted}
+            for row in rows:
+                for col in wanted:
+                    label = _metadata_label(row.get(col))
+                    if label != "(empty)":
+                        out[col].add(label)
+            return {
+                col: sorted(values)[:limit_per_column]
+                for col, values in out.items()
+            }
+
+        return cached_distinct_values(cache_key, DISTINCT_VALUES_CACHE_TTL_SEC, _load)
+
     def get_distinct_values(self, column_name: str, prefix: str = "", limit: int = 100) -> List[str]:
         """
-        Get REAL distinct values for a column from VastDB (for dropdown options)
-        
-        Uses VastDB Python SDK with PyArrow.
-        Excludes vector columns from the query to work around SDK limitations.
-        
-        Args:
-            column_name: Column to get distinct values from
-            prefix: Optional prefix filter for autocomplete
-            limit: Maximum number of values to return
-        
-        Returns:
-            List of distinct string values from the actual database
+        Get distinct values for a column from the cached VastDB table scan.
         """
         try:
-            logger.info(f"[DISTINCT] Getting REAL distinct values for column: {column_name}")
-            
-            with self.client.transaction() as tx:
-                bucket = tx.bucket(self.settings.vdb_bucket)
-                db_schema = bucket.schema(self.settings.vdb_schema)
-                table = db_schema.table(self.settings.vdb_collection)
-                
-                # Get full schema
-                full_schema = table.columns()
-                logger.info(f"[DISTINCT] Full schema has {len(full_schema)} columns")
-                
-                # Check if column exists
-                if column_name not in full_schema.names:
-                    logger.warning(f"[DISTINCT] Column {column_name} not found in table")
-                    return []
-                
-                # Build a list of columns EXCLUDING vector types
-                # VastDB SDK can't handle fixed_size_list (vector) columns in queries
-                columns_to_select = []
-                for field in full_schema:
-                    field_type_str = str(field.type)
-                    # Skip vector columns
-                    if 'fixed_size_list' in field_type_str:
-                        logger.debug(f"[DISTINCT] Skipping vector column: {field.name}")
-                        continue
-                    if 'list<' in field_type_str and 'float' in field_type_str:
-                        logger.debug(f"[DISTINCT] Skipping float list column: {field.name}")
-                        continue
-                    columns_to_select.append(field.name)
-                
-                logger.info(f"[DISTINCT] Will select {len(columns_to_select)} non-vector columns")
-                
-                # Make sure our target column is queryable
-                if column_name not in columns_to_select:
-                    logger.warning(f"[DISTINCT] Column {column_name} is a vector type, cannot query")
-                    return []
-                
-                # Select all non-vector columns (SDK validates full schema)
-                result = table.select(
-                    columns=columns_to_select,
-                    internal_row_id=False
-                )
-                
-                # Read data as PyArrow table
-                arrow_table = result.read_all()
-                logger.info(f"[DISTINCT] Read {arrow_table.num_rows} rows from VastDB")
-                
-                # Convert to pandas
-                df = arrow_table.to_pandas()
-                
-                if df.empty:
-                    logger.info(f"[DISTINCT] No data found in table")
-                    return []
-                
-                # Get distinct values for the specific column
-                if column_name not in df.columns:
-                    logger.warning(f"[DISTINCT] Column {column_name} not in query result")
-                    return []
-                
-                # Extract unique values, filter nulls/empty
-                values = df[column_name].dropna().unique().tolist()
-                values = [str(v).strip() for v in values if v is not None and str(v).strip()]
-                
-                # Apply prefix filter if specified (for autocomplete)
-                if prefix:
-                    values = [v for v in values if v.lower().startswith(prefix.lower())]
-                
-                # Sort and limit
-                values = sorted(set(values))[:limit]
-                
-                logger.info(f"[DISTINCT] Found {len(values)} distinct values for {column_name}: {values[:10]}")
-                return values
-            
-        except ValueError as ve:
-            error_msg = str(ve)
-            if 'unsupported predicate for type=' in error_msg or 'fixed_size_list' in error_msg:
-                logger.error(f"[DISTINCT] VastDB SDK limitation with vector columns: {ve}")
-            else:
-                logger.error(f"[DISTINCT] ValueError for {column_name}: {ve}")
-            return []
+            values = self.get_distinct_values_map([column_name], limit_per_column=limit).get(
+                column_name, []
+            )
+            if prefix:
+                values = [v for v in values if v.lower().startswith(prefix.lower())]
+            return values[:limit]
         except Exception as e:
-            logger.error(f"[DISTINCT] Error getting distinct values for {column_name}: {str(e)}")
-            import traceback
-            logger.error(f"[DISTINCT] Traceback: {traceback.format_exc()}")
+            logger.error(f"[DISTINCT] Error getting distinct values for {column_name}: {e}")
             return []
 
 

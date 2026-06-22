@@ -1,4 +1,4 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
@@ -7,6 +7,8 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { VideoService } from '../../shared/services/video.service';
+import { IngestMetadataFieldsComponent } from '../../shared/components/ingest-metadata-fields.component';
+import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/ingest-metadata.util';
 
 @Component({
   selector: 'app-upload-dialog',
@@ -18,7 +20,8 @@ import { VideoService } from '../../shared/services/video.service';
     MatButtonModule,
     MatIconModule,
     MatProgressBarModule,
-    MatTooltipModule
+    MatTooltipModule,
+    IngestMetadataFieldsComponent,
   ],
   template: `
     <div class="upload-dialog-container">
@@ -70,44 +73,12 @@ import { VideoService } from '../../shared/services/video.service';
               <span class="field-hint">Add comma-separated tags to categorize your video</span>
             </div>
 
-            <div class="form-field-wrapper">
-              <label class="field-label">Analysis Scenario</label>
-              <select class="custom-input" formControlName="scenario">
-                <option value="">-- Use Default (from settings) --</option>
-                <option value="surveillance">Incident & Safety Detection</option>
-                <option value="traffic">Vehicle & Pedestrian Monitoring</option>
-                <option value="nhl">Hockey Game Analysis</option>
-                <option value="sports">General Sports Analysis</option>
-                <option value="retail">Retail Store Monitoring</option>
-                <option value="warehouse">Warehouse Safety & Operations</option>
-                <option value="nyc_control">NYC Traffic & Public Safety</option>
-                <option value="egocentric">First-Person Activity Analysis</option>
-                <option value="general">General Video Analysis</option>
-              </select>
-              <span class="field-hint">Select the analysis prompt scenario for this video</span>
-            </div>
-
-            <label class="checkbox-wrapper">
-              <input type="checkbox" formControlName="useCustomPrompt" class="custom-checkbox">
-              <span class="checkbox-label">
-                <mat-icon class="checkbox-icon">{{ uploadForm.get('useCustomPrompt')?.value ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
-                Use custom prompt (overrides scenario)
-              </span>
-            </label>
-
-            @if (useCustomPrompt()) {
-              <div class="form-field-wrapper custom-prompt-wrapper">
-                <label class="field-label">Custom Prompt</label>
-                <textarea class="custom-input custom-prompt-textarea" 
-                          formControlName="customPrompt"
-                          placeholder="Enter your custom reasoning prompt for the AI model..."
-                          rows="4"
-                          maxlength="800"></textarea>
-                <span class="field-hint">
-                  {{ customPromptLength() }}/800 characters. Describe what you want the AI to analyze in the video.
-                </span>
-              </div>
-            }
+            <app-ingest-metadata-fields
+              [form]="uploadForm"
+              fields="analysis"
+              variant="material"
+              [showSectionTitle]="false">
+            </app-ingest-metadata-fields>
 
             <label class="checkbox-wrapper">
               <input type="checkbox" formControlName="isPrivate" class="custom-checkbox">
@@ -139,36 +110,12 @@ import { VideoService } from '../../shared/services/video.service';
 
             @if (showMetadata()) {
               <div class="metadata-section">
-                <div class="form-field-wrapper">
-                  <label class="field-label">Camera ID</label>
-                  <input type="text" 
-                         class="custom-input" 
-                         formControlName="camera_id" 
-                         placeholder="e.g., CAM-001, manhattan-cam-1">
-                </div>
-                
-                <div class="form-field-wrapper">
-                  <label class="field-label">Capture Type</label>
-                  <select class="custom-input" formControlName="capture_type">
-                    <option value="">-- None --</option>
-                    <option value="traffic">Traffic</option>
-                    <option value="streets">Streets</option>
-                    <option value="crowds">Crowds</option>
-                    <option value="malls">Malls</option>
-                    <option value="warehouse">Warehouse</option>
-                    <option value="retail">Retail</option>
-                    <option value="sports">Sports</option>
-                    <option value="general">General</option>
-                  </select>
-                </div>
-                
-                <div class="form-field-wrapper">
-                  <label class="field-label">Location</label>
-                  <input type="text" 
-                         class="custom-input" 
-                         formControlName="location" 
-                         placeholder="e.g., Midtown, Downtown, Times Square">
-                </div>
+                <app-ingest-metadata-fields
+                  [form]="uploadForm"
+                  fields="location"
+                  variant="material"
+                  [showSectionTitle]="false">
+                </app-ingest-metadata-fields>
               </div>
             }
 
@@ -427,7 +374,8 @@ import { VideoService } from '../../shared/services/video.service';
         display: block;
         margin-top: 0.375rem;
         font-size: 0.75rem;
-        color: var(--text-muted);
+        color: var(--text-primary);
+        opacity: 0.85;
         font-style: italic;
       }
     }
@@ -476,8 +424,9 @@ import { VideoService } from '../../shared/services/video.service';
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      color: var(--text-secondary);
+      color: var(--text-primary);
       font-size: 0.875rem;
+      font-weight: 500;
       cursor: pointer;
       padding: 0.5rem 0;
       margin-bottom: 0.5rem;
@@ -735,7 +684,7 @@ import { VideoService } from '../../shared/services/video.service';
     }
   `]
 })
-export class UploadDialogComponent implements OnInit {
+export class UploadDialogComponent {
   private fb = inject(FormBuilder);
   private videoService = inject(VideoService);
   private dialogRef = inject(MatDialogRef<UploadDialogComponent>);
@@ -745,8 +694,8 @@ export class UploadDialogComponent implements OnInit {
     isPrivate: [false],  // Default to false = public
     allowedUsers: [''],
     scenario: [''],  // Analysis scenario (optional, falls back to default)
-    useCustomPrompt: [false],  // Checkbox to enable custom prompt
-    customPrompt: [''],  // Custom prompt text (overrides scenario)
+    useCustomPrompt: [false],
+    custom_prompt: [''],
     camera_id: [''],
     capture_type: [''],
     location: ['']
@@ -766,26 +715,6 @@ export class UploadDialogComponent implements OnInit {
   uploadPhase = signal<'requesting' | 'uploading'>('requesting');
   error = signal<string | null>(null);
   showMetadata = signal(false);
-
-  ngOnInit() {
-    // Toggle scenario field enabled/disabled based on useCustomPrompt checkbox
-    this.uploadForm.get('useCustomPrompt')?.valueChanges.subscribe((useCustom) => {
-      const scenarioControl = this.uploadForm.get('scenario');
-      if (useCustom) {
-        scenarioControl?.disable();
-      } else {
-        scenarioControl?.enable();
-      }
-    });
-  }
-
-  useCustomPrompt(): boolean {
-    return this.uploadForm.get('useCustomPrompt')?.value ?? false;
-  }
-
-  customPromptLength(): number {
-    return (this.uploadForm.get('customPrompt')?.value || '').length;
-  }
 
   onDragOver(event: DragEvent) {
     event.preventDefault();
@@ -899,26 +828,17 @@ export class UploadDialogComponent implements OnInit {
     this.error.set(null);
 
     try {
-      const formValue = this.uploadForm.value;
-
-      const tags = formValue.tags 
-        ? formValue.tags.split(',').map((t: string) => t.trim()).filter((t: string) => t)
-        : [];
-      
-      const allowedUsers = formValue.allowedUsers
-        ? formValue.allowedUsers.split(',').map((u: string) => u.trim()).filter((u: string) => u)
-        : [];
-
+      const formValue = this.uploadForm.getRawValue();
+      const tags = parseCommaList(formValue.tags);
+      const allowedUsers = parseCommaList(formValue.allowedUsers);
       const isPublic = !formValue.isPrivate;
-      const scenario = formValue.useCustomPrompt ? '' : (formValue.scenario || '');
-      
+      const meta = pickIngestMetadataPayload(formValue);
+      const scenario = meta.scenario || '';
       const metadata = {
-        camera_id: formValue.camera_id || undefined,
-        capture_type: formValue.capture_type || undefined,
-        location: formValue.location || undefined,
-        custom_prompt: formValue.useCustomPrompt && formValue.customPrompt 
-          ? formValue.customPrompt.trim() 
-          : undefined
+        camera_id: meta.camera_id,
+        capture_type: meta.capture_type,
+        location: meta.location,
+        custom_prompt: meta.custom_prompt,
       };
 
       this.uploadPhase.set('uploading');
