@@ -11,8 +11,8 @@ class Settings(BaseModel):
     vdbschema: str
     vdbaccesskey: str
     vdbsecretkey: str
-    vdbcollection: str = "vss2-collection"
-    vdbpromptscollection: str = "vss2-prompts-events"
+    vdbcollection: str = "vss-collection"
+    vdbpromptscollection: str = "vss-prompts-events"
 
     cosmos_host: str = ""
     cosmos_port: int = 8001

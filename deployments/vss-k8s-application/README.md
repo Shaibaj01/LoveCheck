@@ -13,8 +13,8 @@ Deploy the VSS Blueprint web application to Kubernetes.
   - VMS hostname and tenant name for user authentication (see [User Authentication](../../source-code/retrieval/video-backend/README.md))
 
 - **Storage resources:**
-  - S3 buckets: `video-chunks` and `video-chunks-segments`
-  - VastDB bucket: `processed-videos-db`
+  - S3 buckets: `vss-chunks` and `vss-chunks-segments` (segmenter writes `{upload_bucket}-segments` by default)
+  - VastDB bucket: `vss-db`, schema `vss-schema`, tables `vss-collection` and `vss-prompts-events`
 
 - **AI/ML services:**
   - NVIDIA NIM Endpoints or API key (for embeddings and LLM)
@@ -26,16 +26,17 @@ Deploy the VSS Blueprint web application to Kubernetes.
 
 ## Step 1: Configure Backend Secret
 
-Edit `backend-secret.yaml` with your credentials:
+Copy the example and fill in credentials locally (**do not commit** `backend-secret.yaml`):
 
 ```bash
+cp backend-secret.yaml.example backend-secret.yaml
 vim backend-secret.yaml
 ```
 
 | Section | Key Settings |
 |---------|--------------|
-| **VastDB** | `vdb_endpoint`, `vdb_bucket`, `vdb_schema`, `vdb_collection`, credentials |
-| **S3** | `s3_endpoint` (must match tenant), `s3_upload_bucket`, `s3_segments_bucket`, credentials |
+| **VastDB** | `vdb_endpoint`, `vdb_bucket` (`vss-db`), `vdb_schema` (`vss-schema`), `vdb_collection` (`vss-collection`), `vdb_prompts_collection` (`vss-prompts-events`), credentials |
+| **S3** | `s3_endpoint` (must match tenant), `s3_upload_bucket` (`vss-chunks`), `s3_segments_bucket` (`vss-chunks-segments`), credentials |
 | **NVIDIA** | `nvidia_api_key`, `embedding_model`, `llm_model_name`, `embedding_local_nim`, `llm_local_nim` |
 | **Auth** | `vast_host`, `tenant_name`, `jwt_secret` (see [setup](../../source-code/retrieval/video-backend/README.md#user-authentication)) |
 

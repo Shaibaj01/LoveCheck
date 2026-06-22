@@ -55,7 +55,7 @@ The system has two main parts:
 | **Advanced Search & AI Settings** | Max clip cards, LLM clips analyzed, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Explore mode** | Browse indexed uploads by day and location — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
-| **Search suggestions & key events** | LLM-generated prompts from prompt-suggester → VastDB `vss2-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
+| **Search suggestions & key events** | LLM-generated prompts from prompt-suggester → VastDB `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
 | **Agent APIs** | Tool wrappers + grounded Q&A for external agents | [video-backend](source-code/retrieval/video-backend/README.md#agent-apis) |
 | **Time Filtering** | Filter by upload time (presets or custom range) | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Video Streaming** | Capture YouTube videos to S3 | [video-streaming](source-code/video-streaming/README.md) |
@@ -85,7 +85,7 @@ The system has two main parts:
 ## Pipeline Flow
 
 ```
-Upload Video → video-chunks bucket
+Upload Video → vss-chunks bucket
                     ↓
             video-segmenter (5s segments)
                     ↓
@@ -101,7 +101,7 @@ Upload Video → video-chunks bucket
                     ↓
          prompt-suggester (optional enrichment)
                     ↓
-         vss2-prompts-events (search prompts + key events)
+         vss-prompts-events (search prompts + key events)
 ```
 
 **Search flow:** query embed → hybrid caption+video search → group by upload (clip cards + timeline) → always-on LLM synthesis → jump-to-moment playback

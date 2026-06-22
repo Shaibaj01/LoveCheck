@@ -80,7 +80,7 @@ interface DashboardKpiCard {
           <mat-icon>warning_amber</mat-icon>
           <div>
             <p>{{ accessWarning() }}</p>
-            <span class="access-hint">Upload a video or confirm <code>vss2-collection</code> exists in VastDB.</span>
+            <span class="access-hint">Upload a video or confirm <code>vss-collection</code> exists in VastDB.</span>
           </div>
         </div>
       }

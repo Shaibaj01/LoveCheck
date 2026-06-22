@@ -14,10 +14,12 @@ Deploy the serverless video processing pipeline using **DataEngine UI** or **vas
 **Pipeline Name:** `video-realtime-processing-pipeline`
 
 ```
-video-chunks bucket → video-segmenter
+vss-chunks bucket → video-segmenter
                             ↓
-video-chunks-segments bucket → video-reasoner → video-embedder → video-vastdb-writer
+vss-chunks-segments bucket → video-reasoner → video-embedder → video-vastdb-writer
 ```
+
+DataEngine functions share secret name **`vss2-secret`** (table/bucket values use `vss-*` — see templates).
 
 ## Files in This Directory
 
@@ -33,11 +35,13 @@ video-chunks-segments bucket → video-reasoner → video-embedder → video-vas
 
 ## Step 1: Configure Secret
 
-Edit `vss-gui-secret-file-template.yaml`:
+Copy `vss-gui-secret-file-template.yaml` to a local file, fill credentials, and upload in DataEngine UI — **do not commit** files with real keys (templates with empty values are safe in git).
 
 ```bash
 vim vss-gui-secret-file-template.yaml
 ```
+
+Secret **name** in DataEngine must be `vss2-secret`. Bucket/table **values** use the `vss-*` namespace (`vss-chunks`, `vss-collection`, etc.).
 
 | Section | Key Settings |
 |---------|--------------|
@@ -53,8 +57,8 @@ Navigate to **DataEngine UI → Triggers** and create:
 
 | Trigger Name | Type | Bucket |
 |--------------|------|--------|
-| `video-chunk-land-trigger` | S3 Bucket | `video-chunks` |
-| `video-segment-land-trigger` | S3 Bucket | `video-chunks-segments` |
+| `video-chunk-land-trigger` | S3 Bucket | `vss-chunks` |
+| `video-segment-land-trigger` | S3 Bucket | `vss-chunks-segments` |
 
 ## Step 3: Create Functions
 
@@ -111,7 +115,7 @@ vim vss-cli-secret-file-template.yaml
 vastde triggers create \
   --name video-chunk-land-trigger \
   --type Element \
-  --source-bucket video-chunks \
+  --source-bucket vss-chunks \
   --events "ObjectCreated:*" \
   --broker-name <your-broker-name> \
   --broker-type Internal \
@@ -120,7 +124,7 @@ vastde triggers create \
 vastde triggers create \
   --name video-segment-land-trigger \
   --type Element \
-  --source-bucket video-chunks-segments \
+  --source-bucket vss-chunks-segments \
   --events "ObjectCreated:*" \
   --broker-name <your-broker-name> \
   --broker-type Internal \

@@ -14,7 +14,7 @@ Three top-level modes share the same scope pills (**All Videos** / **My Videos**
 
 ### Search
 
-- Empty state shows **live search suggestions** from `GET /api/v1/suggestions` (prompt-suggester → `vss2-prompts-events`). Clicking a suggestion fills the search bar only (does not auto-run search).
+- Empty state shows **live search suggestions** from `GET /api/v1/suggestions` (prompt-suggester → `vss-prompts-events`). Clicking a suggestion fills the search bar only (does not auto-run search).
 - After a search, results persist when navigating away and back; suggestions stay hidden while results are shown.
 - **Refresh** clears results and restores the suggestion panel.
 

@@ -22,7 +22,7 @@ Users authenticate with their **VAST username + password** (same as VMS login).
 
 ### Setup
 
-Configure backend secret (`deployments/vss-k8s-application/backend-secret.yaml`):
+Configure backend secret (`deployments/vss-k8s-application/backend-secret.yaml.example` → copy to `backend-secret.yaml`, gitignored):
 
 ```yaml
 vast_host: "<vms-ip-or-hostname>"
@@ -101,7 +101,7 @@ Explore list building uses a **single cached VastDB scan** per TTL window and bu
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/v1/suggestions` | Search prompts + key events from `vss2-prompts-events` (prompt-suggester) |
+| `GET /api/v1/suggestions` | Search prompts + key events from `vss-prompts-events` (prompt-suggester) |
 | `GET /api/v1/dashboard/stats` | VastDB overview, ingest quality, S3 inventory, recent videos (`scope`) |
 
 Suggestions filters key events to videos the user can access. Returns `prompts_table_available` / `table_message` when the prompts table is missing.

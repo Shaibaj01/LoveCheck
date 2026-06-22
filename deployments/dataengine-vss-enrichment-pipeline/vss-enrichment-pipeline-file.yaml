@@ -1,4 +1,4 @@
-# DataEngine pipeline: scheduled LLM prompt + key-event suggestions → vss2-prompts-events
+# DataEngine pipeline: scheduled LLM prompt + key-event suggestions → vss-prompts-events
 # Register function VRN after building/pushing prompt-suggester image to DataEngine.
 kubernetes_cluster_vrn: <your-kubernetes-cluster-vrn>
 namespace: <your-namespace>

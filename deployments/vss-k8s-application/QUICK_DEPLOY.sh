@@ -95,6 +95,12 @@ echo ""
 
 # Step 2: Create Secret
 echo -e "${YELLOW}Step 2/6: Creating backend secret...${NC}"
+if [ ! -f backend-secret.yaml ]; then
+  echo -e "${RED}Error: backend-secret.yaml not found${NC}"
+  echo "Copy and edit the template (do not commit credentials):"
+  echo "  cp backend-secret.yaml.example backend-secret.yaml"
+  exit 1
+fi
 sed "s/NAMESPACE/$NAMESPACE/g" backend-secret.yaml | kubectl apply -f -
 echo -e "${GREEN}✓ Secret created${NC}"
 echo ""

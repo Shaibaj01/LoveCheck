@@ -112,7 +112,7 @@ Add only what the function needs below this block, with versions aligned to sibl
 | HTTP / LLM / NIM | `requests==2.31.0` (see video-reasoner) |
 | Do **not** add | `httpx`, unpinned `vastdb`, `pandas` unless required |
 
-## VastDB reads on `vss2-collection`
+## VastDB reads on `vss-collection`
 
 Tables include `vectors` / `vectors_visual`. Import `common/vastdb_patch.py` before `table.select()` so vector columns are excluded from projections.
 

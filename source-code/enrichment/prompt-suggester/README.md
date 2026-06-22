@@ -1,27 +1,23 @@
-# Prompt Suggester (DataEngine scheduled function)
+# Prompt suggester (DataEngine enrichment)
 
-Reads recent segment captions from `vss2-collection`, calls Cosmos Reason2, writes search prompts and key events to `vss2-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
+Reads recent segment captions from `vss-collection`, calls Cosmos Reason2, writes search prompts and key events to `vss-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
 
-- **Search** empty state — clickable suggestion chips (fill query only)
+- **Search** — suggestion chips on empty state
 - **Dashboard** — key events table with in-place segment preview
-
-Structure matches other DataEngine functions (`vastdb-writer`, `fraud-detector`). See `.cursor/skills/dataengine-function/SKILL.md`.
 
 ## Secret keys (`vss2-secret`)
 
-| Key | Default | Purpose |
-|-----|---------|---------|
-| `vdbpromptscollection` | `vss2-prompts-events` | Output table |
-| `suggestions_max_segments` | `48` | Max segment lines in LLM corpus (sampled per video) |
-| `suggestions_search_count` | `10` | Search prompts per run |
-| `suggestions_events_count` | `30` | Max unique key events per run |
-| `suggestions_max_events_per_video` | `3` | Cap per video in LLM prompt |
-| `suggestions_lookback_hours` | `168` | Only segments newer than this |
+DataEngine secret **name** stays `vss2-secret`; table/bucket **values** use the `vss-*` namespace:
 
-Plus standard VastDB and Cosmos keys (`vdbendpoint`, `vdbcollection`, `cosmos_host`, `cosmos_port`, `cosmos_model`, …).
+| Key | Example value | Purpose |
+|-----|---------------|---------|
+| `vdbcollection` | `vss-collection` | Source segments |
+| `vdbpromptscollection` | `vss-prompts-events` | Output table |
+| `vdbbucket` / `vdbschema` | `vss-db` / `vss-schema` | VastDB location |
 
 ## Deploy
 
-1. Build/register function `prompt-suggester` (`main.py` entry).
+1. Build image: `source-code/scripts/build-vastde-functions.sh` (includes prompt-suggester)
 2. Create **Schedule** trigger in DataEngine; link in `deployments/dataengine-vss-enrichment-pipeline/vss-enrichment-pipeline-file.yaml`.
-3. Redeploy video-backend / frontend (no search-suggestions ConfigMap).
+
+Do **not** commit filled secret files — use `*-secret-file-template.yaml` and keep credentials local.

@@ -131,16 +131,15 @@ class DashboardStatsTests(unittest.TestCase):
         )
         attach_s3_inventory(
             payload,
-            upload_bucket="vss2-chunks",
-            segments_bucket="vss2-segments",
+            upload_bucket="vss-chunks",
+            segments_bucket="vss-chunks-segments",
             bucket_counts={
-                "vss2-chunks": 9,
-                "vss2-segments": 0,
-                "vss2-chunks-segments": 54,
+                "vss-chunks": 9,
+                "vss-chunks-segments": 54,
             },
             bucket_errors={},
         )
-        self.assertEqual(segmenter_output_bucket("vss2-chunks"), "vss2-chunks-segments")
+        self.assertEqual(segmenter_output_bucket("vss-chunks"), "vss-chunks-segments")
         self.assertEqual(payload["s3_inventory"]["chunks_mp4"], 9)
         self.assertEqual(payload["pipeline_alignment"]["segments_s3_mp4"], 54)
         self.assertEqual(payload["pipeline_alignment"]["indexed_clips"], 1)

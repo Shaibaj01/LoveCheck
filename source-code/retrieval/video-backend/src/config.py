@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     vdb_schema: str = Field(default="video_schema", description="VastDB schema")
     vdb_collection: str = Field(default="processedvideos", description="VastDB collection")
     vdb_prompts_collection: str = Field(
-        default="vss2-prompts-events",
+        default="vss-prompts-events",
         description="Table for LLM-generated search prompts and key events",
     )
     vdb_access_key: str = Field(..., description="VastDB access key")
