@@ -29,6 +29,7 @@ export async function playVideoMuted(video: HTMLVideoElement): Promise<void> {
 export function seekVideoAndWait(
   video: HTMLVideoElement,
   sec: number,
+  timeoutMs = 8000,
 ): Promise<void> {
   return new Promise((resolve) => {
     if (sec <= 0.05 || Math.abs(video.currentTime - sec) < 0.1) {
@@ -45,9 +46,13 @@ export function seekVideoAndWait(
     };
 
     const cleanup = () => {
+      clearTimeout(timer);
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('canplay', onCanPlay);
+      video.removeEventListener('canplaythrough', onCanPlay);
     };
+
+    const timer = setTimeout(finish, timeoutMs);
 
     const onCanPlay = () => finish();
 
@@ -55,6 +60,7 @@ export function seekVideoAndWait(
       if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
         finish();
       } else {
+        video.addEventListener('canplaythrough', onCanPlay, { once: true });
         video.addEventListener('canplay', onCanPlay, { once: true });
       }
     };
