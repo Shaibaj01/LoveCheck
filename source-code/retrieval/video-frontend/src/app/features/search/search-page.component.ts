@@ -17,6 +17,7 @@ import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { AuthService } from '../auth/services/auth.service';
 import { SuggestionsService } from '../../shared/services/suggestions.service';
+import { BackendModelsService } from '../../shared/services/backend-models.service';
 import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
 import {
   friendlyVastDbAccessMessage,
@@ -173,7 +174,9 @@ import {
       [searchTime]="searchService.state().searchTimeMs"
       [llmTime]="searchService.state().llmTimeMs"
       [resultsCount]="displayResults().length"
-      [showLlmPhase]="searchService.state().llmSynthesis !== null"
+      [showLlmPhase]="searchService.state().expectSynthesis"
+      [embeddingModelDetail]="modelsService.embeddingDetail()"
+      [synthesisModel]="modelsService.synthesisLabel()"
       (close)="closeAnimation()">
     </app-search-animation>
   `,
@@ -503,6 +506,7 @@ export class SearchPageComponent implements OnInit, OnDestroy, AfterViewInit {
   dialog = inject(MatDialog);
   authService = inject(AuthService);
   suggestionsService = inject(SuggestionsService);
+  modelsService = inject(BackendModelsService);
   private pageRefresh = inject(PageRefreshService);
   
   hasSearched = signal(false);
@@ -517,6 +521,7 @@ export class SearchPageComponent implements OnInit, OnDestroy, AfterViewInit {
   private uploadDialogRef: MatDialogRef<UploadDialogComponent> | null = null;
 
   ngOnInit() {
+    void this.modelsService.ensureLoaded();
     this.restoreSearchSession();
     if (this.showSuggestions()) {
       this.loadExampleQueries();

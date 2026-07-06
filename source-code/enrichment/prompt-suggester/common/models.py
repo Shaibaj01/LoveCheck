@@ -18,7 +18,7 @@ class Settings(BaseModel):
     cosmos_port: int = 8001
     cosmos_model: str = ""
     cosmos_max_tokens: int = 6000
-    cosmos_temperature: float = 0.3
+    cosmos_temperature: float = 0.2
 
     suggestions_max_segments: int = 48
     suggestions_search_count: int = 10

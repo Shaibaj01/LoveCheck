@@ -337,16 +337,16 @@ export class SystemPromptDialogComponent implements OnInit {
   }
 
   private loadDefaultFromBackend(): void {
-    this.http.get<{ llm?: { default_system_prompt?: string } }>(`${environment.apiUrl}/config`).subscribe({
-      next: (config: { llm?: { default_system_prompt?: string } }) => { this.systemPrompt = config?.llm?.default_system_prompt ?? ''; },
+    this.http.get<{ synthesis?: { default_system_prompt?: string }; llm?: { default_system_prompt?: string } }>(`${environment.apiUrl}/config`).subscribe({
+      next: (config) => { this.systemPrompt = config?.synthesis?.default_system_prompt ?? config?.llm?.default_system_prompt ?? ''; },
       error: () => { this.systemPrompt = ''; }
     });
   }
 
   resetToDefault(): void {
-    this.http.get<{ llm?: { default_system_prompt?: string } }>(`${environment.apiUrl}/config`).subscribe({
-      next: (config: { llm?: { default_system_prompt?: string } }) => {
-        this.systemPrompt = config?.llm?.default_system_prompt ?? '';
+    this.http.get<{ synthesis?: { default_system_prompt?: string }; llm?: { default_system_prompt?: string } }>(`${environment.apiUrl}/config`).subscribe({
+      next: (config) => {
+        this.systemPrompt = config?.synthesis?.default_system_prompt ?? config?.llm?.default_system_prompt ?? '';
         this.snackBar.open('Reset to default prompt', 'OK', { duration: 2000 });
       },
       error: () => this.snackBar.open('Could not load default prompt', 'OK', { duration: 2000 })

@@ -24,22 +24,23 @@ Input: SAMPLE SEGMENTS — sparse clip captions from recent videos.
 Goals:
 1) search_prompts: exactly {search_count} SHORT search-box queries (not captions).
    - At most 6 words. One line. No period. No commas.
-   - Lead with the specific subject + action (person, vehicle, hazard, brand, sign).
-   - Do NOT add filler: "urban setting", "daylight conditions", "clear skies", "no hazards",
-     "moderately busy", "bustling city street", "in the scene", "visible in the background".
-   - Good: "Woman on sidewalk using phone"
-   - Good: "UPS truck blocking sidewalk"
-   - Good: "Food cart at busy intersection"
-   - Bad: long narrative sentences or generic scene summaries.
+   - Each prompt MUST use a DIFFERENT primary subject (vehicle type, person role, hazard, brand).
+   - Lead with subject + ACTION (blocking, turning, crossing, delivering, near-miss, conflict).
+   - NEVER repeat the same subject with only a different landmark ("food trucks near X" is banned).
+   - At most ONE food truck/cart/vendor prompt in the whole list. At most ONE taxi/cab prompt.
+   - Do NOT use idle scenes: waiting at crosswalk, passing taxi, parked vehicles, "near sign/hydrant".
+   - Do NOT add filler: urban setting, daylight, clear skies, no hazards, bustling street.
+   - Good: "UPS truck blocking bike lane"
+   - Good: "Cyclist swerving around open door"
+   - Bad: "Food trucks near traffic lights" / "Pedestrians waiting at crosswalk"
 
 2) key_events: up to {events_count} UNIQUE investigative moments across ALL videos.
    - Max {max_per_video} key_events per video unless severity is high.
-   - NEVER list the same object twice in overlapping times (e.g. two "forklift on sidewalk" lines).
-   - SKIP idle parked vehicles, mannequins, generic pedestrians unless tied to action/hazard.
-   - Prefer: conflicts, blocking, deliveries, jaywalking, construction hazards, brands/signs, near-misses.
+   - Same diversity rules as search_prompts — no landmark-only duplicates.
+   - SKIP idle parked vehicles, waiting pedestrians, generic "near landmark" lines.
+   - Prefer: conflicts, blocking, deliveries, jaywalking, construction hazards, brands, near-misses.
    - label: 3–8 word headline, Title Case, MUST differ from query_text.
-   - query_text: SHORT search phrase only — max 6 words, like search_prompts (who/what + action).
-     NOT a full caption. No filler about daylight, urban setting, or buildings.
+   - query_text: SHORT search phrase — max 6 words, subject + action (not "X near Y").
 
 Keep JSON compact. No markdown. Close all brackets.
 Schema:
@@ -51,6 +52,22 @@ def _video_meta(row: dict) -> Tuple[str, str]:
     ov = str(row.get("original_video") or row.get("source") or "").strip()
     fn = str(row.get("filename") or ov.rsplit("/", 1)[-1])
     return ov, fn
+
+
+def _corpus_object_hints(segments: List[dict], limit: int = 14) -> str:
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for seg in segments:
+        raw = str(seg.get("object_classes") or "")
+        for part in re.split(r"[,;|]", raw):
+            name = part.strip().lower()
+            if name and name not in ("person", "car"):
+                counts[name] += 1
+    if not counts:
+        return ""
+    top = ", ".join(k for k, _ in counts.most_common(limit))
+    return f"Distinct objects in corpus (spread prompts across these; do not repeat one type): {top}\n\n"
 
 
 def _format_corpus(segments: List[dict], max_segment_lines: int) -> str:
@@ -253,7 +270,8 @@ def generate_suggestions(
         max_per_video=max_per_video,
     )
     user = (
-        f"Corpus: {len(segments)} sample segments.\n\n{corpus}"
+        f"Corpus: {len(segments)} sample segments.\n"
+        f"{_corpus_object_hints(segments)}{corpus}"
     )
 
     max_tokens = max(settings.cosmos_max_tokens, 4000)
@@ -292,7 +310,7 @@ def generate_suggestions(
 
     prompts = dedupe_prompts([
         str(p).strip() for p in data.get("search_prompts", []) if str(p).strip()
-    ])[: settings.suggestions_search_count]
+    ], limit=settings.suggestions_search_count)
 
     llm_events: List[Dict[str, Any]] = []
     for ev in data.get("key_events", []):

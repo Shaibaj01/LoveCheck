@@ -19,6 +19,7 @@ build_and_push() {
 }
 
 build_and_push ingest/video-segmenter vss-video-segmenter
+build_and_push ingest/video-detector   vss-video-detector
 build_and_push ingest/video-reasoner   vss-video-reasoner
 build_and_push ingest/video-embedder   vss-video-embedder
 build_and_push ingest/vastdb-writer    vss-video-vastdb

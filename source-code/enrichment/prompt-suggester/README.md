@@ -1,9 +1,11 @@
 # Prompt suggester (DataEngine enrichment)
 
-Reads recent segment captions from `vss-collection`, calls Cosmos Reason2, writes search prompts and key events to `vss-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
+Reads recent segment captions from `vss-collection`, calls **Cosmos-Reason2**, writes deduplicated search prompts and key events to `vss-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
 
 - **Search** — suggestion chips on empty state
 - **Dashboard** — key events table with in-place segment preview
+
+Post-processing drops repetitive “subject near landmark” prompts, caps duplicate subjects (food vendor, taxi, etc.), and filters low-value idle scenes before write. The backend applies the same dedupe when serving stored rows.
 
 ## Secret keys (`vss2-secret`)
 
@@ -14,6 +16,7 @@ DataEngine secret **name** stays `vss2-secret`; table/bucket **values** use the 
 | `vdbcollection` | `vss-collection` | Source segments |
 | `vdbpromptscollection` | `vss-prompts-events` | Output table |
 | `vdbbucket` / `vdbschema` | `vss-db` / `vss-schema` | VastDB location |
+| `cosmos_host` / `cosmos_port` | same as video-reasoner | Cosmos-Reason2 API |
 
 ## Deploy
 

@@ -2,7 +2,7 @@
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
 import vastdb
@@ -10,6 +10,7 @@ import vastdb._internal as _internal
 
 from src.config import get_settings
 from src.models.user import User
+from src.utils.suggestion_dedupe import dedupe_key_events, dedupe_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -178,22 +179,8 @@ class SuggestionsService:
             "batch_id": str(row.get("batch_id") or ""),
         }
 
-    @staticmethod
-    def _event_tokens(text: str) -> Set[str]:
-        stop = {"the", "and", "for", "with", "near", "along", "street", "sidewalk", "road"}
-        return {
-            w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
-            if len(w) > 2 and w not in stop
-        }
-
-    def _events_similar(self, a: str, b: str) -> bool:
-        ta, tb = self._event_tokens(a), self._event_tokens(b)
-        if not ta or not tb:
-            return a.strip().lower() == b.strip().lower()
-        return len(ta & tb) / len(ta | tb) >= 0.52
-
     def _dedupe_key_event_rows(self, event_rows: List[dict]) -> List[Dict[str, Any]]:
-        """Timeline order, fuzzy dedupe across all active key_event rows."""
+        """Timeline order, then subject-aware dedupe across stored key_event rows."""
         event_rows = sorted(
             event_rows,
             key=lambda r: (
@@ -202,27 +189,9 @@ class SuggestionsService:
                 str(r.get("original_video") or ""),
             ),
         )
-        kept: List[Dict[str, Any]] = []
-        for row in event_rows:
-            ev = self._row_to_key_event(row)
-            q = ev["query_text"]
-            if not q:
-                continue
-            dup = False
-            for existing in kept:
-                if str(existing.get("original_video")) != str(ev.get("original_video")):
-                    continue
-                t0 = float(existing.get("segment_start_sec") or 0)
-                t1 = float(ev.get("segment_start_sec") or 0)
-                if abs(t0 - t1) > 12:
-                    continue
-                if self._events_similar(q, existing["query_text"]) or self._events_similar(
-                    ev.get("label") or q, existing.get("label") or existing["query_text"]
-                ):
-                    dup = True
-                    break
-            if not dup:
-                kept.append(ev)
+        events = [self._row_to_key_event(row) for row in event_rows]
+        events = [ev for ev in events if ev.get("query_text")]
+        kept = dedupe_key_events(events)
         kept.sort(
             key=lambda e: (
                 float(e.get("segment_start_sec") or 0),
@@ -297,17 +266,12 @@ class SuggestionsService:
             [r for r in active if str(r.get("kind") or "") == "search_prompt"],
             key=lambda r: -self._ts_sort_key(r.get("generated_at")),
         )
-        prompts: List[str] = []
-        seen_prompts: Set[str] = set()
+        raw_prompts: List[str] = []
         for row in prompt_rows:
             q = str(row.get("query_text") or "").strip()
-            key = q.lower()
-            if not q or key in seen_prompts:
-                continue
-            seen_prompts.add(key)
-            prompts.append(q)
-            if len(prompts) >= 10:
-                break
+            if q:
+                raw_prompts.append(q)
+        prompts = dedupe_prompts(raw_prompts, limit=10)
 
         event_rows = [r for r in active if str(r.get("kind") or "") == "key_event"]
         events = self._dedupe_key_event_rows(event_rows)

@@ -2,8 +2,10 @@
 Video management API endpoints
 """
 import asyncio
+import gzip
+import json
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, status, Query, UploadFile, File, Form, Request, Response
 from fastapi.responses import StreamingResponse
 from src.services.auth_service import CurrentUser
@@ -407,6 +409,51 @@ async def synthesize_video_chunk(
         llm_synthesis=synthesis,
         generated_at=datetime.now(timezone.utc),
     )
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("s3://"):
+        raise ValueError(f"Invalid S3 URI: {uri}")
+    rest = uri[5:]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        raise ValueError(f"Invalid S3 URI: {uri}")
+    return bucket, key
+
+
+@router.get("/detections")
+async def get_video_detections(
+    source: str = Query(..., description="Segment clip S3 URI (source)"),
+    current_user: CurrentUser = None,
+) -> Dict[str, Any]:
+    """Load YOLO detection sidecar JSON for a segment (bbox overlay)."""
+    logger.info("Detections request from %s: source=%s", current_user.username, source)
+    vastdb_service = get_vastdb_service()
+    segment = vastdb_service.get_video_by_source(source, current_user)
+    if not segment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found")
+
+    sidecar_uri = (segment.detection_sidecar_uri or "").strip()
+    if not sidecar_uri:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No detection sidecar for segment")
+
+    try:
+        bucket, key = _parse_s3_uri(sidecar_uri)
+        raw = get_s3_service().get_object_bytes(bucket, key)
+        if key.lower().endswith(".gz"):
+            raw = gzip.decompress(raw)
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Sidecar JSON must be an object")
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to load detections for %s: %s", source, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load detections: {exc}",
+        )
 
 
 @router.get("/metadata")

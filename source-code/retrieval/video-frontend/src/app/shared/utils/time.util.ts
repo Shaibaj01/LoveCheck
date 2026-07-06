@@ -9,23 +9,75 @@ export function parseUtcIso(iso: string | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatRelativeTime(iso: string | null | undefined): string {
+function localeFormat(
+  date: Date,
+  options: Intl.DateTimeFormatOptions,
+  timeZone?: string,
+): string {
+  const opts = { ...options };
+  const tz = timeZone?.trim();
+  if (tz) {
+    opts.timeZone = tz;
+  }
+  return date.toLocaleString(undefined, opts);
+}
+
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
   const date = parseUtcIso(iso);
   if (!date) return '';
   const sec = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
   if (sec < 60) return 'just now';
   if (sec < 3600) return `${Math.floor(sec / 60)} min ago`;
   if (sec < 86400) return `${Math.floor(sec / 3600)} hr ago`;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return localeFormat(
+    date,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    },
+    timeZone,
+  );
 }
 
-export function formatAbsoluteTime(iso: string | null | undefined): string {
+export function formatAbsoluteTime(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
   const date = parseUtcIso(iso);
   if (!date) return iso || '—';
-  return date.toLocaleString();
+  return localeFormat(
+    date,
+    {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    },
+    timeZone,
+  );
+}
+
+/** Compact timestamp for video card badges. */
+export function formatUploadBadgeTime(
+  iso: string | null | undefined,
+  timeZone?: string,
+): string {
+  const date = parseUtcIso(iso);
+  if (!date) return '';
+  return localeFormat(
+    date,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    },
+    timeZone,
+  );
 }

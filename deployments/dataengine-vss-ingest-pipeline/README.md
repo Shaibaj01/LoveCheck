@@ -16,7 +16,7 @@ Deploy the serverless video processing pipeline using **DataEngine UI** or **vas
 ```
 vss-chunks bucket → video-segmenter
                             ↓
-vss-chunks-segments bucket → video-reasoner → video-embedder → video-vastdb-writer
+vss-chunks-segments bucket → video-detector → video-reasoner → video-embedder → video-vastdb-writer
 ```
 
 DataEngine functions share secret name **`vss2-secret`** (table/bucket values use `vss-*` — see templates).
@@ -49,6 +49,7 @@ Secret **name** in DataEngine must be `vss2-secret`. Bucket/table **values** use
 | **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port`, `cosmos_model`) |
 | **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
+| **YOLO** | `yolo_infer_host`, `yolo_infer_port`, `detection_sidecar_prefix` |
 | **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
@@ -67,6 +68,7 @@ Navigate to **DataEngine UI → Functions** and create:
 | Function | Image (placeholder — use the image you built and pushed) |
 |----------|-------|
 | `video-segmenter` | `your.registry/vss-video-segmenter:v1` |
+| `video-detector` | `your.registry/vss-video-detector:v1` |
 | `video-reasoner` | `your.registry/vss-video-reasoner:v1` |
 | `video-embedder` | `your.registry/vss-video-embedder:v1` |
 | `video-vastdb-writer` | `your.registry/vss-vastdb-writer:v1` |
@@ -81,7 +83,7 @@ Navigate to **DataEngine UI → Pipelines → Create New Pipeline**
 
 3. **Create connections:**
    - `video-chunk-land-trigger` → `video-segmenter`
-   - `video-segment-land-trigger` → `video-reasoner` → `video-embedder` → `video-vastdb-writer`
+   - `video-segment-land-trigger` → `video-detector` → `video-reasoner` → `video-embedder` → `video-vastdb-writer`
 
 4. **Set resources (all functions):**
    - CPU: `1000m - 5000m`
@@ -107,6 +109,7 @@ vim vss-cli-secret-file-template.yaml
 | **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port`, `cosmos_model`) |
 | **Embedding** | Text + visual NIM (`embedding_*`, `visual_embedding_*`, `nvidia_api_key`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
+| **YOLO** | `yolo_infer_host`, `yolo_infer_port`, `detection_sidecar_prefix` |
 | **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
@@ -189,7 +192,8 @@ vastde pipelines create \
 | Function | Description | Details |
 |----------|-------------|---------|
 | video-segmenter | Splits videos into segments | [README](../../source-code/ingest/video-segmenter/README.md) |
-| video-reasoner | AI video analysis | [README](../../source-code/ingest/video-reasoner/README.md) |
+| video-detector | YOLO11 object detection + sidecar | [README](../../source-code/ingest/video-detector/README.md) |
+| video-reasoner | AI video analysis (Cosmos-Reason2) | [README](../../source-code/ingest/video-reasoner/README.md) |
 | video-embedder | Vector embeddings | [README](../../source-code/ingest/video-embedder/README.md) |
 | video-vastdb-writer | Stores vectors in VastDB | [README](../../source-code/ingest/vastdb-writer/README.md) |
 

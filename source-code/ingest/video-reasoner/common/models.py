@@ -14,6 +14,7 @@ class Settings(BaseModel):
     # Cosmos-Reason2 (hosted vLLM OpenAI API — base64-encoded segment MP4)
     cosmos_host: str = ""
     cosmos_port: int = 8001
+    cosmoshttpscheme: str = "http"
     cosmos_model: str = ""
     cosmos_max_tokens: int = Field(default=4000, description="Maximum tokens in response for Cosmos (higher for detailed video analysis)")
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for Cosmos")
@@ -37,7 +38,8 @@ class Settings(BaseModel):
     @property
     def cosmos_url(self) -> str:
         """Compute Cosmos API URL"""
-        return f"http://{self.cosmos_host}:{self.cosmos_port}/v1/chat/completions"
+        scheme = self.cosmoshttpscheme or "http"
+        return f"{scheme}://{self.cosmos_host}:{self.cosmos_port}/v1/chat/completions"
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':

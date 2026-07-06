@@ -343,6 +343,15 @@ class S3Service:
             logger.error(f"Error streaming video from S3: {str(e)}")
             raise
 
+    def get_object_bytes(self, bucket: str, key: str) -> bytes:
+        """Download full object bytes (e.g. gzipped detection sidecar)."""
+        try:
+            response = self.client.get_object(Bucket=bucket, Key=key)
+            return response["Body"].read()
+        except ClientError as e:
+            logger.error(f"Error reading object s3://{bucket}/{key}: {str(e)}")
+            raise
+
     def count_mp4_objects(self, bucket: str) -> int:
         """Count .mp4 objects recursively under all prefixes in a bucket."""
         total = 0

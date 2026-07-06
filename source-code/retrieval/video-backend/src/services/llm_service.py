@@ -1,16 +1,16 @@
 """
-LLM Service for generating AI summaries using NVIDIA API
-
-Note: System prompt is now managed by the frontend and sent with each request.
-The backend no longer requires a ConfigMap for the system prompt.
+Text synthesis for search / explore using Cosmos-Reason2 (text-only chat; no video).
 """
 import httpx
 import json
+import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from src.utils.stream_index import format_stream_time, stream_fields_from_row
-from src.config import get_settings
+from src.config import get_settings, cosmos_synthesis_url
 from src.models.video import ChunkSearchResult
+
+logger = logging.getLogger(__name__)
 
 
 # Fallback system prompt (only used if frontend doesn't send one)
@@ -39,26 +39,28 @@ Rules:
 
 
 class LLMService:
-    """Service for interacting with NVIDIA LLM API"""
-    
+    """Cosmos-Reason2 text synthesis over indexed segment evidence."""
+
     def __init__(self):
         self.settings = get_settings()
-        self.api_key = self.settings.nvidia_api_key
-        # Always use configured host/port; llm_local_nim only controls API key usage
-        self.base_url = f"{self.settings.llm_http_scheme}://{self.settings.llm_host}:{self.settings.llm_port}"
-        if self.settings.llm_local_nim:
-            print(f"[LLM] Using local NIM: {self.base_url}")
-        else:
-            print(f"[LLM] Using NVIDIA Cloud: {self.base_url}")
-        self.model_name = self.settings.llm_model_name
-        self.timeout = self.settings.llm_timeout_seconds
-        self.max_tokens = self.settings.llm_max_tokens
-        self.max_continuations = self.settings.llm_max_continuations
-        # Default prompt is only used as fallback if frontend doesn't send one
+        if not (self.settings.cosmos_host or "").strip():
+            raise ValueError(
+                "cosmos_host is not configured — set Cosmos-Reason2 host in backend secret "
+                "(same host/port as ingest video-reasoner)."
+            )
+        self.cosmos_url = cosmos_synthesis_url(self.settings)
+        self.model_name = self.settings.cosmos_model
+        self.timeout = self.settings.synthesis_timeout_seconds
+        self.max_tokens = self.settings.synthesis_max_tokens
+        self.max_continuations = self.settings.synthesis_max_continuations
+        self.temperature = self.settings.cosmos_temperature
         self.default_prompt = DEFAULT_SYSTEM_PROMPT
-        print(
-            f"[LLM] Service initialized (prompt from frontend, max_tokens={self.max_tokens}, "
-            f"max_continuations={self.max_continuations})"
+        logger.info(
+            "[SYNTHESIS] Cosmos-Reason2 %s @ %s (max_tokens=%s, timeout=%ss)",
+            self.model_name,
+            self.cosmos_url,
+            self.max_tokens,
+            self.timeout,
         )
     
     def synthesize_search_results(
@@ -113,7 +115,7 @@ Use Clip N labels from the headers above; do not list filenames."""
         
         try:
             # Call NVIDIA API with the effective system prompt
-            response_data = self._call_llm_api(user_message, system_prompt=effective_prompt)
+            response_data = self._call_cosmos_chat(user_message, system_prompt=effective_prompt)
             
             processing_time = time.time() - start_time
             
@@ -133,7 +135,7 @@ Use Clip N labels from the headers above; do not list filenames."""
         except Exception as e:
             processing_time = time.time() - start_time
             error_msg = str(e)
-            print(f"LLM API error: {error_msg}")
+            logger.error("Cosmos synthesis error: %s", error_msg)
             
             # Extract segment names even on error
             segment_names = self._clip_labels(top_results[:top_n])
@@ -326,35 +328,18 @@ Use Clip N labels from the headers above; do not list filenames."""
             body_parts.append(f"Structured JSON: {structured}")
         return f"{header}\n" + "\n".join(body_parts)
     
-    def _call_llm_api(self, user_message: str, system_prompt: Optional[str] = None) -> Dict:
-        """
-        Call NVIDIA LLM API
-        
-        Args:
-            user_message: The user message to send to the LLM
-            system_prompt: System prompt to use (uses hardcoded default if not provided)
-            
-        Returns:
-            Dict with content and token usage
-        """
-        url = f"{self.base_url}/v1/chat/completions"
-        
-        # Use provided system prompt or fall back to default
+    def _call_cosmos_chat(self, user_message: str, system_prompt: Optional[str] = None) -> Dict:
+        """Text-only Cosmos-Reason2 chat/completions (same API as ingest, no video payload)."""
         effective_system_prompt = system_prompt if system_prompt else self.default_prompt
-        
-        headers = {"Content-Type": "application/json"}
-        if not self.settings.llm_local_nim and self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer not-used",
+        }
+
         messages = [
-            {
-                "role": "system",
-                "content": effective_system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
-            }
+            {"role": "system", "content": effective_system_prompt},
+            {"role": "user", "content": user_message},
         ]
 
         all_content_parts: List[str] = []
@@ -367,18 +352,20 @@ Use Clip N labels from the headers above; do not list filenames."""
                 payload = {
                     "model": self.model_name,
                     "messages": messages,
-                    "temperature": 0.2,
-                    "top_p": 0.7,
+                    "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
-                    "stream": False
+                    "stream": False,
                 }
-                response = client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
+                response = client.post(self.cosmos_url, json=payload, headers=headers)
+                if response.status_code != 200:
+                    raise RuntimeError(
+                        f"Cosmos synthesis error ({response.status_code}): {response.text[:1000]}"
+                    )
 
                 data = response.json()
                 choices = data.get("choices", [])
                 if not choices:
-                    raise RuntimeError("No choices in LLM API response")
+                    raise RuntimeError("No choices in Cosmos API response")
 
                 first_choice = choices[0]
                 content_part = first_choice.get("message", {}).get("content", "") or ""
@@ -395,19 +382,18 @@ Use Clip N labels from the headers above; do not list filenames."""
                 if round_idx >= max_rounds - 1:
                     break
 
-                # Ask the model to continue seamlessly in the next chunk.
                 messages.append({"role": "assistant", "content": content_part})
                 messages.append({
                     "role": "user",
                     "content": (
                         "Continue exactly where you stopped. Do not restart or repeat prior lines. "
                         "Return only the remaining continuation."
-                    )
+                    ),
                 })
 
         return {
             "content": "".join(all_content_parts).strip(),
-            "tokens_used": total_tokens_used
+            "tokens_used": total_tokens_used,
         }
 
 # Global LLM service instance

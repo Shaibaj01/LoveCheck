@@ -43,7 +43,8 @@ jwt_secret: "<openssl rand -hex 32>"
 | Setting | `true` (Local NIM) | `false` (NVIDIA Cloud) |
 |---------|-------------------|------------------------|
 | `embedding_local_nim` | No API key sent | Sends `nvidia_api_key` |
-| `llm_local_nim` | No API key sent | Sends `nvidia_api_key` |
+
+Search / explore **synthesis** uses **Cosmos-Reason2** (`cosmos_host`, `cosmos_port`, `cosmoshttpscheme`) — text-only over indexed evidence. **Cosmos-Embed1** is still required for hybrid vector search.
 
 ---
 
@@ -54,11 +55,15 @@ jwt_secret: "<openssl rand -hex 32>"
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Max Clip Cards | Grouped upload cards (`top_k`) | 15 |
-| LLM Clips Analyzed | Clip cards sent to LLM | 3 |
+| Clips for synthesis | Clip cards sent to Cosmos-Reason2 | 3 |
 | Caption vs Video Weight | Hybrid blend (`hybrid_text_weight`) | 0.6 |
 | Minimum Similarity | Score threshold | 0.1 |
 
-### Time Filtering
+### Display timezone
+
+Set `display_timezone` in the backend secret (IANA name, e.g. `Asia/Jerusalem`, `UTC`). Exposed as `app.display_timezone` on `GET /api/v1/config`. The UI uses it for explore/search upload badges and explore day labels.
+
+### Time filtering
 
 Presets (5m, 15m, 1h, 24h, 7d) or custom date range on upload timestamp.
 
@@ -89,9 +94,9 @@ Source file: [`source-code/shared/ingest_metadata.py`](../../shared/ingest_metad
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/v1/videos/explore` | Browse parent videos by upload date and **location** (`scope`, `date`, `location`, `limit`, `offset`) |
-| `POST /api/v1/videos/synthesize` | On-demand LLM summary over all segments for one `original_video` |
+| `POST /api/v1/videos/synthesize` | On-demand Cosmos-Reason2 summary over all segments for one `original_video` |
 
-Explore returns chunk cards (same shape as search `chunk_results`) without vector scores. Response includes `uploads_by_day`, `locations[]`, `selected_location`, and `table_available` / `table_message` when VastDB is empty or unreadable.
+Explore returns chunk cards (same shape as search `chunk_results`) without vector scores. Only **fully indexed** parents are listed (`segment count == total_segments`). Response includes `uploads_by_day`, `locations[]`, `selected_location`, and `table_available` / `table_message` when VastDB is empty or unreadable.
 
 Explore list building uses a **single cached VastDB scan** per TTL window and builds chunk cards in memory (`build_browse_chunk_from_rows`) to avoid N+1 segment queries per video.
 
@@ -118,6 +123,7 @@ Thin wrappers for external agents (AgentEngine, custom automation). All require 
 |----------|------------|-------------|
 | `GET /tools/segments?original_video=…` | `list_segments` | All segment rows for a parent video |
 | `GET /tools/segment?source=…` | `get_segment_json` | One segment by clip URI |
+| `GET /tools/detections?source=…` | `get_detections` | YOLO bbox sidecar JSON for overlay |
 | `POST /tools/search` | `search_hybrid` | Same body as `POST /search` |
 | `GET /tools/explore` | `explore_timeline` | Same params as `GET /videos/explore` |
 | `POST /tools/synthesize` | `synthesize_video` | Same body as `POST /videos/synthesize` |

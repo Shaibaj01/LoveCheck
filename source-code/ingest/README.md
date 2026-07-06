@@ -9,10 +9,10 @@ The system supports customizable metadata fields that flow through the entire pi
 | 1 | Timeline + `original_video` grouping | Done |
 | 2 | Structured VLM + `dense_caption` + 2048 text embed | Done |
 | 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
-| 4 | Perception lite → conditions VLM (always on) | Done |
+| 4 | YOLO11 detector → sidecar + `object_classes` (replaces Cosmos perception lite) | Done |
 | 5 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
 
-Recreate the VastDB collection after schema changes (new columns). Perception lite runs on every segment (one short Reason2 call before main analysis).
+Recreate the VastDB collection after schema changes (new columns: `perception_source`, `detection_sidecar_uri`, `detection_frame_count`, `detection_count`). YOLO11 runs in **video-detector** before Cosmos reasoning; bbox sidecars live at `detections/{segment}.json.gz` on the segments bucket.
 
 ## Current Metadata Fields
 

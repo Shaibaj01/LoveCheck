@@ -74,6 +74,10 @@ def handler(ctx, event: VastEvent):
                 object_counts = reasoning_event.get("object_counts", "{}")
                 max_detection_conf = reasoning_event.get("max_detection_conf", 0.0)
                 perception_ok = reasoning_event.get("perception_ok", False)
+                perception_source = reasoning_event.get("perception_source", "")
+                detection_sidecar_uri = reasoning_event.get("detection_sidecar_uri", "")
+                detection_frame_count = reasoning_event.get("detection_frame_count", 0)
+                detection_count = reasoning_event.get("detection_count", 0)
                 stream_id = reasoning_event.get("stream_id", "")
                 chunk_index = reasoning_event.get("chunk_index")
                 chunk_start_sec_meta = reasoning_event.get("chunk_start_sec")
@@ -192,6 +196,10 @@ def handler(ctx, event: VastEvent):
                 "object_counts": object_counts,
                 "max_detection_conf": max_detection_conf,
                 "perception_ok": perception_ok,
+                "perception_source": perception_source,
+                "detection_sidecar_uri": detection_sidecar_uri,
+                "detection_frame_count": detection_frame_count,
+                "detection_count": detection_count,
                 "stream_id": stream_id,
                 "chunk_index": chunk_index,
                 "chunk_start_sec": chunk_start_sec_meta,

@@ -52,10 +52,10 @@ The system has two main parts:
 | **Ingest metadata config** | Single definition for upload metadata UI + S3 mapping (`ingest_metadata.py`) | [shared](source-code/shared/README.md) |
 | **Custom AI Prompts** | Per-video custom prompts (max length in `ingest_metadata.py`) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
 | **Metadata Filters** | Filter by camera_id, location, capture_type | [ingest](source-code/ingest/README.md) |
-| **Advanced Search & AI Settings** | Max clip cards, LLM clips analyzed, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
+| **Advanced Search & AI Settings** | Max clip cards, synthesis clip count, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Explore mode** | Browse indexed uploads by day and location — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
-| **Search suggestions & key events** | LLM-generated prompts from prompt-suggester → VastDB `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
+| **Search suggestions & key events** | Cosmos-generated prompts from prompt-suggester → VastDB `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
 | **Agent APIs** | Tool wrappers + grounded Q&A for external agents | [video-backend](source-code/retrieval/video-backend/README.md#agent-apis) |
 | **Time Filtering** | Filter by upload time (presets or custom range) | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Video Streaming** | Capture YouTube videos to S3 | [video-streaming](source-code/video-streaming/README.md) |
@@ -72,10 +72,11 @@ The system has two main parts:
 | [scripts](source-code/scripts/README.md) | Build scripts for retrieval images and DataEngine functions |
 | [video-backend](source-code/retrieval/video-backend/README.md) | REST API, authentication, search |
 | [video-frontend](source-code/retrieval/video-frontend/README.md) | Angular web UI (Search, Explore, Dashboard) |
-| [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Scheduled LLM prompts + key events → VastDB |
+| [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Scheduled search prompts + key events → VastDB |
 | [video-streaming](source-code/video-streaming/README.md) | YouTube capture service |
 | [video-batch-sync](source-code/video-batch-sync/README.md) | S3 batch copy service |
 | [video-segmenter](source-code/ingest/video-segmenter/README.md) | Splits videos into segments |
+| [video-detector](source-code/ingest/video-detector/README.md) | YOLO11 object detection + bbox sidecars |
 | [video-reasoner](source-code/ingest/video-reasoner/README.md) | AI video analysis |
 | [video-embedder](source-code/ingest/video-embedder/README.md) | Vector embeddings |
 | [vastdb-writer](source-code/ingest/vastdb-writer/README.md) | Stores vectors in VastDB |
@@ -89,9 +90,9 @@ Upload Video → vss-chunks bucket
                     ↓
             video-segmenter (5s segments)
                     ↓
-            perception lite (always on — object list)
+            video-detector (YOLO11 → object_classes + bbox sidecars)
                     ↓
-            video-reasoner (structured JSON → dense_caption + reasoning_content)
+            video-reasoner (Cosmos-Reason2 → dense_caption + reasoning_content)
                     ↓
             video-embedder (vectors text + vectors_visual video)
                     ↓
@@ -104,9 +105,9 @@ Upload Video → vss-chunks bucket
          vss-prompts-events (search prompts + key events)
 ```
 
-**Search flow:** query embed → hybrid caption+video search → group by upload (clip cards + timeline) → always-on LLM synthesis → jump-to-moment playback
+**Search flow:** query embed (Cosmos-Embed1) → hybrid search → clip cards with upload-time badge and match timeline → Cosmos-Reason2 synthesis → player with bbox overlay
 
-**Explore flow:** browse by upload date and **location** (scope: all / mine / public) → clip cards with metadata → hover preview (first frame + muted play) → open player (segment-first for fast start) or **Summarize Video** on demand (no query)
+**Explore flow:** browse by upload date and **location** (fully indexed chunks only) → clip cards with segment timeline and upload-time badge → full-chunk player with bbox toggle and **Summarize Video**
 
 **Dashboard flow:** VastDB KPIs + ingest quality + S3 vs index alignment → key events table (from prompt-suggester) with in-place segment preview
 

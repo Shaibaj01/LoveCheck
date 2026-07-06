@@ -32,7 +32,8 @@ export function seekVideoAndWait(
   timeoutMs = 8000,
 ): Promise<void> {
   return new Promise((resolve) => {
-    if (sec <= 0.05 || Math.abs(video.currentTime - sec) < 0.1) {
+    const target = Math.max(0, sec);
+    if (Math.abs(video.currentTime - target) < 0.12) {
       resolve();
       return;
     }
@@ -66,7 +67,7 @@ export function seekVideoAndWait(
     };
 
     video.addEventListener('seeked', onSeeked, { once: true });
-    video.currentTime = sec;
+    video.currentTime = target;
   });
 }
 

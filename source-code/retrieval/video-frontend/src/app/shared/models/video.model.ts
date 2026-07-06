@@ -7,6 +7,7 @@ export interface TimelineSegment {
   reasoning_content?: string;
   vlm_structured?: string;
   object_classes?: string;
+  perception_ok?: boolean;
   similarity_score: number;
   is_search_match: boolean;
   query_highlight: boolean;
@@ -37,6 +38,9 @@ export interface ChunkSearchResult {
   cosmos_model?: string;
   tokens_used?: number;
   cached_prompt_tokens?: number | null;
+  stream_id?: string | null;
+  chunk_index?: number | null;
+  stream_chunk_total?: number | null;
 }
 
 export interface VideoSearchResult {

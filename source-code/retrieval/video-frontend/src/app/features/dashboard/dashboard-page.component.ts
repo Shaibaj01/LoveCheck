@@ -24,6 +24,7 @@ import {
   resolveApiAccessWarning,
 } from '../../shared/utils/api-access.util';
 import { IngestMetadataService } from '../../shared/services/ingest-metadata.service';
+import { relativeBarWidth } from '../../shared/utils/chunk-display.util';
 
 interface DashboardKpiCard {
   label: string;
@@ -128,49 +129,11 @@ interface DashboardKpiCard {
         </section>
         }
 
-        @if (data.s3_inventory && data.table_available) {
-          @if (data.s3_inventory.errors) {
-            <div class="info-banner warn">
-              <mat-icon>warning_amber</mat-icon>
-              <span>Could not read some S3 buckets: {{ formatS3Errors(data.s3_inventory.errors) }}</span>
-            </div>
-          }
-          <mat-card class="panel pipeline-panel">
-            <mat-card-header>
-              <mat-card-title>S3 pipeline inventory</mat-card-title>
-              <mat-card-subtitle>
-                Recursive .mp4 counts — chunks bucket vs segments bucket
-              </mat-card-subtitle>
-            </mat-card-header>
-            <mat-card-content>
-              <div class="pipeline-grid">
-                <div class="pipeline-stat">
-                  <span class="pipeline-label">Chunks ({{ data.s3_inventory.chunks_bucket }})</span>
-                  <strong>{{ formatCount(data.s3_inventory.chunks_mp4) }}</strong>
-                  <span class="muted">chunk MP4s uploaded / streamed</span>
-                </div>
-                <div class="pipeline-stat">
-                  <span class="pipeline-label">Segments ({{ data.s3_inventory.segments_bucket }})</span>
-                  <strong>{{ formatCount(data.s3_inventory.segments_mp4) }}</strong>
-                  <span class="muted">segment MP4s in backend config bucket</span>
-                </div>
-                @if (data.s3_inventory.segmenter_output_mp4 != null) {
-                  <div class="pipeline-stat">
-                    <span class="pipeline-label">Segmenter output ({{ data.s3_inventory.segmenter_output_bucket }})</span>
-                    <strong>{{ formatCount(data.s3_inventory.segmenter_output_mp4) }}</strong>
-                    <span class="muted">where video-segmenter actually writes</span>
-                  </div>
-                }
-                @if (data.pipeline_alignment) {
-                  <div class="pipeline-stat">
-                    <span class="pipeline-label">Indexed clips (VastDB)</span>
-                    <strong>{{ data.pipeline_alignment.indexed_clips ?? '—' }}</strong>
-                    <span class="muted">unique segment sources in VastDB</span>
-                  </div>
-                }
-              </div>
-            </mat-card-content>
-          </mat-card>
+        @if (data.s3_inventory?.errors && data.table_available) {
+          <div class="info-banner warn">
+            <mat-icon>warning_amber</mat-icon>
+            <span>Could not read some S3 buckets: {{ formatS3Errors(data.s3_inventory!.errors!) }}</span>
+          </div>
         }
 
         @if (data.table_available) {
@@ -187,7 +150,7 @@ interface DashboardKpiCard {
               </div>
               <div class="quality-bar"><div class="fill" [style.width.%]="data.quality.structured_parse_ok_pct"></div></div>
               <div class="quality-row">
-                <span>Perception OK</span>
+                <span>Detector coverage</span>
                 <strong>{{ data.quality.perception_ok_pct }}%</strong>
                 <span class="muted">({{ data.quality.perception_ok }}/{{ data.overview.segment_rows }})</span>
               </div>
@@ -229,18 +192,27 @@ interface DashboardKpiCard {
         <section class="panel-grid">
           <mat-card class="panel">
             <mat-card-header>
-              <mat-card-title>Detected objects</mat-card-title>
-              <mat-card-subtitle>Segments containing each object class</mat-card-subtitle>
+              <mat-card-title>Object detection heatmap</mat-card-title>
+              <mat-card-subtitle>How many segments contain each class (YOLO)</mat-card-subtitle>
             </mat-card-header>
             <mat-card-content>
               @if (data.objects.length) {
-                <div class="tag-grid">
-                  @for (obj of data.objects; track obj.label) {
-                    <div class="tag-stat">
-                      <span class="tag-label">{{ obj.label }}</span>
-                      <span class="tag-count">{{ obj.segment_count }}</span>
-                    </div>
-                  }
+                <div class="object-heatmap-scroll">
+                  <div class="object-heatmap">
+                    @for (obj of data.objects; track obj.label) {
+                      <div class="heatmap-row" [matTooltip]="obj.segment_count + ' segments with ' + obj.label">
+                        <span class="heatmap-label">{{ obj.label }}</span>
+                        <div class="heatmap-track">
+                          <div
+                            class="heatmap-fill"
+                            [style.width.%]="objectBarWidth(obj, data.objects)">
+                          </div>
+                        </div>
+                        <span class="heatmap-count">{{ obj.segment_count }}</span>
+                        <span class="heatmap-gutter" aria-hidden="true"></span>
+                      </div>
+                    }
+                  </div>
                 </div>
               } @else {
                 <p class="empty-panel">No object_classes populated yet.</p>
@@ -578,37 +550,6 @@ interface DashboardKpiCard {
       line-height: 1.3;
     }
 
-    .pipeline-panel {
-      margin-bottom: 1rem;
-      background: var(--bg-card) !important;
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      box-shadow: none !important;
-    }
-
-    .pipeline-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 1rem;
-    }
-
-    .pipeline-stat {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-
-    .pipeline-label {
-      font-size: 0.78rem;
-      color: var(--text-secondary);
-      word-break: break-all;
-    }
-
-    .pipeline-stat strong {
-      font-size: 1.5rem;
-      color: var(--text-primary);
-    }
-
     .panel-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -721,6 +662,80 @@ interface DashboardKpiCard {
     .tag-count {
       font-weight: 700;
       color: var(--accent-primary);
+    }
+
+    .object-heatmap-scroll {
+      max-height: calc(1.75rem * 8 + 0.45rem * 7);
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-gutter: stable;
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(115, 200, 253, 0.45) transparent;
+
+      &::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      &::-webkit-scrollbar-track {
+        margin-top: 2px;
+        margin-bottom: 2px;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: rgba(115, 200, 253, 0.35);
+        border-radius: 999px;
+      }
+    }
+
+    .object-heatmap {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .heatmap-row {
+      display: grid;
+      grid-template-columns: 6.5rem minmax(0, 1fr) 2.5rem 0.75rem;
+      gap: 0.5rem;
+      align-items: center;
+      min-height: 1.75rem;
+      font-size: 0.82rem;
+    }
+
+    .heatmap-label {
+      color: var(--text-primary);
+      text-transform: capitalize;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .heatmap-track {
+      height: 12px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .heatmap-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.55), rgba(34, 197, 94, 0.95));
+      min-width: 2px;
+      transition: width 0.35s ease;
+    }
+
+    .heatmap-count {
+      text-align: right;
+      font-weight: 600;
+      color: var(--accent-success);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .heatmap-gutter {
+      width: 100%;
+      min-height: 1px;
     }
 
     .metadata-columns {
@@ -1074,8 +1089,8 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   promptsTableAvailable = signal<boolean | null>(null);
   promptsTableMessage = signal<string | null>(null);
 
-  metadataFields = computed(
-    () => this.metadataService.config()?.filterable_fields ?? []
+  metadataFields = computed(() =>
+    (this.metadataService.config()?.filterable_fields ?? []).filter(f => f.key !== 'object_classes')
   );
 
   private refreshSub?: Subscription;
@@ -1262,8 +1277,11 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
   }
 
   barWidth(day: UploadDayItem, all: UploadDayItem[]): number {
-    const max = Math.max(...all.map(d => d.segment_rows), 1);
-    return Math.max(4, (day.segment_rows / max) * 100);
+    return relativeBarWidth(day.segment_rows, all.map(d => d.segment_rows));
+  }
+
+  objectBarWidth(obj: { segment_count: number }, all: { segment_count: number }[]): number {
+    return relativeBarWidth(obj.segment_count, all.map(o => o.segment_count));
   }
 
   shortDate(isoDate: string): string {

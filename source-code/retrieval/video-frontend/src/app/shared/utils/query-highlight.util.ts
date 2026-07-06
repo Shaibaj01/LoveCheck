@@ -19,6 +19,7 @@ const QUERY_ACTION_WORDS = new Set([
 export interface SegmentObjectSource {
   vlm_structured?: string | null;
   object_classes?: string | null;
+  perception_ok?: boolean | null;
 }
 
 function tokenizeQuery(query: string): string[] {
@@ -100,12 +101,85 @@ export function objectMatchesQuery(label: string, terms: string[]): boolean {
   return terms.some(term => termMatchesLabel(term, label));
 }
 
+function normalizeObjectLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const stripped = trimmed.replace(/^\d+\s+/, '').trim();
+  return stripped || trimmed;
+}
+
+function dedupeObjectLabels(labels: string[]): string[] {
+  const seen = new Set<string>();
+  return labels.filter(label => {
+    const key = label.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function parseObjectClassList(raw?: string | null): string[] {
+  if (!raw?.trim()) return [];
+  return raw.split(/[,;|]/).map(normalizeObjectLabel).filter(Boolean);
+}
+
+function parseVlmObjectNames(vlmStructured?: string | null): string[] {
+  if (!vlmStructured?.trim()) return [];
+  try {
+    let data: unknown = JSON.parse(vlmStructured);
+    if (typeof data === 'string') data = JSON.parse(data);
+    if (!data || typeof data !== 'object' || !Array.isArray((data as { objects?: unknown }).objects)) {
+      return [];
+    }
+    const labels: string[] = [];
+    for (const obj of (data as { objects: unknown[] }).objects) {
+      if (typeof obj === 'string' && obj.trim()) {
+        labels.push(normalizeObjectLabel(obj));
+        continue;
+      }
+      if (obj && typeof obj === 'object') {
+        const label = normalizeObjectLabel((obj as { type?: string }).type ?? '');
+        if (label) labels.push(label);
+      }
+    }
+    return labels;
+  } catch {
+    return [];
+  }
+}
+
+function parseVlmObjectChips(vlmStructured?: string | null): string[] {
+  if (!vlmStructured?.trim()) return [];
+  try {
+    let data: unknown = JSON.parse(vlmStructured);
+    if (typeof data === 'string') data = JSON.parse(data);
+    if (!data || typeof data !== 'object' || !Array.isArray((data as { objects?: unknown }).objects)) {
+      return [];
+    }
+    const labels: string[] = [];
+    for (const obj of (data as { objects: unknown[] }).objects) {
+      if (typeof obj === 'string' && obj.trim()) {
+        labels.push(obj.trim());
+        continue;
+      }
+      if (obj && typeof obj === 'object') {
+        const typed = obj as { type?: string; count?: unknown };
+        const chip = formatObjectChipLabel(typed.type ?? '', typed.count);
+        if (chip) labels.push(chip);
+      }
+    }
+    return labels;
+  } catch {
+    return [];
+  }
+}
+
 function formatObjectChipLabel(type: string, count: unknown): string {
   const label = type.trim();
   if (!label) return '';
   if (count == null || count === '') return label;
   const numeric = Number(count);
-  if (Number.isFinite(numeric) && numeric > 1) {
+  if (Number.isFinite(numeric) && numeric > 1 && numeric <= 30) {
     return `${Math.trunc(numeric)} ${label}`;
   }
   return label;
@@ -143,44 +217,25 @@ export function segmentDisplayCaption(segment: {
 }
 
 export function parseStructuredObjects(segment: SegmentObjectSource): string[] {
-  const labels: string[] = [];
-
-  if (segment.vlm_structured?.trim()) {
-    try {
-      let data: unknown = JSON.parse(segment.vlm_structured);
-      if (typeof data === 'string') data = JSON.parse(data);
-      if (data && typeof data === 'object' && Array.isArray((data as { objects?: unknown }).objects)) {
-        for (const obj of (data as { objects: unknown[] }).objects) {
-          if (typeof obj === 'string' && obj.trim()) {
-            labels.push(obj.trim());
-            continue;
-          }
-          if (obj && typeof obj === 'object') {
-            const typed = obj as { type?: string; count?: unknown };
-            const chip = formatObjectChipLabel(typed.type ?? '', typed.count);
-            if (chip) labels.push(chip);
-          }
-        }
-      }
-    } catch {
-      // ignore malformed structured JSON
-    }
+  if (segment.perception_ok && segment.object_classes?.trim()) {
+    return dedupeObjectLabels(parseObjectClassList(segment.object_classes));
   }
 
-  if (segment.object_classes?.trim()) {
-    segment.object_classes.split(/[,;|]/).forEach(part => {
-      const trimmed = part.trim();
-      if (trimmed) labels.push(trimmed);
-    });
-  }
+  const labels = [...parseVlmObjectChips(segment.vlm_structured), ...parseObjectClassList(segment.object_classes)];
+  return dedupeObjectLabels(labels);
+}
 
-  const seen = new Set<string>();
-  return labels.filter(label => {
-    const key = label.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+/** Union of class names across a chunk timeline (no detection totals). */
+export function chunkObjectTags(
+  timeline: SegmentObjectSource[],
+  max = 8,
+): string[] {
+  const labels = new Set<string>();
+  for (const seg of timeline) {
+    parseObjectClassList(seg.object_classes).forEach(label => labels.add(label));
+    parseVlmObjectNames(seg.vlm_structured).forEach(label => labels.add(label));
+  }
+  return dedupeObjectLabels(Array.from(labels)).slice(0, max);
 }
 
 export function highlightQueryTerms(text: string, terms: string[]): string {

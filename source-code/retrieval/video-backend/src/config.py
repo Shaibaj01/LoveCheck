@@ -61,6 +61,26 @@ class Settings(BaseSettings):
     visual_embedding_local_nim: bool = Field(default=False, description="Use local NIM for visual embeddings")
     hybrid_text_weight: float = Field(default=0.6, ge=0.0, le=1.0, description="Hybrid search weight for text vs visual")
     
+    # Cosmos-Reason2 text synthesis (search / explore summarize — text-only, no video)
+    cosmos_host: str = Field(default="", description="Cosmos-Reason2 host (same as ingest reasoner)")
+    cosmos_port: int = Field(default=8001, description="Cosmos-Reason2 port")
+    cosmoshttpscheme: str = Field(default="http", description="http or https for Cosmos-Reason2")
+    cosmos_model: str = Field(default="./Cosmos-Reason2-8B", description="Cosmos-Reason2 model id")
+    cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for synthesis")
+    synthesis_max_tokens: int = Field(default=2000, description="Max tokens per synthesis completion chunk")
+    synthesis_timeout_seconds: int = Field(default=120, description="Cosmos synthesis API timeout in seconds")
+    synthesis_max_continuations: int = Field(default=4, description="Extra continuation chunks when response hits token limit")
+
+    # Legacy Llama/NIM settings (unused; synthesis uses Cosmos-Reason2 above)
+    llm_model_name: str = Field(default="meta/llama-3.1-8b-instruct", description="Deprecated")
+    llm_host: str = Field(default="integrate.api.nvidia.com", description="Deprecated")
+    llm_port: int = Field(default=443, description="Deprecated")
+    llm_http_scheme: str = Field(default="https", description="Deprecated")
+    llm_timeout_seconds: int = Field(default=10, description="Deprecated")
+    llm_max_tokens: int = Field(default=1200, description="Deprecated")
+    llm_max_continuations: int = Field(default=4, description="Deprecated")
+    llm_local_nim: bool = Field(default=False, description="Deprecated")
+
     # Upload Settings
     max_upload_size_mb: int = Field(default=25, description="Maximum upload size in MB")
     max_concurrent_uploads: int = Field(
@@ -73,16 +93,6 @@ class Settings(BaseSettings):
         description="Allowed video extensions at upload (ingest pipeline converts to MP4 for Cosmos)"
     )
     
-    # LLM Settings (NVIDIA API)
-    llm_model_name: str = Field(default="meta/llama-3.1-8b-instruct", description="LLM model name")
-    llm_host: str = Field(default="integrate.api.nvidia.com", description="LLM API host")
-    llm_port: int = Field(default=443, description="LLM API port")
-    llm_http_scheme: str = Field(default="https", description="LLM HTTP scheme")
-    llm_timeout_seconds: int = Field(default=10, description="LLM API timeout in seconds")
-    llm_max_tokens: int = Field(default=1200, description="Max tokens per synthesis completion chunk")
-    llm_max_continuations: int = Field(default=4, description="Extra continuation chunks when response hits token limit")
-    llm_local_nim: bool = Field(default=False, description="True = use local NIM (llm_host/port), False = NVIDIA Cloud")
-    
     # VAST VMS & Tenant (used for login; not sent from frontend)
     vast_host: str = Field(..., description="VAST management server address (VMS) for user authentication")
     tenant_name: str = Field(default="default", description="Tenant name for user authentication")
@@ -92,6 +102,12 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(
         default=["http://localhost:4200"],
         description="Allowed CORS origins"
+    )
+
+    # UI display timezone (IANA name, e.g. Asia/Jerusalem for Israel IDT/IST)
+    display_timezone: str = Field(
+        default="UTC",
+        description="IANA timezone for upload timestamps in the UI",
     )
     
     class Config:
@@ -112,6 +128,13 @@ def load_settings_from_yaml(yaml_path: str) -> dict:
             key = list(data.keys())[0]
             return data[key]
         return data
+
+
+def cosmos_synthesis_url(settings: Settings) -> str:
+    """OpenAI-compatible chat completions URL for Cosmos-Reason2 text synthesis."""
+    scheme = (settings.cosmoshttpscheme or "http").strip()
+    host = (settings.cosmos_host or "").strip()
+    return f"{scheme}://{host}:{settings.cosmos_port}/v1/chat/completions"
 
 
 def get_settings() -> Settings:

@@ -1,7 +1,11 @@
 """Tests for segment timeline deduplication."""
 import unittest
 
-from src.utils.segment_timeline import dedupe_by_segment_number, dedupe_segment_dicts
+from src.utils.segment_timeline import (
+    dedupe_by_segment_number,
+    dedupe_segment_dicts,
+    is_chunk_fully_indexed,
+)
 
 
 class SegmentTimelineTests(unittest.TestCase):
@@ -32,6 +36,30 @@ class SegmentTimelineTests(unittest.TestCase):
         self.assertEqual(len(out), 2)
         seg5 = next(h for h in out if h.segment_number == 5)
         self.assertEqual(seg5.similarity_score, 0.48)
+
+    def test_is_chunk_fully_indexed_complete(self):
+        rows = [
+            {"segment_number": i, "total_segments": 6}
+            for i in range(1, 7)
+        ]
+        self.assertTrue(is_chunk_fully_indexed(rows))
+
+    def test_is_chunk_fully_indexed_partial(self):
+        rows = [
+            {"segment_number": i, "total_segments": 6}
+            for i in range(1, 5)
+        ]
+        self.assertFalse(is_chunk_fully_indexed(rows))
+
+    def test_is_chunk_fully_indexed_gap(self):
+        rows = [
+            {"segment_number": 1, "total_segments": 3},
+            {"segment_number": 2, "total_segments": 3},
+            {"segment_number": 3, "total_segments": 3},
+        ]
+        rows_missing = [rows[0], rows[2]]
+        self.assertTrue(is_chunk_fully_indexed(rows))
+        self.assertFalse(is_chunk_fully_indexed(rows_missing))
 
 
 if __name__ == "__main__":

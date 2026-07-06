@@ -20,6 +20,7 @@ Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-tem
 |---------|---------|
 | `cosmos_host` | (required) |
 | `cosmos_port` | 8001 |
+| `cosmoshttpscheme` | `http` (set `https` for TLS-terminated endpoints) |
 | `cosmos_model` | ./Cosmos-Reason2-8B |
 | `cosmos_max_tokens` | 4000 |
 | `cosmos_temperature` | 0.2 |

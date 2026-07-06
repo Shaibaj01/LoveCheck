@@ -28,6 +28,15 @@ class SegmentDetailResponse(BaseModel):
     segment: Dict[str, Any]
 
 
+@router.get("/detections")
+async def tool_detections(
+    source: str = Query(..., description="Segment clip S3 URI (source)"),
+    current_user: CurrentUser = None,
+):
+    """Fetch YOLO bbox sidecar for a segment (agent tool: get_detections)."""
+    return await videos_api.get_video_detections(source=source, current_user=current_user)
+
+
 @router.get("/segments", response_model=SegmentListResponse)
 async def list_segments(
     original_video: str = Query(..., description="Parent video S3 URI (original_video)"),

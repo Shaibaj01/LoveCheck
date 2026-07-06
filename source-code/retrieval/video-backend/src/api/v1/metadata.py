@@ -33,7 +33,6 @@ _EXCLUDED_METADATA_COLUMNS = {
     "vlm_structured",
     "structured_parse_ok",
     "perception_json",
-    "object_classes",
     "object_counts",
     "max_detection_conf",
     "perception_ok",

@@ -40,6 +40,10 @@ class VideoSearchResult(BaseModel):
     object_counts: Optional[str] = None
     max_detection_conf: Optional[float] = None
     perception_ok: Optional[bool] = None
+    perception_source: Optional[str] = None
+    detection_sidecar_uri: Optional[str] = None
+    detection_frame_count: Optional[int] = None
+    detection_count: Optional[int] = None
     extra_metadata: Optional[str] = None
 
 
@@ -53,6 +57,7 @@ class TimelineSegment(BaseModel):
     reasoning_content: Optional[str] = None
     vlm_structured: Optional[str] = None
     object_classes: Optional[str] = None
+    perception_ok: Optional[bool] = None
     similarity_score: float = 0.0
     is_search_match: bool = False
     query_highlight: bool = False
@@ -84,4 +89,6 @@ class ChunkSearchResult(BaseModel):
     cosmos_model: Optional[str] = None
     tokens_used: Optional[int] = None
     cached_prompt_tokens: Optional[int] = None
-
+    stream_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    stream_chunk_total: Optional[int] = None

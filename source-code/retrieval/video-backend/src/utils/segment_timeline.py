@@ -28,6 +28,33 @@ def dedupe_segment_dicts(segments: List[dict]) -> List[dict]:
     return [best_by_number[k] for k in sorted(best_by_number)]
 
 
+def expected_total_segments(segments: List[dict]) -> int:
+    """Largest total_segments value declared on rows for one parent chunk."""
+    expected = 0
+    for seg in segments:
+        try:
+            total = int(seg.get("total_segments") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if total > expected:
+            expected = total
+    return expected
+
+
+def is_chunk_fully_indexed(segments: List[dict]) -> bool:
+    """True when indexed segment rows cover every slot 1..total_segments."""
+    if not segments:
+        return False
+    expected = expected_total_segments(segments)
+    if expected <= 0:
+        return False
+    deduped = dedupe_segment_dicts(segments)
+    if len(deduped) != expected:
+        return False
+    numbers = {int(seg.get("segment_number") or 0) for seg in deduped}
+    return numbers == set(range(1, expected + 1))
+
+
 def dedupe_by_segment_number(
     items: List[T],
     segment_number: Callable[[T], int],

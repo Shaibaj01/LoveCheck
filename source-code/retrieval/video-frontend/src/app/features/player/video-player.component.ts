@@ -25,7 +25,17 @@ import {
   segmentDisplayCaption,
 } from '../../shared/utils/query-highlight.util';
 import { playVideoMuted, seekVideoAndWait } from '../../shared/utils/video-hover-preview.util';
+import {
+  DetectionFrame,
+  DetectionSidecar,
+  drawDetectionOverlay,
+  findFrameForTime,
+  readDetectionOverlayPref,
+  writeDetectionOverlayPref,
+} from '../../shared/utils/detection-overlay.util';
 import { VideoSummarizeDialogComponent } from '../explore/components/video-summarize-dialog.component';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { firstValueFrom } from 'rxjs';
 
 export interface VideoPlayerData {
   chunk?: ChunkSearchResult;
@@ -45,6 +55,7 @@ export interface VideoPlayerData {
     MatIconModule,
     MatProgressSpinnerModule,
     MatTooltipModule,
+    MatButtonToggleModule,
   ],
   template: `
     <div class="video-player-container">
@@ -53,8 +64,18 @@ export interface VideoPlayerData {
           <mat-icon class="video-icon">play_circle</mat-icon>
           <div>
             <h2>{{ title() }}</h2>
-            @if (chunk()) {
-              <p class="subtitle">Full chunk · {{ formatTime(chunk()!.chunk_duration_sec) }} · {{ chunk()!.total_segments }} segments</p>
+            @if (chunk(); as c) {
+              @if (isExplore()) {
+                <p class="subtitle">Full chunk · {{ formatTime(c.chunk_duration_sec) }} · {{ c.total_segments }} segments</p>
+              } @else {
+                <p class="subtitle">
+                  Best match {{ formatTime(c.best_match_start_sec) }}–{{ formatTime(c.best_match_end_sec) }}
+                  · segment {{ c.best_segment_number }}/{{ c.total_segments }}
+                  @if (searchQuery()) {
+                    · "{{ searchQuery() }}"
+                  }
+                </p>
+              }
             }
           </div>
         </div>
@@ -72,43 +93,35 @@ export interface VideoPlayerData {
         </div>
       }
 
-      @if (chunk() && !isExplore()) {
-        <div class="jump-bar">
-          <button mat-stroked-button class="jump-btn" (click)="seekToBestMatch()">
-            <mat-icon>my_location</mat-icon>
-            Jump to moment · {{ formatTime(chunk()!.best_match_start_sec) }}
-          </button>
-          @if (chunk()!.query?.trim()) {
-            <span class="jump-query">Searching: "{{ chunk()!.query }}"</span>
+      <div class="video-section">
+        <div class="video-wrap">
+          @if (loading()) {
+            <div class="loading-overlay">
+              <mat-spinner diameter="40"></mat-spinner>
+              <p>Loading video...</p>
+            </div>
+          }
+
+          @if (streamUrl() && !error()) {
+            <video
+              #videoPlayer
+              [src]="streamUrl()"
+              controls
+              playsinline
+              preload="auto"
+              muted
+              (loadedmetadata)="onLoadedMetadata()"
+              (canplay)="onCanPlay()"
+              (playing)="onVideoPlaying()"
+              (timeupdate)="onTimeUpdate()"
+              (error)="onVideoError($event)"
+              class="video-player">
+            </video>
+            @if (overlayEnabled()) {
+              <canvas #overlayCanvas class="detection-overlay"></canvas>
+            }
           }
         </div>
-      }
-
-      <div class="video-section">
-        @if (loading()) {
-          <div class="loading-overlay">
-            <mat-spinner diameter="48"></mat-spinner>
-            <p>Loading video...</p>
-          </div>
-        }
-
-        @if (streamUrl() && !error()) {
-          <video
-            #videoPlayer
-            [src]="streamUrl()"
-            controls
-            playsinline
-            preload="auto"
-            muted
-            (loadedmetadata)="onLoadedMetadata()"
-            (canplay)="onCanPlay()"
-            (waiting)="onVideoWaiting()"
-            (playing)="onVideoPlaying()"
-            (timeupdate)="onTimeUpdate()"
-            (error)="onVideoError($event)"
-            class="video-player">
-          </video>
-        }
 
         @if (error()) {
           <div class="error-state">
@@ -125,9 +138,24 @@ export interface VideoPlayerData {
       @if (chunk()) {
         <div class="moment-timeline">
           <div class="timeline-header">
-            <mat-icon>timeline</mat-icon>
-            <span>{{ isExplore() ? 'Segment timeline' : 'Jump to moment' }}</span>
-            <span class="playhead">{{ formatTime(currentTime()) }} / {{ formatTime(chunk()!.chunk_duration_sec) }}</span>
+            <div class="timeline-title">
+              <mat-icon>timeline</mat-icon>
+              <span>{{ isExplore() ? 'Segment timeline' : 'Match timeline' }}</span>
+            </div>
+            <div class="timeline-toolbar">
+              <div class="overlay-control">
+                <span class="overlay-label">Bboxes</span>
+                <mat-button-toggle-group
+                  class="overlay-toggle-group"
+                  [value]="overlayEnabled() ? 'on' : 'off'"
+                  (change)="toggleOverlay($event.value === 'on')"
+                  hideSingleSelectionIndicator>
+                  <mat-button-toggle value="off">OFF</mat-button-toggle>
+                  <mat-button-toggle value="on">ON</mat-button-toggle>
+                </mat-button-toggle-group>
+              </div>
+              <span class="playhead">{{ formatTime(currentTime()) }} / {{ formatTime(chunk()!.chunk_duration_sec) }}</span>
+            </div>
           </div>
           <div class="timeline-track">
             @for (seg of chunk()!.timeline; track seg.source) {
@@ -235,28 +263,6 @@ export interface VideoPlayerData {
       .video-icon { color: var(--accent-primary); }
     }
 
-    .jump-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.55rem 1rem;
-      background: rgba(34, 197, 94, 0.08);
-      border-bottom: 1px solid rgba(34, 197, 94, 0.22);
-      flex-wrap: wrap;
-    }
-
-    .jump-btn {
-      border-color: rgba(34, 197, 94, 0.55) !important;
-      color: #22c55e !important;
-      font-weight: 600;
-    }
-
-    .jump-query {
-      font-size: 0.78rem;
-      color: var(--text-secondary);
-    }
-
     .explore-actions-bar {
       display: flex;
       align-items: center;
@@ -269,6 +275,10 @@ export interface VideoPlayerData {
     .summarize-btn {
       background: var(--button-bg-primary) !important;
       color: var(--button-text) !important;
+
+      mat-icon {
+        color: var(--button-text) !important;
+      }
     }
 
     .video-section {
@@ -277,15 +287,107 @@ export interface VideoPlayerData {
       flex-shrink: 0;
       max-height: 42vh;
 
+      .video-wrap {
+        position: relative;
+        width: 100%;
+        min-height: 200px;
+        max-height: 42vh;
+        overflow: hidden;
+      }
+
       .video-player {
         width: 100%;
         max-height: 42vh;
         object-fit: contain;
         display: block;
+        vertical-align: top;
+      }
+
+      .detection-overlay {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      .loading-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        background: rgba(0, 0, 0, 0.72);
+        pointer-events: none;
+
+        p {
+          margin: 0;
+          font-size: 0.82rem;
+          color: rgba(255, 255, 255, 0.85);
+        }
       }
     }
 
-    .loading-overlay, .error-state {
+    .overlay-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+
+    .overlay-label {
+      font-size: 0.79rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #22c55e !important;
+      white-space: nowrap;
+    }
+
+    .overlay-toggle-group {
+      ::ng-deep .mat-button-toggle,
+      ::ng-deep .mat-mdc-button-toggle {
+        min-width: 2.6rem;
+      }
+
+      ::ng-deep .mat-button-toggle .mat-button-toggle-label-content,
+      ::ng-deep .mat-mdc-button-toggle .mat-button-toggle-label-content {
+        color: var(--text-primary) !important;
+        font-size: 0.79rem;
+        font-weight: 600;
+        line-height: 28px;
+        padding: 0 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      ::ng-deep .mat-button-toggle-button,
+      ::ng-deep .mat-mdc-button-toggle-button {
+        background: var(--bg-secondary);
+        height: 28px;
+      }
+
+      ::ng-deep .mat-button-toggle-checked,
+      ::ng-deep .mat-mdc-button-toggle-checked {
+        background: var(--bg-card-hover) !important;
+      }
+
+      ::ng-deep mat-button-toggle[value='on'].mat-button-toggle-checked .mat-button-toggle-label-content,
+      ::ng-deep .mat-mdc-button-toggle.mat-button-toggle-checked[value='on'] .mat-button-toggle-label-content {
+        color: #22c55e !important;
+      }
+
+      ::ng-deep mat-button-toggle[value='off'].mat-button-toggle-checked .mat-button-toggle-label-content,
+      ::ng-deep .mat-mdc-button-toggle.mat-button-toggle-checked[value='off'] .mat-button-toggle-label-content {
+        color: var(--text-primary) !important;
+      }
+    }
+
+    .error-state {
       min-height: 220px;
       display: flex;
       flex-direction: column;
@@ -304,19 +406,38 @@ export interface VideoPlayerData {
     .timeline-header {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.45rem;
+    }
+
+    .timeline-title {
+      display: flex;
+      align-items: center;
       gap: 0.4rem;
       font-size: 0.78rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--text-muted);
-      margin-bottom: 0.45rem;
+    }
 
-      .playhead {
-        margin-left: auto;
-        font-family: monospace;
-        text-transform: none;
-        letter-spacing: 0;
-      }
+    .timeline-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-left: auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .timeline-header .playhead {
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: nowrap;
     }
 
     .timeline-track {
@@ -472,11 +593,14 @@ export class VideoPlayerComponent implements OnInit {
   private dialog = inject(MatDialog);
 
   @ViewChild('videoPlayer') videoPlayer?: ElementRef<HTMLVideoElement>;
+  @ViewChild('overlayCanvas') overlayCanvas?: ElementRef<HTMLCanvasElement>;
 
   loading = signal(true);
   error = signal<string | null>(null);
   streamUrl = signal<SafeResourceUrl | null>(null);
   currentTime = signal(0);
+  overlayEnabled = signal(readDetectionOverlayPref());
+  detectionFrames = signal<DetectionFrame[]>([]);
   chunk = signal<ChunkSearchResult | null>(null);
   legacyVideo = signal<VideoSearchResult | null>(null);
   queryTerms = signal<string[]>([]);
@@ -489,8 +613,12 @@ export class VideoPlayerComponent implements OnInit {
   private segmentPlaybackOffset = 0;
   private pendingInlineSeekSec = 0;
   private loadedSegmentSource = '';
+  private loadedDetectionSource = '';
+  private detectionLoadToken = 0;
 
   title = computed(() => this.chunk()?.filename ?? this.legacyVideo()?.filename ?? 'Video');
+
+  searchQuery = computed(() => (this.data.query ?? this.chunk()?.query ?? '').trim());
 
   activeSegmentNumber = computed(() => {
     const c = this.chunk();
@@ -524,8 +652,18 @@ export class VideoPlayerComponent implements OnInit {
     }
   }
 
-  /** Play the small segment MP4 for `seekSec` — avoids seeking a large parent file. */
+  /** Search: segment MP4s. Explore: full parent chunk from original_video. */
   private beginSegmentPlayback(chunk: ChunkSearchResult, seekSec: number) {
+    if (this.isExplore()) {
+      const source = chunk.original_video?.trim() ?? '';
+      this.segmentPlaybackOffset = 0;
+      this.pendingInlineSeekSec = Math.max(0, seekSec);
+      this.loadedSegmentSource = source;
+      this.loadStreamSource(source);
+      this.syncDetectionForChunkTime(chunk, seekSec);
+      return;
+    }
+
     const seg = this.findSegmentForTime(chunk, seekSec);
     if (seg?.source?.trim()) {
       const startWithin = Math.max(0, seekSec - seg.segment_start_sec);
@@ -533,6 +671,8 @@ export class VideoPlayerComponent implements OnInit {
       this.pendingInlineSeekSec = startWithin;
       this.loadedSegmentSource = seg.source.trim();
       this.loadStreamSource(this.loadedSegmentSource);
+      this.loadedDetectionSource = '';
+      this.syncDetectionForChunkTime(chunk, seekSec);
       return;
     }
     this.segmentPlaybackOffset = 0;
@@ -596,6 +736,7 @@ export class VideoPlayerComponent implements OnInit {
 
   onLoadedMetadata() {
     this.metadataReady = true;
+    this.refreshDetectionOverlay();
     void this.prepareAndPlay();
   }
 
@@ -603,14 +744,11 @@ export class VideoPlayerComponent implements OnInit {
     void this.prepareAndPlay();
   }
 
-  onVideoWaiting() {
-    const el = this.videoPlayer?.nativeElement;
-    if (el && !el.paused && this.playbackPrepared) {
-      this.loading.set(true);
-    }
+  onVideoPlaying() {
+    this.loading.set(false);
   }
 
-  onVideoPlaying() {
+  private clearLoadingOverlay() {
     this.loading.set(false);
   }
 
@@ -625,29 +763,105 @@ export class VideoPlayerComponent implements OnInit {
     const inlineSeek = this.pendingInlineSeekSec;
     this.pendingInlineSeekSec = 0;
 
-    if (chunkSeek != null && chunkSeek > 0.05) {
-      this.loading.set(true);
-      await seekVideoAndWait(el, chunkSeek);
-    } else if (inlineSeek > 0.05) {
-      this.loading.set(true);
-      await seekVideoAndWait(el, inlineSeek);
-    }
-
-    this.playbackPrepared = true;
-    this.autoPlayPending = false;
-
     try {
+      if (chunkSeek != null && chunkSeek > 0.05) {
+        this.loading.set(true);
+        await seekVideoAndWait(el, chunkSeek);
+      } else if (inlineSeek > 0.05) {
+        this.loading.set(true);
+        await seekVideoAndWait(el, inlineSeek);
+      }
+
+      this.playbackPrepared = true;
+      this.autoPlayPending = false;
       await playVideoMuted(el);
     } catch {
-      this.loading.set(false);
+      // autoplay may be blocked
+    } finally {
+      this.clearLoadingOverlay();
     }
   }
 
   onTimeUpdate() {
     const el = this.videoPlayer?.nativeElement;
-    if (el) {
+    if (!el) return;
+
+    const c = this.chunk();
+    if (c && this.isExplore()) {
+      this.currentTime.set(el.currentTime);
+      this.syncDetectionForChunkTime(c, el.currentTime);
+    } else {
       this.currentTime.set(this.segmentPlaybackOffset + el.currentTime);
     }
+    this.refreshDetectionOverlay();
+  }
+
+  toggleOverlay(enabled: boolean) {
+    this.overlayEnabled.set(enabled);
+    writeDetectionOverlayPref(enabled);
+    if (enabled) {
+      const c = this.chunk();
+      if (c) {
+        this.syncDetectionForChunkTime(c, this.currentTime());
+      } else if (this.loadedSegmentSource) {
+        void this.loadDetectionsForSource(this.loadedSegmentSource);
+      }
+    } else {
+      this.detectionFrames.set([]);
+      this.loadedDetectionSource = '';
+      this.refreshDetectionOverlay();
+    }
+  }
+
+  private syncDetectionForChunkTime(chunk: ChunkSearchResult, sec: number) {
+    if (!this.overlayEnabled()) return;
+    const seg = this.findSegmentForTime(chunk, sec);
+    const src = seg?.source?.trim() ?? '';
+    if (!src || src === this.loadedDetectionSource) return;
+    this.loadedDetectionSource = src;
+    void this.loadDetectionsForSource(src);
+  }
+
+  private async loadDetectionsForSource(source: string) {
+    if (!this.overlayEnabled() || !source) {
+      this.detectionFrames.set([]);
+      return;
+    }
+    const token = ++this.detectionLoadToken;
+    try {
+      const payload = await firstValueFrom(this.videoService.getDetections(source));
+      if (token !== this.detectionLoadToken) return;
+      const sidecar = payload as DetectionSidecar;
+      this.detectionFrames.set(sidecar.frames ?? []);
+      this.refreshDetectionOverlay();
+    } catch {
+      if (token !== this.detectionLoadToken) return;
+      this.detectionFrames.set([]);
+      this.refreshDetectionOverlay();
+    }
+  }
+
+  private detectionOverlayTimeSec(): number {
+    const el = this.videoPlayer?.nativeElement;
+    if (!el) return 0;
+
+    const c = this.chunk();
+    if (c && this.isExplore()) {
+      const seg = this.findSegmentForTime(c, el.currentTime);
+      if (seg) {
+        return Math.max(0, el.currentTime - seg.segment_start_sec);
+      }
+    }
+    return el.currentTime;
+  }
+
+  private refreshDetectionOverlay() {
+    if (!this.overlayEnabled()) return;
+    const canvas = this.overlayCanvas?.nativeElement;
+    const video = this.videoPlayer?.nativeElement;
+    if (!canvas || !video) return;
+    const frame = findFrameForTime(this.detectionFrames(), this.detectionOverlayTimeSec());
+    drawDetectionOverlay(canvas, video, frame);
   }
 
   onVideoError(event?: Event) {
@@ -656,18 +870,24 @@ export class VideoPlayerComponent implements OnInit {
     this.loading.set(false);
   }
 
-  seekToBestMatch() {
-    const c = this.chunk();
-    if (!c) return;
-    this.seekTo(c.best_match_start_sec + 0.05);
-  }
-
   seekToSegment(seg: TimelineSegment) {
-    this.seekTo(seg.segment_start_sec + 0.05);
+    const start = Math.max(0, seg.segment_start_sec);
+    this.seekTo(start > 0 ? start + 0.05 : 0);
   }
 
   seekTo(sec: number) {
     const c = this.chunk();
+    if (c && this.isExplore()) {
+      const el = this.videoPlayer?.nativeElement;
+      if (!el) return;
+      void this.seekAndPlay(el, sec, () => {
+        this.currentTime.set(sec);
+        this.syncDetectionForChunkTime(c, sec);
+        this.refreshDetectionOverlay();
+      });
+      return;
+    }
+
     if (c) {
       const seg = this.findSegmentForTime(c, sec);
       if (seg?.source?.trim()) {
@@ -677,35 +897,38 @@ export class VideoPlayerComponent implements OnInit {
           this.segmentPlaybackOffset = seg.segment_start_sec;
           this.pendingInlineSeekSec = startWithin;
           this.loadedSegmentSource = source;
+          this.loadedDetectionSource = '';
           this.loadStreamSource(source);
+          this.syncDetectionForChunkTime(c, sec);
           return;
         }
         const el = this.videoPlayer?.nativeElement;
         if (!el) return;
-        void (async () => {
-          this.loading.set(true);
-          await seekVideoAndWait(el, startWithin);
-          try {
-            await playVideoMuted(el);
-          } catch {
-            this.loading.set(false);
-          }
-        })();
+        void this.seekAndPlay(el, startWithin);
         return;
       }
     }
 
     const el = this.videoPlayer?.nativeElement;
     if (!el) return;
-    void (async () => {
-      this.loading.set(true);
+    void this.seekAndPlay(el, sec);
+  }
+
+  private async seekAndPlay(
+    el: HTMLVideoElement,
+    sec: number,
+    afterSeek?: () => void,
+  ): Promise<void> {
+    this.loading.set(true);
+    try {
       await seekVideoAndWait(el, sec);
-      try {
-        await playVideoMuted(el);
-      } catch {
-        this.loading.set(false);
-      }
-    })();
+      afterSeek?.();
+      await playVideoMuted(el);
+    } catch {
+      // seek or autoplay failed
+    } finally {
+      this.clearLoadingOverlay();
+    }
   }
 
   segmentFlex(seg: TimelineSegment): string {

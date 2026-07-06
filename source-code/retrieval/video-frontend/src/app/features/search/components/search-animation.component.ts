@@ -17,8 +17,8 @@ import { MatIconModule } from '@angular/material/icon';
           </div>
           <div class="phase-content">
             <h3>Generating Embedding</h3>
-            <p>Converting query to vector using NVIDIA NIM</p>
-            <div class="model-info">Model: nvidia/llama-3.2-nv-embedqa-1b-v2 (2048 dims)</div>
+            <p>Hybrid caption + video query vectors</p>
+            <div class="model-info">Model: {{ embeddingModelDetail }}</div>
             @if (phase === 'embedding') {
               <div class="loader">
                 <div class="dot"></div>
@@ -80,15 +80,15 @@ import { MatIconModule } from '@angular/material/icon';
           </div>
         </div>
 
-        <!-- Phase 4: LLM Synthesis (only shown when LLM is enabled) -->
+        <!-- Phase 4: Synthesis (shown when AI summary is expected) -->
         <div *ngIf="showLlmPhase" class="phase" [class.active]="phase === 'synthesizing'" [class.complete]="phaseIndex > 3">
           <div class="phase-icon">
             <mat-icon>auto_awesome</mat-icon>
           </div>
           <div class="phase-content">
-            <h3>Generating LLM Summary</h3>
-            <p>Synthesizing top results with NVIDIA AI</p>
-            <div class="model-info">Model: meta/llama-3.1-8b-instruct</div>
+            <h3>Generating Summary</h3>
+            <p>Synthesizing top clip evidence</p>
+            <div class="model-info">Model: {{ synthesisModel }}</div>
             @if (phase === 'synthesizing') {
               <div class="loader">
                 <div class="dot"></div>
@@ -118,7 +118,7 @@ import { MatIconModule } from '@angular/material/icon';
                   <span>Embedding: {{ embeddingTime.toFixed(2) }}ms</span>
                   <span>Search: {{ searchTime.toFixed(2) }}ms</span>
                   @if (showLlmPhase && llmTime > 0) {
-                    <span>LLM: {{ llmTime.toFixed(2) }}ms</span>
+                    <span>Synthesis: {{ llmTime.toFixed(2) }}ms</span>
                   }
                 </div>
               }
@@ -329,6 +329,8 @@ import { MatIconModule } from '@angular/material/icon';
   `]
 })
 export class SearchAnimationComponent {
+  @Input() embeddingModelDetail: string = 'nvidia/cosmos-embed1 (256 dims)';
+  @Input() synthesisModel: string = './Cosmos-Reason2-8B';
   @Input() phase: 'idle' | 'embedding' | 'searching' | 'filtering' | 'synthesizing' | 'complete' = 'idle';
   @Input() embeddingTime: number = 0;
   @Input() searchTime: number = 0;

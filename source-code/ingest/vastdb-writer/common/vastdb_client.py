@@ -1,9 +1,8 @@
 import logging
-import hashlib
 import json
 import vastdb
 import pyarrow as pa
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, Any, Tuple
 from datetime import datetime
 
 from common import vastdb_patch  # noqa: F401 — apply SDK patch before select/insert
@@ -66,13 +65,16 @@ class VastDBClient:
             ("object_counts", pa.utf8()),
             ("max_detection_conf", pa.float32()),
             ("perception_ok", pa.bool_()),
+            ("perception_source", pa.utf8()),
+            ("detection_sidecar_uri", pa.utf8()),
+            ("detection_frame_count", pa.uint32()),
+            ("detection_count", pa.uint32()),
             ("vectors", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.settings.embeddingdimensions)),
             ("vectors_visual", pa.list_(pa.field(name="item", type=pa.float32(), nullable=False), self.visual_dim)),
             ("cosmos_model", pa.utf8()),
             ("embedding_model", pa.utf8()),
             ("visual_embedding_model", pa.utf8()),
             ("tokens_used", pa.int32()),
-            # usage.prompt_tokens_details.cached_tokens (vLLM). Add column on existing tables before deploy.
             ("cached_prompt_tokens", pa.int32()),
             ("processing_time", pa.float64()),
             ("timestamp", pa.utf8()),
@@ -90,10 +92,8 @@ class VastDBClient:
         ])
 
         self._initialize_connection()
-        self._schema_ready = False
 
     def _initialize_connection(self):
-        """Initialize VastDB connection"""
         endpoint = self.settings.vdbendpoint
         if not endpoint.startswith(("http://", "https://")):
             endpoint = f"http://{endpoint}"
@@ -102,39 +102,34 @@ class VastDBClient:
             endpoint=endpoint,
             access=self.settings.vdbaccesskey,
             secret=self.settings.vdbsecretkey,
-            ssl_verify=False
+            ssl_verify=False,
         )
 
-    def ensure_schema_and_table(self) -> bool:
-        """Ensure schema and table exist, creating them if needed."""
-        if self._schema_ready:
-            return True
-        try:
-            with self.session.transaction() as tx:
-                bucket = tx.bucket(self.bucket)
-                
-                schema = bucket.schema(self.schema_name, fail_if_missing=False)
-                if schema is None:
-                    schema = bucket.create_schema(self.schema_name, fail_if_exists=False)
-                
-                table = schema.table(self.table_name, fail_if_missing=False)
-                if table is None:
-                    try:
-                        schema.create_table(self.table_name, columns=self.schema_columns)
-                    except Exception as e:
-                        if "409" in str(e) or "Conflict" in str(e) or "already exists" in str(e).lower():
-                            table = schema.table(self.table_name, fail_if_missing=False)
-                            if table is None:
-                                raise RuntimeError("Failed to get table after creation conflict")
-                        else:
-                            raise
-                
-                self._schema_ready = True
-                return True
-                
-        except Exception as e:
-            logging.error(f"Error ensuring schema/table: {e}")
-            return False
+    def _prepare_table(self, tx):
+        """Create schema/table inline in the current write transaction (no pre-check session)."""
+        bucket = tx.bucket(self.bucket)
+        schema = bucket.schema(self.schema_name, fail_if_missing=False)
+        if schema is None:
+            logging.info("[VASTDB] Creating schema %s", self.schema_name)
+            schema = bucket.create_schema(self.schema_name, fail_if_exists=False)
+
+        table = schema.table(self.table_name, fail_if_missing=False)
+        if table is None:
+            try:
+                logging.info(
+                    "[VASTDB] Creating table %s with %d columns",
+                    self.table_name,
+                    len(self.schema_columns),
+                )
+                schema.create_table(self.table_name, columns=self.schema_columns)
+            except Exception as exc:
+                if "409" not in str(exc) and "Conflict" not in str(exc) and "already exists" not in str(exc).lower():
+                    raise
+            table = schema.table(self.table_name, fail_if_missing=False)
+
+        if table is None:
+            raise vastdb.errors.MissingTable(self.bucket, self.schema_name, self.table_name)
+        return table
 
     def store_vector(self, embedding_event: Dict[str, Any]) -> bool:
         """Store video reasoning with vector in VastDB. Skips duplicate source."""
@@ -149,17 +144,17 @@ class VastDBClient:
             visual_embedding = embedding_event.get("visual_embedding") or []
             visual_embedding_ok = bool(embedding_event.get("visual_embedding_ok", False))
             visual_embedding_model = embedding_event.get("visual_embedding_model", "") or ""
-            
+
             if not reasoning_content and not dense_caption:
                 return True
-            
+
             if not embedding:
                 logging.warning("No embedding vector to store")
                 return False
 
             pk = pk_for_source(source)
             timestamp = datetime.utcnow().isoformat() + "Z"
-            
+
             is_public = embedding_event.get("is_public", True)
             allowed_users_str = embedding_event.get("allowed_users", "")
             tags_str = embedding_event.get("tags", "")
@@ -168,15 +163,14 @@ class VastDBClient:
             segment_duration_event = embedding_event.get("segment_duration", 5.0)
             segment_number_event = embedding_event.get("segment_number")
             total_segments_event = embedding_event.get("total_segments")
-            
+
             camera_id = embedding_event.get("camera_id", "")
             capture_type = embedding_event.get("capture_type", "")
             location = embedding_event.get("location", "")
-            
+
             allowed_users = [u.strip() for u in allowed_users_str.split(",") if u.strip()] if allowed_users_str else []
             tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
-            
-            # Parse segment metadata
+
             if segment_number_event is not None:
                 segment_number = int(segment_number_event) if segment_number_event else 0
             else:
@@ -185,9 +179,9 @@ class VastDBClient:
                     try:
                         parts = filename.split("_segment_")[1].split("_of_")
                         segment_number = int(parts[0])
-                    except:
+                    except Exception:
                         pass
-            
+
             if total_segments_event is not None:
                 total_segments = int(total_segments_event) if total_segments_event else 1
             else:
@@ -196,22 +190,22 @@ class VastDBClient:
                     try:
                         parts = filename.split("_of_")[1].split(".")[0]
                         total_segments = int(parts)
-                    except:
+                    except Exception:
                         pass
-            
+
             segment_duration = float(segment_duration_event) if segment_duration_event else 5.0
             segment_start_sec, segment_end_sec = _resolve_segment_times(
                 embedding_event, segment_number, segment_duration
             )
-            
+
             if upload_timestamp_str:
                 try:
                     upload_timestamp = datetime.fromisoformat(upload_timestamp_str.replace('Z', '+00:00'))
-                except:
+                except Exception:
                     upload_timestamp = datetime.utcnow()
             else:
                 upload_timestamp = datetime.utcnow()
-            
+
             if not visual_embedding or len(visual_embedding) != self.visual_dim:
                 visual_embedding = [0.0] * self.visual_dim
 
@@ -237,7 +231,7 @@ class VastDBClient:
             ingest_kind = str(embedding_event.get("ingest_kind") or "").strip()
             if ingest_kind:
                 extra_metadata["ingest_kind"] = ingest_kind
-            
+
             record = {
                 "pk": pk,
                 "source": source,
@@ -254,6 +248,10 @@ class VastDBClient:
                 "object_counts": embedding_event.get("object_counts", "{}") or "{}",
                 "max_detection_conf": float(embedding_event.get("max_detection_conf") or 0.0),
                 "perception_ok": bool(embedding_event.get("perception_ok", False)),
+                "perception_source": embedding_event.get("perception_source", "") or "",
+                "detection_sidecar_uri": embedding_event.get("detection_sidecar_uri", "") or "",
+                "detection_frame_count": int(embedding_event.get("detection_frame_count") or 0),
+                "detection_count": int(embedding_event.get("detection_count") or 0),
                 "vectors": embedding,
                 "vectors_visual": visual_embedding,
                 "cosmos_model": embedding_event.get("cosmos_model", ""),
@@ -275,28 +273,23 @@ class VastDBClient:
                 "location": location,
                 "extra_metadata": json.dumps(extra_metadata, ensure_ascii=False),
             }
-            
-            if not self.ensure_schema_and_table():
-                return False
-            
+
             arrow_table = pa.Table.from_pylist([record], schema=self.schema_columns)
-            
+
             with self.session.transaction() as tx:
-                bucket = tx.bucket(self.bucket)
-                schema = bucket.schema(self.schema_name)
-                table = schema.table(self.table_name)
+                table = self._prepare_table(tx)
                 if self._skip_or_dedupe_existing_segment(table, source):
                     return True
                 table.insert(arrow_table)
 
             return True
-            
+
         except Exception as e:
             logging.error(f"Error storing vector: {e}")
             return False
 
     def _skip_or_dedupe_existing_segment(self, table, source: str) -> bool:
-        """Return True when insert should be skipped. Runs inside an open transaction."""
+        """Return True when insert should be skipped. Runs inside the write transaction."""
         existing = table.select(
             predicate=(table["source"] == source),
             columns=["source"],
@@ -308,7 +301,6 @@ class VastDBClient:
         return True
 
     def close(self):
-        """Close VastDB connection"""
         if hasattr(self, 'session') and hasattr(self.session, 'close'):
             self.session.close()
 
@@ -317,4 +309,3 @@ class VastDBClient:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-

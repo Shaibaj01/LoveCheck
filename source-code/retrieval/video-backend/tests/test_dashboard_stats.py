@@ -70,6 +70,7 @@ class DashboardStatsTests(unittest.TestCase):
         labels = {item["label"]: item["segment_count"] for item in stats["objects"]}
         self.assertEqual(labels["person"], 2)
         self.assertEqual(labels["forklift"], 1)
+        self.assertNotIn("object_classes", stats["metadata"])
 
         self.assertEqual(len(stats["uploads_by_day"]), 1)
         self.assertEqual(stats["recent_videos"][0]["indexed_clips"], 2)

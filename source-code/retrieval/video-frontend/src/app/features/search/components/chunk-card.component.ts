@@ -23,9 +23,12 @@ import {
   extractHighlightTerms,
   highlightQueryTerms,
   objectMatchesQuery,
-  parseStructuredObjects,
+  chunkObjectTags,
   previewCaption,
 } from '../../../shared/utils/query-highlight.util';
+import { explorePlayLabel as formatExplorePlayLabel } from '../../../shared/utils/chunk-display.util';
+import { formatAbsoluteTime, formatUploadBadgeTime } from '../../../shared/utils/time.util';
+import { BackendModelsService } from '../../../shared/services/backend-models.service';
 import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPreview } from '../../../shared/utils/video-hover-preview.util';
 
 @Component({
@@ -64,23 +67,14 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         <div class="play-overlay" [class.hidden]="isPlaying || previewFrameReady">
           <mat-icon>play_circle_filled</mat-icon>
         </div>
-        <div class="jump-badge" [class.explore-start]="mode === 'explore'">
-          <mat-icon>{{ mode === 'explore' ? 'play_arrow' : 'my_location' }}</mat-icon>
-          @if (mode === 'explore') {
-            Play from start
-          } @else {
-            Jump to {{ formatTime(chunk.best_match_start_sec) }}
-          }
+        <div class="upload-badge" [matTooltip]="uploadTooltip()">
+          <mat-icon>schedule</mat-icon>
+          {{ formatUploadDate(chunk.upload_timestamp) }}
         </div>
         @if (mode === 'search') {
-          <div class="score-badge">
-            {{ (chunk.similarity_score * 100).toFixed(0) }}% match
-          </div>
-        } @else {
-          <div class="upload-badge">
-            <mat-icon>schedule</mat-icon>
-            {{ formatUploadDate(chunk.upload_timestamp) }}
-          </div>
+        <div class="score-badge">
+          {{ (chunk.similarity_score * 100).toFixed(0) }}% match
+        </div>
         }
       </div>
 
@@ -107,11 +101,13 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
           </p>
         }
 
-        @if (mode === 'search') {
+        @if (chunk.timeline?.length) {
         <div class="timeline-section">
           <div class="timeline-label">
-            <mat-icon>timeline</mat-icon>
-            Chunk timeline
+            <mat-icon class="timeline-label-icon">timeline</mat-icon>
+            <span class="timeline-label-text">
+              {{ mode === 'search' ? 'Chunk timeline' : 'Jump to segment' }}
+            </span>
           </div>
           <div class="timeline-track">
             @for (seg of chunk.timeline; track seg.source) {
@@ -119,22 +115,29 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
                 type="button"
                 class="timeline-seg"
                 [style.flex]="segmentFlex(seg)"
-                [class.search-match]="seg.is_search_match"
-                [class.query-hit]="seg.query_highlight"
-                [class.best-match]="seg.is_best_match"
+                [class.search-match]="mode === 'search' && seg.is_search_match"
+                [class.query-hit]="mode === 'search' && seg.query_highlight"
+                [class.best-match]="mode === 'search' && seg.is_best_match"
                 (click)="onSegmentClick($event, seg.segment_start_sec)"
                 [matTooltip]="segmentTooltip(seg)"
                 matTooltipShowDelay="400">
-                @if (seg.is_best_match) {
+                @if (mode === 'search' && seg.is_best_match) {
                   <mat-icon class="seg-pin">place</mat-icon>
+                } @else if (mode === 'explore') {
+                  <span class="seg-num">{{ seg.segment_number }}</span>
                 }
               </button>
             }
           </div>
-          <div class="timeline-legend">
-            <span class="legend-item"><span class="dot best"></span> Best match</span>
-            <span class="legend-item"><span class="dot hit"></span> Query / match</span>
-          </div>
+          @if (mode === 'search') {
+            <div class="timeline-legend">
+              <span class="legend-item"><span class="dot best"></span> Best match</span>
+              <span class="legend-item"><span class="dot hit"></span> Query / match</span>
+              @if (chunk.matched_segment_count > 1) {
+                <span class="legend-item legend-hint">{{ chunk.matched_segment_count }} moments</span>
+              }
+            </div>
+          }
         </div>
         }
 
@@ -173,15 +176,17 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
           </div>
         }
 
-        <button mat-stroked-button class="open-btn" (click)="onOpen($event)">
-          <mat-icon>play_arrow</mat-icon>
-          Open with timeline
-        </button>
         @if (mode === 'explore') {
-          <button mat-raised-button color="primary" class="summarize-btn" (click)="onSummarize($event)">
-            <mat-icon>auto_awesome</mat-icon>
-            Summarize Video
+        <div class="card-actions">
+          <button mat-raised-button color="primary" class="action-btn" (click)="onOpen($event)">
+            <mat-icon>play_arrow</mat-icon>
+            {{ explorePlayLabel() }}
           </button>
+          <button mat-stroked-button class="action-btn action-secondary" (click)="onSummarize($event)">
+            <mat-icon>auto_awesome</mat-icon>
+            Summarize
+          </button>
+        </div>
         }
       </mat-card-content>
     </mat-card>
@@ -246,38 +251,10 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       }
     }
 
-    .jump-badge {
+    .upload-badge {
       position: absolute;
       left: 10px;
       bottom: 10px;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.35rem 0.65rem;
-      border-radius: 999px;
-      background: rgba(34, 197, 94, 0.92);
-      color: #052e16;
-      font-size: 0.78rem;
-      font-weight: 700;
-      box-shadow: 0 2px 12px rgba(34, 197, 94, 0.45);
-
-      mat-icon {
-        font-size: 1rem;
-        width: 1rem;
-        height: 1rem;
-      }
-    }
-
-    .jump-badge.explore-start {
-      background: rgba(115, 200, 253, 0.92);
-      color: #0e1a35;
-      box-shadow: 0 2px 12px rgba(115, 200, 253, 0.45);
-    }
-
-    .upload-badge {
-      position: absolute;
-      top: 10px;
-      right: 10px;
       display: inline-flex;
       align-items: center;
       gap: 0.3rem;
@@ -288,11 +265,13 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       font-size: 0.72rem;
       font-weight: 600;
       border: 1px solid rgba(115, 200, 253, 0.35);
+      max-width: calc(100% - 20px);
 
       mat-icon {
         font-size: 0.9rem;
         width: 0.9rem;
         height: 0.9rem;
+        flex-shrink: 0;
       }
     }
 
@@ -364,6 +343,12 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       margin-bottom: 0.85rem;
     }
 
+    :host ::ng-deep .timeline-label,
+    :host ::ng-deep .timeline-label-text,
+    :host ::ng-deep .timeline-label-icon {
+      color: #22c55e !important;
+    }
+
     .timeline-label {
       display: flex;
       align-items: center;
@@ -371,10 +356,9 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: var(--text-muted);
       margin-bottom: 0.4rem;
 
-      mat-icon {
+      .timeline-label-icon {
         font-size: 0.95rem;
         width: 0.95rem;
         height: 0.95rem;
@@ -398,9 +382,21 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       min-width: 8px;
       background: rgba(148, 163, 184, 0.25);
       cursor: pointer;
-      transition: filter 0.2s, box-shadow 0.2s;
+      transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 
-      &:hover { filter: brightness(1.15); }
+      &:hover {
+        filter: brightness(1.35);
+        transform: scaleY(1.14);
+        z-index: 2;
+        box-shadow:
+          0 0 12px rgba(34, 197, 94, 0.55),
+          inset 0 0 0 1px rgba(134, 239, 172, 0.75);
+      }
+
+      &:hover .seg-num {
+        color: #bbf7d0;
+        text-shadow: 0 0 8px rgba(34, 197, 94, 0.95);
+      }
 
       &.search-match {
         background: rgba(59, 130, 246, 0.45);
@@ -426,6 +422,18 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         height: 0.85rem;
         color: #052e16;
       }
+
+      .seg-num {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.62rem;
+        font-weight: 700;
+        color: var(--text-secondary);
+        transition: color 0.15s ease, text-shadow 0.15s ease;
+      }
     }
 
     .timeline-legend {
@@ -440,6 +448,11 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       display: inline-flex;
       align-items: center;
       gap: 0.3rem;
+
+      &.legend-hint {
+        margin-left: auto;
+        font-style: italic;
+      }
     }
 
     .dot {
@@ -545,23 +558,47 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       color: var(--accent-primary);
     }
 
-    .open-btn {
-      width: 100%;
-      border-color: rgba(34, 197, 94, 0.45) !important;
-      color: #22c55e !important;
-      margin-bottom: 0.5rem;
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.15rem;
     }
 
-    .summarize-btn {
-      width: 100%;
+    .action-btn {
+      flex: 1 1 auto;
+      min-width: 0;
+
+      mat-icon {
+        margin-right: 0.15rem;
+      }
+    }
+
+    .action-btn[mat-raised-button] {
       background: var(--button-bg-primary) !important;
       color: var(--button-text) !important;
+
+      mat-icon {
+        color: var(--button-text) !important;
+      }
+    }
+
+    .action-secondary {
+      flex: 0 1 auto;
+      color: var(--accent-primary) !important;
+      border-color: rgba(115, 200, 253, 0.5) !important;
+
+      mat-icon {
+        color: var(--accent-primary) !important;
+      }
     }
   `],
 })
 export class ChunkCardComponent implements OnChanges {
   private videoService = inject(VideoService);
   private sanitizer = inject(DomSanitizer);
+  private appConfig = inject(BackendModelsService);
 
   @Input({ required: true }) chunk!: ChunkSearchResult;
   @Input() mode: 'search' | 'explore' = 'search';
@@ -614,16 +651,15 @@ export class ChunkCardComponent implements OnChanges {
   }
 
   formatUploadDate(ts: string): string {
-    if (!ts) return '';
-    try {
-      return new Date(ts).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-    } catch {
-      return ts.slice(0, 10);
-    }
+    return formatUploadBadgeTime(ts, this.appConfig.displayTimezone());
+  }
+
+  uploadTooltip(): string {
+    const full = formatAbsoluteTime(
+      this.chunk.upload_timestamp,
+      this.appConfig.displayTimezone(),
+    );
+    return full ? `Uploaded ${full}` : '';
   }
 
   onSegmentClick(event: Event, seekSec: number) {
@@ -659,13 +695,11 @@ export class ChunkCardComponent implements OnChanges {
   }
 
   objectTags(): string[] {
-    const tags = new Set<string>();
-    for (const seg of this.chunk.timeline) {
-      for (const obj of parseStructuredObjects(seg)) {
-        tags.add(obj);
-      }
-    }
-    return Array.from(tags).slice(0, 8);
+    return chunkObjectTags(this.chunk.timeline, 8);
+  }
+
+  explorePlayLabel(): string {
+    return formatExplorePlayLabel(this.chunk);
   }
 
   isQueryTerm(label: string): boolean {

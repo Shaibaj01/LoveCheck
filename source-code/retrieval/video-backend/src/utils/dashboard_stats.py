@@ -111,8 +111,8 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
         for label in _split_object_classes(row.get("object_classes")):
             object_counter[label] += 1
 
-    metadata_fields = FILTERABLE_METADATA_COLUMNS
     metadata_breakdown: Dict[str, List[Dict[str, Any]]] = {}
+    metadata_fields = [f for f in FILTERABLE_METADATA_COLUMNS if f != "object_classes"]
     for field in metadata_fields:
         counter: Counter[str] = Counter()
         for row in segment_rows:

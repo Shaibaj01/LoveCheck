@@ -14,6 +14,7 @@ import { VideoPlayerComponent } from '../player/video-player.component';
 import { VideoSummarizeDialogComponent } from './components/video-summarize-dialog.component';
 import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { formatAbsoluteTime } from '../../shared/utils/time.util';
+import { BackendModelsService } from '../../shared/services/backend-models.service';
 import {
   friendlyVastDbAccessMessage,
   resolveApiAccessWarning,
@@ -523,6 +524,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   private explore = inject(ExploreService);
   private dialog = inject(MatDialog);
   private pageRefresh = inject(PageRefreshService);
+  private appConfig = inject(BackendModelsService);
   private uploadDialogRef: MatDialogRef<UploadDialogComponent> | null = null;
   private pageRefreshSub?: Subscription;
 
@@ -541,6 +543,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   tableInfoMessage = signal<string | null>(null);
 
   ngOnInit() {
+    void this.appConfig.ensureLoaded();
     this.load();
     this.pageRefreshSub = this.pageRefresh.refresh$.subscribe(() => this.reloadView());
   }
@@ -624,12 +627,16 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   }
 
   formatDay(iso: string): string {
-    return formatAbsoluteTime(iso + 'T12:00:00');
+    return formatAbsoluteTime(iso + 'T12:00:00', this.appConfig.displayTimezone());
   }
 
   formatDayShort(iso: string): string {
-    const d = new Date(iso + 'T12:00:00');
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const date = new Date(iso + 'T12:00:00Z');
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      timeZone: this.appConfig.displayTimezone(),
+    });
   }
 
   formatLocationLabel(value: string): string {

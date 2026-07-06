@@ -11,12 +11,13 @@ from urllib.parse import quote
 
 CUSTOM_PROMPT_MAX_LENGTH = 800
 
-FILTERABLE_METADATA_COLUMNS = ("camera_id", "capture_type", "location")
+FILTERABLE_METADATA_COLUMNS = ("camera_id", "capture_type", "location", "object_classes")
 
 METADATA_FIELD_LABELS: Dict[str, str] = {
     "camera_id": "Camera ID",
     "capture_type": "Capture Type",
     "location": "Location",
+    "object_classes": "Object class",
 }
 
 PLACEHOLDERS: Dict[str, str] = {

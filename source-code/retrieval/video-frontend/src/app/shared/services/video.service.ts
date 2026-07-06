@@ -60,6 +60,12 @@ export class VideoService {
     });
   }
 
+  getDetections(source: string): Observable<Record<string, unknown>> {
+    return this.http.get<Record<string, unknown>>(`${this.apiUrl}/videos/detections`, {
+      params: { source },
+    });
+  }
+
   /**
    * Upload video file directly to backend (backend proxies to S3)
    * @param metadata Optional metadata: camera_id, capture_type, location, custom_prompt

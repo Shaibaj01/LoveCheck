@@ -17,7 +17,9 @@ Deploy the VSS Blueprint web application to Kubernetes.
   - VastDB bucket: `vss-db`, schema `vss-schema`, tables `vss-collection` and `vss-prompts-events`
 
 - **AI/ML services:**
-  - NVIDIA NIM Endpoints or API key (for embeddings and LLM)
+  - Cosmos-Embed1 NIM (hybrid search embeddings)
+  - Cosmos-Reason2 NIM (search/explore synthesis; same host as ingest reasoner)
+  - Optional NVIDIA Cloud API key when `embedding_local_nim: false`
 
 - **Network access:**
   - Ability to modify `/etc/hosts` on your local machine
@@ -37,7 +39,9 @@ vim backend-secret.yaml
 |---------|--------------|
 | **VastDB** | `vdb_endpoint`, `vdb_bucket` (`vss-db`), `vdb_schema` (`vss-schema`), `vdb_collection` (`vss-collection`), `vdb_prompts_collection` (`vss-prompts-events`), credentials |
 | **S3** | `s3_endpoint` (must match tenant), `s3_upload_bucket` (`vss-chunks`), `s3_segments_bucket` (`vss-chunks-segments`), credentials |
-| **NVIDIA** | `nvidia_api_key`, `embedding_model`, `llm_model_name`, `embedding_local_nim`, `llm_local_nim` |
+| **Cosmos-Embed1** | `embedding_host`, `embedding_port`, `embedding_model`, `embedding_local_nim`, `nvidia_api_key` |
+| **Cosmos-Reason2** | `cosmos_host`, `cosmos_port`, `cosmoshttpscheme`, `cosmos_model`, `synthesis_*` |
+| **UI** | `display_timezone` (IANA, e.g. `Asia/Jerusalem`) |
 | **Auth** | `vast_host`, `tenant_name`, `jwt_secret` (see [setup](../../source-code/retrieval/video-backend/README.md#user-authentication)) |
 
 ---

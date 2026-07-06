@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
 
 
 def parse_extra_metadata(raw: Any) -> Dict[str, Any]:
@@ -55,3 +56,42 @@ def format_stream_time(sec: Optional[float]) -> str:
     if h:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
+def _parse_chunk_index(raw: Any) -> Optional[int]:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_stream_meta_by_video(rows_by_video: Dict[str, List[dict]]) -> Dict[str, Dict[str, Any]]:
+    """
+    Per original_video stream labels for explore cards.
+
+    Values: stream_id, chunk_index (0-based), stream_chunk_total (1-based session size).
+    """
+    session_max: Dict[str, int] = defaultdict(int)
+    pending: Dict[str, Dict[str, Any]] = {}
+
+    for ov, rows in rows_by_video.items():
+        stream_id: Optional[str] = None
+        chunk_index: Optional[int] = None
+        for row in rows:
+            fields = stream_fields_from_row(row)
+            sid = str(fields.get("stream_id") or "").strip()
+            if sid:
+                stream_id = sid
+            idx = _parse_chunk_index(fields.get("chunk_index"))
+            if idx is not None:
+                chunk_index = idx
+        if stream_id and chunk_index is not None:
+            pending[ov] = {"stream_id": stream_id, "chunk_index": chunk_index}
+            session_max[stream_id] = max(session_max[stream_id], chunk_index + 1)
+
+    return {
+        ov: {**meta, "stream_chunk_total": session_max[meta["stream_id"]]}
+        for ov, meta in pending.items()
+    }
