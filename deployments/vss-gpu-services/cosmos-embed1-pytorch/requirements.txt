@@ -1,0 +1,8 @@
+# torch / torchvision come from the CUDA arm64 base image (see Dockerfile).
+transformers>=4.44
+einops
+av
+pillow
+numpy
+fastapi
+uvicorn[standard]
