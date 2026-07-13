@@ -64,8 +64,37 @@ class DashboardStatsTests(unittest.TestCase):
         stats = build_dashboard_stats(rows)
         self.assertEqual(stats["overview"]["segment_rows"], 3)
         self.assertEqual(stats["overview"]["unique_videos"], 1)
+        self.assertEqual(stats["overview"]["fully_indexed_videos"], 1)
         self.assertEqual(stats["overview"]["indexed_clips"], 2)
         self.assertEqual(stats["overview"]["re_ingest_rows"], 1)
+
+    def test_fully_indexed_videos_partial_parent(self):
+        rows = [
+            {
+                "source": "s3://bucket/a_seg_001.mp4",
+                "original_video": "s3://bucket/a.mp4",
+                "segment_number": 1,
+                "total_segments": 2,
+                "is_public": True,
+            },
+            {
+                "source": "s3://bucket/b_seg_001.mp4",
+                "original_video": "s3://bucket/b.mp4",
+                "segment_number": 1,
+                "total_segments": 2,
+                "is_public": True,
+            },
+            {
+                "source": "s3://bucket/b_seg_002.mp4",
+                "original_video": "s3://bucket/b.mp4",
+                "segment_number": 2,
+                "total_segments": 2,
+                "is_public": True,
+            },
+        ]
+        stats = build_dashboard_stats(rows)
+        self.assertEqual(stats["overview"]["unique_videos"], 2)
+        self.assertEqual(stats["overview"]["fully_indexed_videos"], 1)
 
         labels = {item["label"]: item["segment_count"] for item in stats["objects"]}
         self.assertEqual(labels["person"], 2)

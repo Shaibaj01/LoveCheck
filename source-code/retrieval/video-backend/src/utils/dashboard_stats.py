@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
+from src.utils.browse_chunk import fully_indexed_videos
 from src.utils.stream_index import row_source_key, stream_fields_from_row
 from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
 
@@ -94,10 +95,13 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     other_rows = 0
 
     parent_videos: Set[str] = set()
+    rows_by_video: Dict[str, List[dict]] = defaultdict(list)
     for row in segment_rows:
         ov = str(row.get("original_video") or row.get("source") or "").strip()
         if ov:
             parent_videos.add(ov)
+            rows_by_video[ov].append(row)
+    fully_indexed_count = len(fully_indexed_videos(rows_by_video))
 
     source_counter: Counter[str] = Counter()
     for row in segment_rows:
@@ -229,6 +233,7 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
             "segment_rows": segment_total,
             "other_rows": other_rows,
             "unique_videos": len(parent_videos),
+            "fully_indexed_videos": fully_indexed_count,
             "indexed_clips": indexed_clips,
             "re_ingest_rows": re_ingest_rows,
             "re_ingest_clips": re_ingest_clips,
@@ -325,6 +330,7 @@ def empty_dashboard_stats() -> Dict[str, Any]:
             "segment_rows": 0,
             "other_rows": 0,
             "unique_videos": 0,
+            "fully_indexed_videos": 0,
             "indexed_clips": 0,
             "re_ingest_rows": 0,
             "re_ingest_clips": 0,

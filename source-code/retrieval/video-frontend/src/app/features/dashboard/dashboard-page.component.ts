@@ -1235,7 +1235,17 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     const cards: DashboardKpiCard[] = [
       { label: 'Total rows', value: o.total_rows, hint: 'All accessible VastDB rows' },
       { label: 'Segment rows', value: o.segment_rows, hint: 'Searchable clip segments' },
-      { label: 'Unique videos', value: o.unique_videos, hint: 'Distinct original_video values' },
+      {
+        label: 'Parent chunks',
+        value: o.unique_videos,
+        hint: 'Distinct original_video with ≥1 segment row (partial OK; each stream capture is its own parent)',
+      },
+      {
+        label: 'Fully indexed parents',
+        value: o.fully_indexed_videos ?? 0,
+        hint: 'All segments 1..N in VastDB — Explore browse shows only these',
+        warn: (o.fully_indexed_videos ?? 0) < o.unique_videos,
+      },
       { label: 'Public segments', value: o.public_segment_rows, hint: 'is_public=true' },
       { label: 'Private segments', value: o.private_segment_rows, hint: 'Restricted access' },
       { label: 'Indexed clips', value: o.indexed_clips ?? o.segment_rows, hint: 'Unique segment files in VastDB' },

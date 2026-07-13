@@ -46,6 +46,7 @@ class DashboardOverview(BaseModel):
     segment_rows: int
     other_rows: int
     unique_videos: int
+    fully_indexed_videos: int = 0
     indexed_clips: int = 0
     re_ingest_rows: int = 0
     re_ingest_clips: int = 0

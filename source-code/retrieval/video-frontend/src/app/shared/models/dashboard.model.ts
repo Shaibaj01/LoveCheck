@@ -40,6 +40,7 @@ export interface DashboardOverview {
   segment_rows: number;
   other_rows: number;
   unique_videos: number;
+  fully_indexed_videos?: number;
   indexed_clips?: number;
   re_ingest_rows?: number;
   re_ingest_clips?: number;
