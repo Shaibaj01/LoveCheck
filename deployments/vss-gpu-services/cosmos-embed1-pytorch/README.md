@@ -58,8 +58,15 @@ curl -s localhost:8004/v1/embeddings -H 'Content-Type: application/json' -d "{
   \"input\": \"data:video/mp4;base64,${B64}\", \"request_type\": \"query\", \"model\": \"nvidia/cosmos-embed1\"
 }" | python3 -c "import sys,json;d=json.load(sys.stdin);print('dim',len(d['data'][0]['embedding']))"
 
-# remote route
-# https://beta-api.neurondc.com/bc47cc/model-6b140e/v1/embeddings
+# remote route (through the neurondc gateway — Bearer token REQUIRED, else 401)
+export TOKEN='<your-bearer-token>'   # e.g. 4d4c84fc...b408cd
+curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/health \
+  -H "Authorization: Bearer ${TOKEN}"
+
+curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/v1/embeddings \
+  -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"input":"a red car driving at night","request_type":"query"}' \
+  | python3 -c "import sys,json;print('dim',len(json.load(sys.stdin)['data'][0]['embedding']))"
 ```
 
 ## Point VSS at it

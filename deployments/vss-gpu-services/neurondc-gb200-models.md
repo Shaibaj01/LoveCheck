@@ -34,7 +34,7 @@ container **must** publish that exact port, or the public route returns `502 Bad
 | `model-6b140b` | 8001 | 0 | cosmos-reason2-8b | vLLM (aarch64) |
 | `model-6b140c` | 8002 | 1 | cosmos-reason1-7b | vLLM (aarch64) |
 | `model-6b140d` | 8003 | 3 | yolo-infer | custom Docker |
-| `model-6b140e` | 8004 | – | cosmos-embed1 | ❌ blocked (amd64-only NIM) |
+| `model-6b140e` | 8004 | 2 | cosmos-embed1 | custom Docker (native PyTorch, aarch64) |
 | `model-6b140f` | 8005 | – | free | – |
 | `model-6b140g` | 8006 | – | free | – |
 | `model-6b140h` | 8007 | – | free | – |
@@ -182,23 +182,67 @@ curl -s localhost:8003/healthz
 
 ---
 
-## Cosmos-Embed1 — ❌ cannot run on this GB200
+## Cosmos-Embed1 — `model-6b140e` (GPU 2, port 8004) — native PyTorch
 
-Joint video-text embedding model. NVIDIA ships it **only as a NIM container**
-(`nvcr.io/nim/nvidia/cosmos-embed1:1.1.0`), which is **amd64-only**
-(`Multi-Arch Support: False`). On the GB200 (arm64) it crash-loops with
-`exec /bin/bash: exec format error`.
+Joint video-text embedding model (256-dim text + video vectors). NVIDIA ships it
+**only as a NIM container** (`nvcr.io/nim/nvidia/cosmos-embed1:1.1.0`), which is
+**amd64-only** (`Multi-Arch Support: False`) and crash-loops on the GB200 (arm64)
+with `exec /bin/bash: exec format error`.
 
-Why there's no workaround here:
+**Solution:** skip the NIM and serve the raw HuggingFace weights with a small
+FastAPI/PyTorch app on the **aarch64 CUDA PyTorch base image** — same "load raw
+weights on ARM" trick as the Reason1/2 vLLM slots. The server exposes the exact
+`POST /v1/embeddings` contract the NIM did, so no app-side changes beyond pointing
+the secret at it. Code + full deploy steps: [`cosmos-embed1-pytorch/`](./cosmos-embed1-pytorch/)
+(`README.md`, `DEPLOY.md`).
+
+Why the NIM itself can't run here:
 - **No arm64 image** — every tag (`1.1.0`, `1.1`, `1.0.0`, `1`, `latest`) is amd64.
 - **No vLLM path** — vLLM has no implementation for the Cosmos-Embed1 video-text
-  encoder architecture (it isn't a decoder LLM or a supported text encoder), so
-  serving raw weights with the aarch64 vLLM image (the Reason1/2 trick) does not work.
+  encoder architecture, so the aarch64 vLLM image can't serve it.
 - **Not on NVIDIA Cloud** — `integrate.api.nvidia.com` serves text embedders
   (e.g. `nvidia/nv-embedqa-e5-v5`), not `nvidia/cosmos-embed1`.
 
-Options:
-1. Run the cosmos-embed1 NIM on a separate **x86_64** GPU host, then point the
-   ingest secret at it (`embedding_local_nim: true`, `embeddinghost`/`embeddingport`).
-2. On this GB200, use a text embedder via NVIDIA Cloud (`embedding_local_nim: false`,
-   `embeddingmodel: nvidia/nv-embedqa-e5-v5`) — loses visual/video embeddings.
+```sh
+# 1. Copy code to the node
+scp -r deployments/vss-gpu-services/cosmos-embed1-pytorch \
+  cmp-gpu-000a.bc47cc.sea1.neurondc.com:/mnt/storage/dpeer/cosmos-embed1-pytorch
+
+# 2. Build (aarch64 base ships torch/torchvision for ARM CUDA)
+cd /mnt/storage/dpeer/cosmos-embed1-pytorch
+docker build -t cosmos-embed1-pytorch:224p .
+
+# 3. Run (GPU 2, host 8004 -> container 8000). Weights download to the mounted HF cache on first start.
+docker rm -f model-6b140e 2>/dev/null || true
+docker run -d --name model-6b140e \
+  --gpus '"device=2"' \
+  --label inference-bootstrap.model_name=model-6b140e \
+  --restart unless-stopped \
+  -e COSMOS_MODEL_ID=nvidia/Cosmos-Embed1-224p \
+  -e COSMOS_NUM_FRAMES=8 -e COSMOS_EMBED_DIM=256 \
+  -v /mnt/storage/dpeer/hf-cache:/models/hf \
+  -p 8004:8000 \
+  cosmos-embed1-pytorch:224p
+```
+
+Verify:
+
+```sh
+# local
+curl -s localhost:8004/health
+# {"status":"ok","model":"nvidia/Cosmos-Embed1-224p","dim":256,"frames":8}
+
+# remote (gateway — Bearer token required, else 401)
+export TOKEN='4d4c84fc1c00cbf2eec3e9cef56468c66e18454dbf3bfad215d0930706b408cd'
+curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/health \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+> **Gotchas (already fixed in the Dockerfile/requirements):** the image must
+> `COPY server.py router.py embedder.py` (not just `server.py`), and `transformers`
+> must be pinned `==4.44.2` — 4.45+ removed `find_pruneable_heads_and_indices`,
+> which Cosmos-Embed1's QFormer imports.
+
+> **Re-ingest required:** this server's frame sampling differs from the NIM, so its
+> vectors live in a different space. Use a fresh bucket/schema/collection and
+> re-embed all content; don't mix NIM and PyTorch vectors.

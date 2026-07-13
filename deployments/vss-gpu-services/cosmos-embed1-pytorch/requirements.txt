@@ -1,5 +1,6 @@
 # torch / torchvision come from the CUDA arm64 base image (see Dockerfile).
-transformers>=4.44
+# Cosmos-Embed1 QFormer imports find_pruneable_heads_and_indices, removed in transformers 4.45
+transformers==4.44.2
 einops
 av
 pillow
