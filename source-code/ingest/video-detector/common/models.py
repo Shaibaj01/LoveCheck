@@ -10,6 +10,10 @@ class Settings(BaseModel):
 
     yolo_infer_host: str = ""
     yolo_infer_port: int = 8022
+    detector_authorization: str = Field(
+        default="",
+        description="Optional Bearer token for hosted detector APIs (sent as Authorization when set)",
+    )
     yolo_conf: float = 0.4
     yolo_model: str = "yolo11s.pt"
     yolo_presign_ttl: int = 3600

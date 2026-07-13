@@ -15,6 +15,10 @@ class Settings(BaseModel):
     cosmos_host: str = ""
     cosmos_port: int = 8001
     cosmoshttpscheme: str = "http"
+    cosmos_authorization: str = Field(
+        default="",
+        description="Optional Bearer token for Cosmos API (sent as Authorization header when set)",
+    )
     cosmos_model: str = ""
     cosmos_max_tokens: int = Field(default=4000, description="Maximum tokens in response for Cosmos (higher for detailed video analysis)")
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for Cosmos")
@@ -37,9 +41,20 @@ class Settings(BaseModel):
     @computed_field
     @property
     def cosmos_url(self) -> str:
-        """Compute Cosmos API URL"""
-        scheme = self.cosmoshttpscheme or "http"
-        return f"{scheme}://{self.cosmos_host}:{self.cosmos_port}/v1/chat/completions"
+        """Compute Cosmos API URL (supports host with path prefix, e.g. api.example.com/tenant/model)."""
+        scheme = (self.cosmoshttpscheme or "http").rstrip(":/")
+        host = (self.cosmos_host or "").strip().strip("/")
+        port = int(self.cosmos_port)
+        default_port = 443 if scheme == "https" else 80
+        if "/" in host:
+            base = f"{scheme}://{host}"
+            if port != default_port:
+                hostname, _, path = host.partition("/")
+                base = f"{scheme}://{hostname}:{port}/{path}"
+            return f"{base}/v1/chat/completions"
+        if port == default_port:
+            return f"{scheme}://{host}/v1/chat/completions"
+        return f"{scheme}://{host}:{port}/v1/chat/completions"
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':

@@ -1,3 +1,4 @@
+import base64
 import gzip
 import json
 import logging
@@ -29,6 +30,10 @@ class S3Client:
             ExpiresIn=expires_in,
         )
 
+    def download_bytes(self, bucket: str, key: str) -> bytes:
+        response = self.client.get_object(Bucket=bucket, Key=key)
+        return response["Body"].read()
+
     def upload_bytes(self, content: bytes, bucket: str, key: str) -> bool:
         try:
             self.client.put_object(
@@ -46,16 +51,50 @@ class S3Client:
 class YoloInferClient:
     def __init__(self, settings):
         self.settings = settings
-        host = (settings.yolo_infer_host or "").strip()
+        host = (settings.yolo_infer_host or "").strip().rstrip("/")
         port = int(settings.yolo_infer_port or 8022)
-        self.base_url = f"http://{host}:{port}".rstrip("/")
+        scheme = "http"
+        if host.startswith("https://"):
+            scheme, host = "https", host[8:]
+        elif host.startswith("http://"):
+            scheme, host = "http", host[7:]
+        elif port == 443:
+            scheme = "https"
+        host = host.strip("/")
+        default_port = 443 if scheme == "https" else 80
+        if "/" in host:
+            if port != default_port:
+                hostname, _, path = host.partition("/")
+                self.base_url = f"{scheme}://{hostname}:{port}/{path}"
+            else:
+                self.base_url = f"{scheme}://{host}"
+        elif port == default_port:
+            self.base_url = f"{scheme}://{host}"
+        else:
+            self.base_url = f"{scheme}://{host}:{port}"
 
-    def infer(self, presigned_url: str, include_frames: bool = True) -> Dict[str, Any]:
-        payload = {"url": presigned_url, "include_frames": include_frames}
+    def infer(
+        self,
+        video_content: bytes,
+        filename: str,
+        include_frames: bool = True,
+    ) -> Dict[str, Any]:
+        payload = {
+            "video_base64": base64.b64encode(video_content).decode(),
+            "filename": filename,
+            "include_frames": include_frames,
+        }
+        headers = {"Content-Type": "application/json"}
+        token = (self.settings.detector_authorization or "").strip()
+        if token:
+            headers["Authorization"] = (
+                token if token.lower().startswith("bearer ") else f"Bearer {token}"
+            )
         resp = requests.post(
             f"{self.base_url}/v1/infer",
             json=payload,
-            timeout=300,
+            headers=headers,
+            timeout=600,
         )
         resp.raise_for_status()
         return resp.json()

@@ -136,10 +136,12 @@ class CosmosReasoningClient:
                 "temperature": self.settings.cosmos_temperature
             }
             
-            headers = {
-                "Authorization": "Bearer not-used",  # Hosted Reason2 API doesn't use real API keys
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
+            token = (self.settings.cosmos_authorization or "").strip()
+            if token:
+                headers["Authorization"] = (
+                    token if token.lower().startswith("bearer ") else f"Bearer {token}"
+                )
             
             # Retry with exponential backoff
             max_retries = 3

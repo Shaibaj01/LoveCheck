@@ -5,7 +5,7 @@ Runs object detection on each segment MP4 before the VLM reasoner.
 ## Flow
 
 1. Receive S3 segment land event (same shape as reasoner).
-2. Presign segment GET URL and call `POST http://<yolo_host>:8022/v1/infer` with `include_frames: true`.
+2. Download segment MP4 from S3 and call `POST <yolo_infer>/v1/infer` with `video_base64`, `filename`, and `include_frames`.
 3. Write gzipped sidecar JSON to `detections/{segment_stem}.json.gz` on the segments bucket.
 4. Emit summary fields (`object_classes`, `object_counts`, `perception_ok`, …) plus metadata pass-through to **video-reasoner**.
 
@@ -17,8 +17,9 @@ Runs object detection on each segment MP4 before the VLM reasoner.
 
 | Key | Description |
 |-----|-------------|
-| `yolo_infer_host` | GPU host running YOLO11 infer service |
-| `yolo_infer_port` | Default `8022` |
+| `yolo_infer_host` | GPU host or hosted API path for infer service |
+| `yolo_infer_port` | Default `8022` (use `443` for HTTPS APIs) |
+| `detector_authorization` | (optional) Bearer token sent as `Authorization` when set |
 | `yolo_conf` | Confidence threshold (passed to infer service if supported) |
 | `yolo_model` | Model id label (logging) |
 | `yolo_presign_ttl` | Presigned GET TTL seconds |

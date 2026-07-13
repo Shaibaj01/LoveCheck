@@ -18,9 +18,10 @@ Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-tem
 
 | Setting | Default |
 |---------|---------|
-| `cosmos_host` | (required) |
+| `cosmos_host` | (required) — hostname or `hostname/path/prefix` for routed APIs |
 | `cosmos_port` | 8001 |
 | `cosmoshttpscheme` | `http` (set `https` for TLS-terminated endpoints) |
+| `cosmos_authorization` | (optional) Bearer token sent as `Authorization` when set |
 | `cosmos_model` | ./Cosmos-Reason2-8B |
 | `cosmos_max_tokens` | 4000 |
 | `cosmos_temperature` | 0.2 |
