@@ -57,8 +57,8 @@ Health check.
 
 - **Format**: MP4 (H.264 + AAC for YouTube via yt-dlp)
 - **Resolution**: Up to 1080p (YouTube path)
-- **YouTube VOD**: full video downloaded once, then chunked locally with ffmpeg; uploads paced at `capture_interval` (default 30s) to simulate real-time ingest
-- **YouTube live**: per-chunk yt-dlp with retries; one timeout does not stop the session
+- **YouTube VOD**: full video downloaded once, then chunked locally with ffmpeg stream-copy; any chunk > `capture_interval` gets a fast tail trim (copy remux) before upload; metadata `chunk_duration_sec` = nominal interval; segmenter caps segmentation to the same value
+- **YouTube live**: per-chunk yt-dlp with retries; one timeout does not stop the session; same trim/normalize before upload
 - **Image**: `your.registry/vss-video-streaming:v1` — build from `source-code/` (see [shared README](../shared/README.md#docker-builds))
 - **Internal**: `video-stream-capture-service:5000`
 - **S3 metadata**: built via `build_s3_ingest_metadata()` from [`shared/ingest_metadata.py`](../shared/ingest_metadata.py)

@@ -30,8 +30,36 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAPTURE_INTERVAL_SEC = 30
+CHUNK_DURATION_TOLERANCE_SEC = 0.05
+CHUNK_TRIM_TOLERANCE_SEC = 0.01
 
 _cv2 = None
+
+
+def ffprobe_duration_sec(path: str) -> float | None:
+    """Return container duration in seconds, or None if ffprobe fails."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        logger.warning("ffprobe timed out for %s", path)
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        value = float((result.stdout or "").strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _lazy_cv2():
@@ -131,6 +159,14 @@ class VideoCaptureService:
         self.temp_files = []
         self._chunk_index = 0
 
+    @staticmethod
+    def _capture_interval_sec(config) -> float:
+        """User-configured chunk size (seconds) from stream start payload."""
+        try:
+            return max(0.1, float(config.get("capture_interval", DEFAULT_CAPTURE_INTERVAL_SEC)))
+        except (TypeError, ValueError):
+            return float(DEFAULT_CAPTURE_INTERVAL_SEC)
+
     def _attach_stream_metadata(self, config, s3_metadata, chunk_index, chunk_start_sec):
         """Add stream session indexing fields for downstream segment/VastDB rows."""
         stream_id = config.get("stream_id")
@@ -139,6 +175,7 @@ class VideoCaptureService:
         s3_metadata["stream_id"] = str(stream_id)
         s3_metadata["chunk_index"] = str(chunk_index)
         s3_metadata["chunk_start_sec"] = f"{float(chunk_start_sec):.3f}"
+        s3_metadata["capture_interval"] = f"{self._capture_interval_sec(config):.3f}"
         s3_metadata["ingest_kind"] = "stream_chunk"
         return s3_metadata
 
@@ -153,6 +190,7 @@ class VideoCaptureService:
         capture_timestamp,
         chunk_index,
         chunk_start_sec,
+        chunk_duration_sec=None,
     ):
         s3_metadata = build_s3_ingest_metadata(
             camera_id=camera_id,
@@ -162,9 +200,12 @@ class VideoCaptureService:
             custom_prompt=custom_prompt,
             capture_timestamp=capture_timestamp,
         )
-        return self._attach_stream_metadata(
+        s3_metadata = self._attach_stream_metadata(
             config, s3_metadata, chunk_index, chunk_start_sec
         )
+        if chunk_duration_sec is not None:
+            s3_metadata["chunk_duration_sec"] = f"{float(chunk_duration_sec):.3f}"
+        return s3_metadata
         
     def is_youtube_url(self, url):
         """Check if the URL is a YouTube URL."""
@@ -406,20 +447,113 @@ class VideoCaptureService:
             logger.error(f"Invalid video info JSON: {exc}")
             return None
 
+    def _run_ffmpeg(self, cmd: list, timeout_sec: int, context: str) -> bool:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("ffmpeg timed out after %ss (%s)", timeout_sec, context)
+            return False
+        if result.returncode != 0:
+            stderr = (result.stderr or "")[:400]
+            logger.warning("ffmpeg failed (%s): %s", context, stderr)
+            return False
+        return True
+
+    def _trim_chunk_tail_copy(self, path: str, target_sec: float) -> bool:
+        """Drop tail past target_sec via stream-copy remux (fast, keyframe-aligned)."""
+        tmp_path = f"{path}.trim.mp4"
+        trim_cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            path,
+            "-t",
+            f"{float(target_sec):.3f}",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            tmp_path,
+        ]
+        timeout_sec = max(30, int(target_sec * 2))
+        if not self._run_ffmpeg(trim_cmd, timeout_sec, f"tail-trim {os.path.basename(path)}"):
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            return False
+        if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            return False
+        try:
+            os.replace(tmp_path, path)
+        except OSError as exc:
+            logger.error("Failed to replace trimmed chunk %s: %s", path, exc)
+            return False
+        return True
+
+    def _normalize_chunk_duration(self, path: str, target_sec: float) -> bool:
+        """When probed duration exceeds nominal, drop the tail (copy remux to target_sec)."""
+        probed = ffprobe_duration_sec(path)
+        if probed is None:
+            return False
+        if target_sec <= 0:
+            return True
+
+        if probed <= target_sec + CHUNK_TRIM_TOLERANCE_SEC:
+            if probed < target_sec - CHUNK_DURATION_TOLERANCE_SEC:
+                logger.warning(
+                    "Chunk shorter than target (%.3fs vs %.3fs): %s",
+                    probed,
+                    target_sec,
+                    os.path.basename(path),
+                )
+            return True
+
+        logger.info(
+            "Dropping tail %.3fs → %.3fs (copy remux): %s",
+            probed,
+            target_sec,
+            os.path.basename(path),
+        )
+        if not self._trim_chunk_tail_copy(path, target_sec):
+            logger.warning(
+                "Tail trim failed; segmenter caps at %.3fs: %s",
+                target_sec,
+                os.path.basename(path),
+            )
+            return True
+
+        final = ffprobe_duration_sec(path)
+        if final is not None:
+            logger.info(
+                "After tail trim probed=%.3fs nominal=%.3fs: %s",
+                final,
+                target_sec,
+                os.path.basename(path),
+            )
+        return True
+
     def _ffmpeg_extract_segment(
         self,
         source_path: str,
         segment_start: float,
-        capture_interval: int,
+        duration_sec: float,
         output_path: str,
     ) -> bool:
+        duration_sec = max(0.1, float(duration_sec))
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-ss",
-            str(segment_start),
+            f"{segment_start:.3f}",
             "-t",
-            str(capture_interval),
+            f"{duration_sec:.3f}",
             "-i",
             source_path,
             "-c",
@@ -428,24 +562,12 @@ class VideoCaptureService:
             "make_zero",
             output_path,
         ]
-        timeout_sec = max(60, int(capture_interval * 4))
-        try:
-            result = subprocess.run(
-                ffmpeg_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "ffmpeg segment extract timed out after %ss (start=%.1fs)",
-                timeout_sec,
-                segment_start,
-            )
-            return False
-        if result.returncode != 0:
-            stderr = (result.stderr or "")[:300]
-            logger.warning("ffmpeg segment extract failed (start=%.1fs): %s", segment_start, stderr)
+        timeout_sec = max(60, int(duration_sec * 4))
+        if not self._run_ffmpeg(
+            ffmpeg_cmd,
+            timeout_sec,
+            f"extract start={segment_start:.1f}s len={duration_sec:.1f}s",
+        ):
             return False
         return os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
@@ -563,7 +685,21 @@ class VideoCaptureService:
         capture_count: int,
         chunk_start_sec: float,
         timestamp: str,
+        nominal_chunk_sec: float,
     ) -> bool:
+        nominal_chunk_sec = max(0.1, float(nominal_chunk_sec))
+        if not self._normalize_chunk_duration(temp_path, nominal_chunk_sec):
+            logger.error("Cannot normalize chunk duration for %s", filename)
+            return False
+        probed_sec = ffprobe_duration_sec(temp_path)
+        if probed_sec is not None:
+            logger.info(
+                "Chunk duration probed=%.3fs nominal=%.3fs (capture_interval=%.3fs): %s",
+                probed_sec,
+                nominal_chunk_sec,
+                self._capture_interval_sec(config),
+                filename,
+            )
         s3_metadata = self._build_capture_s3_metadata(
             config,
             camera_id,
@@ -574,6 +710,7 @@ class VideoCaptureService:
             timestamp,
             capture_count,
             chunk_start_sec,
+            chunk_duration_sec=nominal_chunk_sec,
         )
         s3_key = f"{s3_prefix}/{filename}"
         if not self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
@@ -688,9 +825,13 @@ class VideoCaptureService:
                     filename,
                 )
 
+                chunk_target_sec = min(
+                    float(capture_interval),
+                    max(0.0, effective_end - segment_start),
+                )
                 uploaded = False
                 if self._ffmpeg_extract_segment(
-                    full_path, segment_start, capture_interval, temp_path
+                    full_path, segment_start, chunk_target_sec, temp_path
                 ):
                     logger.info(f"✓ Extracted segment #{capture_count + 1}: {filename}")
                     if self._upload_capture_chunk(
@@ -707,6 +848,7 @@ class VideoCaptureService:
                         capture_count,
                         segment_start,
                         timestamp,
+                        chunk_target_sec,
                     ):
                         capture_count += 1
                         consecutive_failures = 0
@@ -803,6 +945,7 @@ class VideoCaptureService:
                         capture_count,
                         float(segment_start),
                         timestamp,
+                        float(capture_interval),
                     ):
                         capture_count += 1
                         consecutive_failures = 0
@@ -844,7 +987,7 @@ class VideoCaptureService:
         
         try:
             stream_url = config['youtube_url']
-            capture_interval = config.get('capture_interval', DEFAULT_CAPTURE_INTERVAL_SEC)
+            capture_interval = self._capture_interval_sec(config)
             bucket_name = config.get('bucket_name', 'rawlivevideos')
             s3_prefix = config.get('s3_prefix', 'captures')
             
@@ -1054,32 +1197,25 @@ class VideoCaptureService:
                 actual_duration = time.time() - chunk_start
                 if frame_count > 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     logger.info(f"✓ Captured #{capture_count + 1}: {filename} ({frame_count} frames, {actual_duration:.2f}s)")
-                    
-                    s3_metadata = self._build_capture_s3_metadata(
+                    if self._upload_capture_chunk(
+                        temp_path,
+                        filename,
                         config,
+                        bucket_name,
+                        s3_prefix,
                         camera_id,
                         capture_type,
                         location,
                         scenario,
                         custom_prompt,
-                        timestamp,
                         capture_count,
                         chunk_start_sec,
-                    )
-                    
-                    # Upload to S3 with metadata
-                    s3_key = f"{s3_prefix}/{filename}"
-                    if self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
-                        logger.info(f"✓ Uploaded to S3: s3://{bucket_name}/{s3_key}")
-                        try:
-                            os.remove(temp_path)
-                            self.temp_files.remove(temp_path)
-                        except:
-                            pass
+                        timestamp,
+                        float(capture_interval),
+                    ):
+                        capture_count += 1
                     else:
                         logger.error(f"Failed to upload {filename} to S3")
-                    
-                    capture_count += 1
                 else:
                     logger.warning(f"Skipped chunk #{capture_count + 1} - no frames captured")
                     # Clean up empty file
