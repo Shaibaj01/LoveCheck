@@ -21,7 +21,7 @@ import {
   extractHighlightTerms,
   highlightQueryTerms,
   objectMatchesQuery,
-  parseStructuredObjects,
+  parseObjectChips,
   segmentDisplayCaption,
 } from '../../shared/utils/query-highlight.util';
 import { playVideoMuted, seekVideoAndWait } from '../../shared/utils/video-hover-preview.util';
@@ -201,10 +201,10 @@ export interface VideoPlayerData {
               <p
                 class="seg-caption"
                 [innerHTML]="segmentCaptionHtml().get(seg.source) ?? ''"></p>
-              @if (segmentObjects(seg).length) {
+              @if (segmentObjectChips(seg).length) {
                 <div class="seg-objects">
-                  @for (obj of segmentObjects(seg); track obj) {
-                    <span class="obj-chip" [class.hit]="isQueryTerm(obj)">{{ obj }}</span>
+                  @for (obj of segmentObjectChips(seg); track obj.label) {
+                    <span class="obj-chip" [class.hit]="isQueryTerm(obj.label)">{{ obj.display }}</span>
                   }
                 </div>
               }
@@ -1001,11 +1001,9 @@ export class VideoPlayerComponent implements OnInit {
     return `#${seg.segment_number} ${this.formatTime(seg.segment_start_sec)}–${this.formatTime(seg.segment_end_sec)}`;
   }
 
-  segmentObjects(seg: TimelineSegment): string[] {
-    return parseStructuredObjects(seg).slice(0, 6);
+  segmentObjectChips(seg: TimelineSegment) {
+    return parseObjectChips(seg, 8);
   }
-
-  readonly segmentDisplayCaption = segmentDisplayCaption;
 
   isQueryTerm(label: string): boolean {
     return objectMatchesQuery(label, this.queryTerms());

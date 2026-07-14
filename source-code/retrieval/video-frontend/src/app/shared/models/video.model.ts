@@ -5,6 +5,7 @@ export interface TimelineSegment {
   source: string;
   reasoning_content: string;
   object_classes?: string;
+  object_counts?: string | null;
   perception_ok?: boolean;
   similarity_score: number;
   is_search_match: boolean;

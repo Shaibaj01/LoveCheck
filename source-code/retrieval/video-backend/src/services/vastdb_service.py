@@ -650,6 +650,7 @@ class VastDBService:
                         "source": best.source,
                         "reasoning_content": best.reasoning_content,
                         "object_classes": best.object_classes or "",
+                        "object_counts": best.object_counts or "",
                     }
                 ]
 
@@ -659,6 +660,7 @@ class VastDBService:
                 matched = match_by_number.get(sn)
                 score = matched.similarity_score if matched else 0.0
                 highlight = self._segment_query_highlight(seg, query_terms)
+                counts = seg.get("object_counts")
                 timeline.append(
                     TimelineSegment(
                         segment_number=sn,
@@ -667,6 +669,7 @@ class VastDBService:
                         source=str(seg.get("source") or ""),
                         reasoning_content=str(seg.get("reasoning_content") or "") or None,
                         object_classes=str(seg.get("object_classes") or "") or None,
+                        object_counts=str(counts) if counts not in (None, "") else None,
                         perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
                         similarity_score=score,
                         is_search_match=matched is not None,
@@ -1382,6 +1385,7 @@ class VastDBService:
                 "segment_end_sec": float(row.get("segment_end_sec") or 0),
                 "original_video": str(row.get("original_video", "")),
                 "object_classes": str(row.get("object_classes", "")),
+                "object_counts": str(row.get("object_counts")) if pd.notna(row.get("object_counts")) and row.get("object_counts") not in ("", None) else "",
                 "perception_ok": bool(row.get("perception_ok")) if pd.notna(row.get("perception_ok")) else None,
                 "perception_source": str(row.get("perception_source") or ""),
                 "detection_sidecar_uri": str(row.get("detection_sidecar_uri") or ""),
@@ -1425,6 +1429,7 @@ class VastDBService:
         best_sn = int(first.get("segment_number") or 1)
         for seg in segments:
             sn = int(seg.get("segment_number") or 0)
+            counts = seg.get("object_counts")
             timeline.append(
                 TimelineSegment(
                     segment_number=sn,
@@ -1433,6 +1438,7 @@ class VastDBService:
                     source=str(seg.get("source") or ""),
                     reasoning_content=str(seg.get("reasoning_content") or "") or None,
                     object_classes=str(seg.get("object_classes") or "") or None,
+                    object_counts=str(counts) if counts not in (None, "") else None,
                     perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
                     similarity_score=0.0,
                     is_search_match=False,

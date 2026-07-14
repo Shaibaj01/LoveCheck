@@ -18,7 +18,14 @@ const QUERY_ACTION_WORDS = new Set([
 
 export interface SegmentObjectSource {
   object_classes?: string | null;
+  object_counts?: string | null;
   perception_ok?: boolean | null;
+}
+
+export interface ObjectChip {
+  label: string;
+  count?: number;
+  display: string;
 }
 
 function tokenizeQuery(query: string): string[] {
@@ -135,6 +142,43 @@ export function segmentDisplayCaption(segment: {
 
 export function parseStructuredObjects(segment: SegmentObjectSource): string[] {
   return dedupeObjectLabels(parseObjectClassList(segment.object_classes));
+}
+
+function parseObjectCounts(raw?: string | null): Record<string, number> {
+  if (!raw?.trim()) return {};
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      const label = normalizeObjectLabel(String(key || ''));
+      const n = typeof value === 'number' ? value : Number(value);
+      if (label && Number.isFinite(n) && n > 0) {
+        out[label.toLowerCase()] = Math.floor(n);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Per-segment chips with peak concurrent counts when available (`person 3`). */
+export function parseObjectChips(segment: SegmentObjectSource, max = 8): ObjectChip[] {
+  const counts = parseObjectCounts(segment.object_counts);
+  const classLabels = dedupeObjectLabels(parseObjectClassList(segment.object_classes));
+  const labels = classLabels.length
+    ? classLabels
+    : dedupeObjectLabels(Object.keys(counts));
+
+  return labels.slice(0, max).map(label => {
+    const count = counts[label.toLowerCase()];
+    return {
+      label,
+      count: count && count > 0 ? count : undefined,
+      display: count && count > 0 ? `${label} ${count}` : label,
+    };
+  });
 }
 
 /** Union of class names across a chunk timeline (no detection totals). */

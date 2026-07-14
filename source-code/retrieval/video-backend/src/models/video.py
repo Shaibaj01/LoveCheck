@@ -52,6 +52,7 @@ class TimelineSegment(BaseModel):
     source: str
     reasoning_content: Optional[str] = None
     object_classes: Optional[str] = None
+    object_counts: Optional[str] = None
     perception_ok: Optional[bool] = None
     similarity_score: float = 0.0
     is_search_match: bool = False

@@ -21,6 +21,7 @@ BROWSE_SEGMENT_FIELDS = frozenset({
     "capture_type",
     "location",
     "object_classes",
+    "object_counts",
     "is_public",
     "duration",
 })
@@ -29,6 +30,7 @@ BROWSE_SEGMENT_FIELDS = frozenset({
 def row_to_browse_segment(row: dict, original_video: Optional[str] = None) -> dict:
     """Normalize a VastDB row into the segment dict used by browse chunk builders."""
     ov = original_video or str(row.get("original_video") or "")
+    counts = row.get("object_counts")
     return {
         "filename": str(row.get("filename") or ""),
         "source": str(row.get("source") or ""),
@@ -44,6 +46,7 @@ def row_to_browse_segment(row: dict, original_video: Optional[str] = None) -> di
         "capture_type": str(row.get("capture_type") or ""),
         "location": str(row.get("location") or ""),
         "object_classes": str(row.get("object_classes") or ""),
+        "object_counts": str(counts) if counts not in (None, "") else "",
         "is_public": bool(row.get("is_public", True)),
         "duration": float(row.get("duration") or 0),
     }

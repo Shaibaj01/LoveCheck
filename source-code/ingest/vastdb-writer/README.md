@@ -7,7 +7,8 @@ A VAST DataEngine serverless function that stores video embeddings and metadata 
 - Receives vector embeddings and metadata from the `video-embedder` function
 - Stores embeddings in VastDB as vector columns
 - Stores metadata (camera_id, capture_type, location, etc.) as regular columns
-- Stores reasoning text for display in search results
+- Stores reasoning text for display and text search
+- Stores YOLO `object_classes` and peak concurrent `object_counts`
 - Creates database records for each video segment (timeline: `segment_start_sec`, `segment_end_sec`; grouping: `original_video` parent S3 URI)
 
 ## Easy to Adjust

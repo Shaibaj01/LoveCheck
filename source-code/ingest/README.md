@@ -9,10 +9,11 @@ The system supports customizable metadata fields that flow through the entire pi
 | 1 | Timeline + `original_video` grouping | Done |
 | 2 | Plain `reasoning_content` text embed + hybrid visual | Done |
 | 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
-| 4 | YOLO11 detector → sidecar + `object_classes` (replaces Cosmos perception lite) | Done |
+| 4 | YOLO11 detector → sidecar + `object_classes` / peak `object_counts` | Done |
 | 5 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
+| 6 | Grounded prompt-suggester (rephrase-only chips / key events) | Done |
 
-Recreate the VastDB collection after schema changes (new columns: `perception_source`, `detection_sidecar_uri`, `detection_frame_count`, `detection_count`). YOLO11 runs in **video-detector** before Cosmos reasoning; bbox sidecars live at `detections/{segment}.json.gz` on the segments bucket.
+Recreate the VastDB collection after schema changes (new columns: `perception_source`, `detection_sidecar_uri`, `detection_frame_count`, `detection_count`, `object_counts`). YOLO11 runs in **video-detector** before Cosmos reasoning; bbox sidecars live at `detections/{segment}.json.gz` on the segments bucket. There is **no** structured VLM / `dense_caption` path — search text is `reasoning_content` only.
 
 ## Current Metadata Fields
 
@@ -39,11 +40,12 @@ See [`source-code/shared/README.md`](../shared/README.md) for Docker build conte
 
 - **`vectors`** — Text embedding of `reasoning_content` only (Cosmos-Embed1: **256-dim**, `nvidia/cosmos-embed1`)
 - **`vectors_visual`** — Video embedding of segment MP4 (same Cosmos-Embed1 NIM, **256-dim**)
-- **`object_classes`** — YOLO detector only (filter + reasoner prompt context)
+- **`object_classes`** — YOLO detector class names (filter + reasoner prompt context)
+- **`object_counts`** — YOLO peak concurrent count per class (max boxes in any frame); player chips + dashboard heatmap
 
 **Reasoning text (stored in VastDB per segment):**
 
-- **`reasoning_content`** — Plain prose from scene prompt + YOLO object hints (embedded for search, shown in UI)
+- **`reasoning_content`** — Plain prose (≤1024 chars) with searchable atoms when visible (color, brand, vehicle type, sign text, clear counts, action, next move). Embedded for search and shown in UI.
 
 **Timeline and grouping (stored in VastDB per segment):**
 
@@ -56,7 +58,7 @@ See [`source-code/shared/README.md`](../shared/README.md) for Docker build conte
 The metadata flows through the entire system:
 
 1. **Ingest**: Metadata is set when uploading videos (via GUI upload or streaming service)
-2. **Pipeline**: Metadata propagates through all functions (segmenter → reasoner → embedder → writer)
+2. **Pipeline**: Metadata propagates through all functions (segmenter → detector → reasoner → embedder → writer)
 3. **VastDB**: Stored as columns alongside vectors and reasoning content
 4. **Backend**: Auto-discovers available metadata columns dynamically from VastDB schema
 5. **Frontend**: Displays discovered filters as dropdowns with actual values from the database

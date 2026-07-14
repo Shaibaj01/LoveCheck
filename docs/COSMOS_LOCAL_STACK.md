@@ -6,7 +6,7 @@ This blueprint can run against two local services (your docker commands).
 
 | Service | Container / image | Host port | Used for |
 |---------|-------------------|-----------|----------|
-| **Cosmos-Reason2** | `vllm/vllm-openai` + `/model` | **8001** | `video-reasoner` (VLM + perception lite) |
+| **Cosmos-Reason2** | `vllm/vllm-openai` + `/model` | **8001** | `video-reasoner` (plain `reasoning_content`) + `prompt-suggester` |
 | **Cosmos-Embed1** | `nvcr.io/nim/nvidia/cosmos-embed1:1.1.0` | **8002** (maps NIM :8000) | `video-embedder` + search backend |
 
 ## Secret alignment (`vss-gui-secret-file-template.yaml`)
