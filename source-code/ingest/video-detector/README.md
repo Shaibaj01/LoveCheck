@@ -7,7 +7,8 @@ Runs object detection on each segment MP4 before the VLM reasoner.
 1. Receive S3 segment land event (same shape as reasoner).
 2. Download segment MP4 from S3 and call `POST <yolo_infer>/v1/infer` with `video_base64`, `filename`, and `include_frames`.
 3. Write gzipped sidecar JSON to `detections/{segment_stem}.json.gz` on the segments bucket.
-4. Emit summary fields (`object_classes`, `object_counts`, `perception_ok`, …) plus metadata pass-through to **video-reasoner**.
+4. Normalize `object_counts` to **max concurrent per class** (peak boxes in any frame); fallback ≈ raw_sum / frame_count when frames are not stored. `detection_count` remains total raw boxes.
+5. Emit summary fields (`object_classes`, `object_counts`, `perception_ok`, …) plus metadata pass-through to **video-reasoner**.
 
 ## Pipeline link
 

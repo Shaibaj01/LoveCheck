@@ -41,12 +41,7 @@ def handler(ctx, event: VastEvent):
                 source = reasoning_event.get("source", "")
                 filename = reasoning_event.get("filename", "")
                 reasoning_content = reasoning_event.get("reasoning_content", "")
-                dense_caption = reasoning_event.get("dense_caption", "")
-                vlm_structured = reasoning_event.get("vlm_structured", "")
-                structured_parse_ok = reasoning_event.get("structured_parse_ok", False)
-                text_to_embed = resolve_embed_text(
-                    dense_caption, reasoning_content, vlm_structured
-                )
+                text_to_embed = resolve_embed_text(reasoning_content)
                 cosmos_model = reasoning_event.get("cosmos_model", "")
                 tokens_used = reasoning_event.get("tokens_used", 0)
                 cached_prompt_tokens = reasoning_event.get("cached_prompt_tokens", 0)
@@ -87,7 +82,7 @@ def handler(ctx, event: VastEvent):
                 
                 ctx.logger.info(
                     f"[INPUT] {filename} | segment {segment_number}/{total_segments} | "
-                    f"embed_text={len(text_to_embed)} chars | structured_ok={structured_parse_ok}"
+                    f"embed_text={len(text_to_embed)} chars"
                 )
                 
                 parse_span.set_attributes({
@@ -112,7 +107,7 @@ def handler(ctx, event: VastEvent):
                 })
 
             with ctx.tracer.start_as_current_span("Content Validation") as validation_span:
-                if not validate_embed_text(dense_caption, reasoning_content):
+                if not validate_embed_text(reasoning_content):
                     validation_span.set_attributes({"valid": False})
                     ctx.logger.info(f"[SKIP] {filename} | no text to embed")
                     return {"status": "skipped", "reason": "No embed text"}
@@ -161,9 +156,6 @@ def handler(ctx, event: VastEvent):
                 "source": source,
                 "filename": filename,
                 "reasoning_content": reasoning_content,
-                "dense_caption": dense_caption or text_to_embed,
-                "vlm_structured": vlm_structured,
-                "structured_parse_ok": structured_parse_ok,
                 "embedding": embedding,
                 "embedding_model": ctx.settings.embeddingmodel,
                 "embedding_dimensions": len(embedding),

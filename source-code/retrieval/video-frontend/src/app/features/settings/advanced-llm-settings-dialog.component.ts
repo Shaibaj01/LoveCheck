@@ -26,7 +26,7 @@ export const CLIP_CARD_COUNT_OPTIONS = [3, 5, 10, 15, 20, 30, 50, 100] as const;
 export interface LLMSettings {
   /** Top grouped clip cards shown in results (top_k). */
   searchTopK: number;
-  /** Top clip cards sent to LLM with full timeline scene_summary evidence. */
+  /** Top clip cards sent to LLM with full timeline reasoning text + object_classes. */
   llmTopNSummaries: number;
   /** Hybrid search: caption text weight (remainder = video embedding). */
   hybridTextWeight: number;
@@ -125,7 +125,7 @@ export function getLLMSettings(): LLMSettings {
       <div class="dialog-content">
         <p class="description">
           Tune hybrid clip search and AI synthesis. Search always blends caption + video embeddings;
-          AI summary runs automatically on every search using timeline scene_summary evidence from each clip.
+          AI summary runs automatically on every search using timeline reasoning text and object_classes from each clip.
         </p>
 
         <!-- Max clip cards -->
@@ -152,7 +152,7 @@ export function getLLMSettings(): LLMSettings {
           <div class="setting-label">
             <span class="label-text">LLM Clips Analyzed</span>
             <button mat-icon-button class="info-btn"
-                    matTooltip="Number of top clip cards sent to the LLM, each with full segment timeline (scene_summary, objects, actions). More clips = richer answers but higher latency and token cost."
+                    matTooltip="Number of top clip cards sent to the LLM, each with full segment timeline (reasoning text, object_classes). More clips = richer answers but higher latency and token cost."
                     matTooltipPosition="right">
               <mat-icon>info_outline</mat-icon>
             </button>
@@ -219,7 +219,7 @@ export function getLLMSettings(): LLMSettings {
               <li>Object/brand queries: try higher caption weight; visual appearance queries: lower caption weight</li>
               <li>LLM clips analyzed must be ≤ max clip cards shown</li>
               <li>Lower similarity (0.2–0.4) for exploration; higher (0.5–0.7) for precision</li>
-              <li>Custom system prompt (menu) shapes AI answer style; evidence comes from structured timelines</li>
+              <li>Custom system prompt (menu) shapes AI answer style; evidence comes from reasoning text and object_classes</li>
             </ul>
           </div>
         </div>

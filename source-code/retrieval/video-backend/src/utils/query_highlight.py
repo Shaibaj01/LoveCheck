@@ -1,7 +1,6 @@
 """Query-term extraction and object-aware segment highlighting."""
-import json
 import re
-from typing import Any, Dict, List, Optional, Pattern
+from typing import Any, List, Optional, Pattern
 
 QUERY_STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -88,82 +87,46 @@ def term_matches_label(term: str, label: str) -> bool:
     return term_in_text(term.strip(), label.strip())
 
 
-def parse_structured(vlm_structured: Optional[str]) -> Dict[str, Any]:
-    if not vlm_structured or not str(vlm_structured).strip():
-        return {}
-    raw = str(vlm_structured).strip()
-    try:
-        data = json.loads(raw)
-        if isinstance(data, str):
-            data = json.loads(data)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def structured_object_labels(segment: dict) -> List[str]:
+def object_class_labels(segment: dict) -> List[str]:
     labels: List[str] = []
-    structured = parse_structured(segment.get("vlm_structured"))
-    for obj in structured.get("objects") or []:
-        if isinstance(obj, dict):
-            obj_type = str(obj.get("type") or "").strip()
-            notes = str(obj.get("notes") or "").strip()
-            if obj_type:
-                labels.append(obj_type)
-            if notes:
-                labels.append(notes)
-        elif isinstance(obj, str) and obj.strip():
-            labels.append(obj.strip())
-
     object_classes = str(segment.get("object_classes") or "")
     if object_classes.strip():
         labels.extend(part.strip() for part in re.split(r"[,;|]", object_classes) if part.strip())
     return labels
 
 
+def _reasoning_text(segment: Any) -> str:
+    if isinstance(segment, dict):
+        return str(segment.get("reasoning_content") or "").strip()
+    return str(getattr(segment, "reasoning_content", None) or "").strip()
+
+
 def segment_query_term_score(segment: dict, highlight_terms: List[str]) -> int:
-    structured = parse_structured(segment.get("vlm_structured"))
-    text_parts = [
-        str(structured.get("scene_summary") or ""),
-        str(segment.get("dense_caption") or ""),
-        str(segment.get("reasoning_content") or ""),
-    ]
-    blob = " ".join(part for part in text_parts if part).strip()
+    blob = _reasoning_text(segment)
     if not blob:
         return 0
     return sum(1 for term in highlight_terms if term_in_text(term, blob))
 
 
 def timeline_query_term_score(segment: Any, highlight_terms: List[str]) -> int:
-    blob = " ".join(
-        part for part in [
-            getattr(segment, "dense_caption", None) or "",
-            getattr(segment, "reasoning_content", None) or "",
-        ] if part
-    ).strip()
+    blob = _reasoning_text(segment)
     if not blob:
         return 0
     return sum(1 for term in highlight_terms if term_in_text(term, blob))
 
 
 def segment_query_highlight(segment: dict, highlight_terms: List[str]) -> bool:
-    """True when query content terms match structured objects or scene text."""
+    """True when query content terms match object_classes or reasoning text."""
     if not highlight_terms:
         return False
 
-    labels = structured_object_labels(segment)
+    labels = object_class_labels(segment)
     for term in highlight_terms:
         for label in labels:
             if term_matches_label(term, label):
                 return True
 
-    structured = parse_structured(segment.get("vlm_structured"))
-    text_parts = [
-        str(structured.get("scene_summary") or ""),
-        str(segment.get("dense_caption") or ""),
-        str(segment.get("reasoning_content") or ""),
-    ]
-    blob = " ".join(part for part in text_parts if part).strip()
+    blob = _reasoning_text(segment)
     if not blob:
         return False
     return any(term_in_text(term, blob) for term in highlight_terms)

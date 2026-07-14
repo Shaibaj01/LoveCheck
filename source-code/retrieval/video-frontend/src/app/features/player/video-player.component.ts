@@ -177,14 +177,19 @@ export interface VideoPlayerData {
 
         <div class="segments-panel">
           @for (seg of chunk()!.timeline; track seg.source) {
-            <button
-              type="button"
+            <div
               class="segment-row"
               [class.active]="activeSegmentNumber() === seg.segment_number"
-              [class.highlight]="seg.query_highlight"
-              (click)="seekToSegment(seg)">
+              [class.highlight]="seg.query_highlight">
               <div class="seg-time">
-                <span class="seg-range">{{ formatTime(seg.segment_start_sec) }}–{{ formatTime(seg.segment_end_sec) }}</span>
+                <button
+                  type="button"
+                  class="seg-jump"
+                  (click)="seekToSegment(seg)"
+                  [matTooltip]="'Jump to ' + formatTime(seg.segment_start_sec)">
+                  <mat-icon>play_arrow</mat-icon>
+                  <span class="seg-range">{{ formatTime(seg.segment_start_sec) }}–{{ formatTime(seg.segment_end_sec) }}</span>
+                </button>
                 @if (!isExplore()) {
                   @if (seg.is_best_match) {
                     <span class="best-pill">Best match</span>
@@ -193,7 +198,9 @@ export interface VideoPlayerData {
                   }
                 }
               </div>
-              <p class="seg-caption" [innerHTML]="highlightHtml(segmentDisplayCaption(seg))"></p>
+              <p
+                class="seg-caption"
+                [innerHTML]="segmentCaptionHtml().get(seg.source) ?? ''"></p>
               @if (segmentObjects(seg).length) {
                 <div class="seg-objects">
                   @for (obj of segmentObjects(seg); track obj) {
@@ -204,7 +211,7 @@ export interface VideoPlayerData {
               @if (!isExplore() && seg.is_search_match && seg.similarity_score > 0) {
                 <span class="seg-score">{{ (seg.similarity_score * 100).toFixed(0) }}% relevance</span>
               }
-            </button>
+            </div>
           }
         </div>
       } @else if (legacyVideo()) {
@@ -489,6 +496,8 @@ export interface VideoPlayerData {
       display: flex;
       flex-direction: column;
       gap: 0.55rem;
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     .segment-row {
@@ -497,10 +506,9 @@ export interface VideoPlayerData {
       border-radius: 12px;
       padding: 0.65rem 0.75rem;
       background: var(--bg-card);
-      cursor: pointer;
+      cursor: default;
       transition: border-color 0.2s, background 0.2s;
 
-      &:hover { background: var(--bg-card-hover); }
       &.active {
         border-color: rgba(34, 197, 94, 0.65);
         box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25);
@@ -516,6 +524,32 @@ export interface VideoPlayerData {
       align-items: center;
       gap: 0.5rem;
       margin-bottom: 0.35rem;
+    }
+
+    .seg-jump {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      margin: 0;
+      padding: 0.15rem 0.45rem 0.15rem 0.15rem;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+
+      mat-icon {
+        font-size: 1.1rem;
+        width: 1.1rem;
+        height: 1.1rem;
+        color: var(--accent-primary);
+      }
+
+      &:hover {
+        background: rgba(34, 197, 94, 0.12);
+        border-color: rgba(34, 197, 94, 0.35);
+      }
     }
 
     .seg-range {
@@ -548,10 +582,15 @@ export interface VideoPlayerData {
       font-size: 0.85rem;
       line-height: 1.5;
       color: var(--text-secondary);
+      cursor: text !important;
+      user-select: text !important;
+      -webkit-user-select: text !important;
 
       ::ng-deep .query-term-text {
         color: #22c55e;
         font-weight: 600;
+        cursor: text !important;
+        user-select: text !important;
       }
     }
 
@@ -619,6 +658,20 @@ export class VideoPlayerComponent implements OnInit {
   title = computed(() => this.chunk()?.filename ?? this.legacyVideo()?.filename ?? 'Video');
 
   searchQuery = computed(() => (this.data.query ?? this.chunk()?.query ?? '').trim());
+
+  /** Stable SafeHtml per segment — do not rebuild on timeupdate (kills text selection). */
+  segmentCaptionHtml = computed(() => {
+    const c = this.chunk();
+    const terms = this.queryTerms();
+    const out = new Map<string, SafeHtml>();
+    if (!c) return out;
+    for (const seg of c.timeline) {
+      const text = segmentDisplayCaption(seg);
+      const html = text ? highlightQueryTerms(text, terms) : '';
+      out.set(seg.source, this.sanitizer.bypassSecurityTrustHtml(html));
+    }
+    return out;
+  });
 
   activeSegmentNumber = computed(() => {
     const c = this.chunk();
@@ -956,12 +1009,6 @@ export class VideoPlayerComponent implements OnInit {
 
   isQueryTerm(label: string): boolean {
     return objectMatchesQuery(label, this.queryTerms());
-  }
-
-  highlightHtml(text: string): SafeHtml {
-    if (!text) return '';
-    const html = highlightQueryTerms(text, this.queryTerms());
-    return this.sanitizer.bypassSecurityTrustHtml(html);
   }
 
   isFirstSegment(): boolean {

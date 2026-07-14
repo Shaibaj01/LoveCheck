@@ -45,9 +45,6 @@ class ReasoningEvent(BaseModel):
     source: str
     filename: str
     reasoning_content: str
-    dense_caption: str | None = None
-    vlm_structured: str | None = None
-    structured_parse_ok: bool = False
     cosmos_model: str
     tokens_used: int
     cached_prompt_tokens: int = 0
@@ -86,9 +83,6 @@ class EmbeddingResult(BaseModel):
     source: str
     filename: str
     reasoning_content: str
-    dense_caption: str | None = None
-    vlm_structured: str | None = None
-    structured_parse_ok: bool = False
     embedding: List[float]
     embedding_model: str
     embedding_dimensions: int

@@ -34,9 +34,6 @@ class Settings(BaseModel):
     # Scenario for prompt selection
     # Options: surveillance, traffic, live_driving, nhl, sports, retail, warehouse, general
     scenario: str = "general"
-
-    # Perception lite (always on — short VLM object pass before main reasoning)
-    perception_max_tokens: int = 512
     
     @computed_field
     @property
@@ -69,9 +66,6 @@ class VideoReasoningResult(BaseModel):
     source: str
     filename: str
     reasoning_content: str
-    dense_caption: str = ""
-    vlm_structured: str = ""
-    structured_parse_ok: bool = False
     cosmos_model: str = ""
     tokens_used: int
     processing_time: float

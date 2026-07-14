@@ -6,6 +6,7 @@ export interface CountItem {
 export interface ObjectStatItem {
   label: string;
   segment_count: number;
+  instance_count: number;
 }
 
 export interface UploadDayItem {
@@ -52,8 +53,8 @@ export interface DashboardOverview {
 }
 
 export interface DashboardQuality {
-  structured_parse_ok: number;
-  structured_parse_ok_pct: number;
+  reasoning_ok: number;
+  reasoning_ok_pct: number;
   perception_ok: number;
   perception_ok_pct: number;
   with_object_classes: number;

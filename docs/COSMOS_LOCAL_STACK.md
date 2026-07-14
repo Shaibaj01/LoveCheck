@@ -21,7 +21,7 @@ Backend `backend-secret.yaml` must use the same embed host/port/model/dimensions
 
 | Column | Ingest | API |
 |--------|--------|-----|
-| `vectors` | `dense_caption` → Cosmos-Embed1 text (`request_type: query` / `bulk_text`) | Text query embed |
+| `vectors` | `reasoning_content` → Cosmos-Embed1 text (`request_type: query` / `bulk_text`) | Text query embed |
 | `vectors_visual` | Segment **MP4** → Cosmos-Embed1 video (`data:video/mp4;base64,...`) | Text query embed (same model space) |
 
 Client: `source-code/ingest/video-embedder/common/cosmos_embed_client.py`

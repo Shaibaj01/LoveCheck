@@ -8,6 +8,8 @@ from urllib.parse import unquote
 import boto3
 import requests
 
+from .object_counts import estimate_unique_object_counts
+
 
 class S3Client:
     def __init__(self, settings):
@@ -105,26 +107,43 @@ def normalize_yolo_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(perception, dict):
         perception = {}
 
+    frames = raw.get("frames") or perception.get("frames")
+
     object_classes = raw.get("object_classes") or perception.get("object_classes") or []
     if isinstance(object_classes, list):
         classes = [str(c).strip().lower() for c in object_classes if str(c).strip()]
     else:
         classes = [p.strip().lower() for p in str(object_classes).split(",") if p.strip()]
 
-    object_counts = raw.get("object_counts") or perception.get("object_counts") or {}
-    if isinstance(object_counts, str):
+    raw_counts = raw.get("object_counts") or perception.get("object_counts") or {}
+    if isinstance(raw_counts, str):
         try:
-            object_counts = json.loads(object_counts)
+            raw_counts = json.loads(raw_counts)
         except json.JSONDecodeError:
-            object_counts = {}
+            raw_counts = {}
+    if not isinstance(raw_counts, dict):
+        raw_counts = {}
+
+    frame_count = int(perception.get("frame_count") or raw.get("frame_count") or 0)
+    if frame_count <= 0 and isinstance(frames, list):
+        frame_count = len(frames)
+
+    object_counts = estimate_unique_object_counts(
+        frames if isinstance(frames, list) else None,
+        raw_counts=raw_counts,
+        frame_count=frame_count,
+    )
+    if object_counts and not classes:
+        classes = sorted(object_counts.keys())
 
     source_model = str(perception.get("source") or raw.get("source") or "yolo11_coco")
     summary_doc = {
         "source": source_model,
         "object_classes": classes,
         "object_counts": object_counts,
+        "object_counts_mode": "max_per_frame" if (isinstance(frames, list) and frames) else "per_frame_avg",
         "max_detection_conf": float(raw.get("max_detection_conf") or perception.get("max_detection_conf") or 0.0),
-        "frame_count": int(perception.get("frame_count") or raw.get("frame_count") or 0),
+        "frame_count": frame_count,
         "detection_count": int(perception.get("detection_count") or raw.get("detection_count") or 0),
     }
 
@@ -137,7 +156,7 @@ def normalize_yolo_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         "detection_frame_count": summary_doc["frame_count"],
         "detection_count": summary_doc["detection_count"],
         "perception_json": json.dumps(summary_doc, ensure_ascii=False),
-        "frames": raw.get("frames") or perception.get("frames"),
+        "frames": frames,
     }
 
 

@@ -2,12 +2,10 @@ from opentelemetry import trace
 from vast_runtime.vast_event import VastEvent  # type: ignore
 from urllib.parse import unquote
 
-import json
 from common.models import Settings, VideoReasoningResult
 from common.clients import S3Client, CosmosReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event, is_detector_handoff, parse_s3_uri
-from common.perception import format_perception_context, perception_from_detector, EMPTY_PERCEPTION
-from common.structured_output import derive_object_metadata
+from common.perception import perception_from_detector, EMPTY_PERCEPTION
 from common.segment_index import SegmentIndexChecker
 
 
@@ -224,7 +222,7 @@ def handler(ctx, event: VastEvent):
                     f"source={perception_result.get('perception_source') or 'none'}"
                 )
 
-            perception_context = format_perception_context(perception_result)
+            object_classes = perception_result.get("object_classes", "")
 
             with ctx.tracer.start_as_current_span("Video Reasoning Analysis") as reasoning_span:
                 prompt_info = f"custom_prompt=set ({len(custom_prompt)} chars)" if custom_prompt else f"scenario={scenario}"
@@ -238,8 +236,7 @@ def handler(ctx, event: VastEvent):
                     filename, 
                     prompt=custom_prompt if custom_prompt else None,
                     scenario=scenario,
-                    perception_context=perception_context or None,
-                    perception=perception_result,
+                    object_classes=object_classes or None,
                 )
                 
                 content_length = len(reasoning_result.get("reasoning_content", ""))
@@ -265,27 +262,12 @@ def handler(ctx, event: VastEvent):
                     f"[COSMOS] Complete | {content_length} chars | {tokens_used} tokens{cache_part} | {processing_time:.2f}s"
                 )
 
-            object_classes = perception_result.get("object_classes", "")
             object_counts = perception_result.get("object_counts", "{}")
-            if reasoning_result.get("vlm_structured"):
-                try:
-                    structured_data = json.loads(reasoning_result["vlm_structured"])
-                    derived = derive_object_metadata(structured_data)
-                    if perception_result.get("perception_ok") and object_classes:
-                        pass
-                    elif derived.get("object_classes"):
-                        object_classes = derived["object_classes"]
-                        object_counts = derived["object_counts"]
-                except json.JSONDecodeError:
-                    pass
 
             result = {
                 "source": source,
                 "filename": filename,
                 "reasoning_content": reasoning_result["reasoning_content"],
-                "dense_caption": reasoning_result.get("dense_caption", ""),
-                "vlm_structured": reasoning_result.get("vlm_structured", ""),
-                "structured_parse_ok": reasoning_result.get("structured_parse_ok", False),
                 "cosmos_model": reasoning_result["cosmos_model"],
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),

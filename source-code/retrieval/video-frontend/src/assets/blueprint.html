@@ -364,7 +364,7 @@
                 <div class="component-features">Knowledge Retrieval, Reranking</div>
               </div>
               <div class="flip-card-back">
-                <div class="back-description">Enables semantic search in VSS: hybrid caption + video retrieval, clip grouping by upload, and timeline scene_summary evidence for always-on LLM synthesis.</div>
+                <div class="back-description">Enables semantic search in VSS: hybrid reasoning_content + video vector retrieval, clip grouping by upload, and timeline reasoning_content evidence for always-on LLM synthesis.</div>
               </div>
             </div>
           </div>
@@ -398,7 +398,7 @@
                 <div class="component-features">SQL, Spark/Trino, ADBC, Python, Vector Search</div>
               </div>
               <div class="flip-card-back">
-                <div class="back-description">Stores dual embeddings (dense_caption + segment video), structured JSON (objects/actions/events), perception object_classes, and upload metadata. Hybrid search groups segment hits into clip timelines.</div>
+                <div class="back-description">Stores dual embeddings (reasoning_content + segment video vectors), perception object_classes, and upload metadata. Hybrid search groups segment hits into clip timelines.</div>
               </div>
             </div>
           </div>
@@ -439,13 +439,13 @@
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Video Reasoner</div><div class="component-desc">JSON: summary, actions, events</div><div class="component-badge nim">Cosmos-Reason2</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">transform</span></div><div class="component-title">Video Embedder</div><div class="component-desc">dense_caption + video vectors</div><div class="component-badge nim">Cosmos-Embed1</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">transform</span></div><div class="component-title">Video Embedder</div><div class="component-desc">reasoning_content + video vectors</div><div class="component-badge nim">Cosmos-Embed1</div></div>
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">save</span></div><div class="component-title">VastDB Writer</div><div class="component-desc">Segment rows + metadata</div><div class="component-badge">Serverless</div></div>
         </div>
         <div class="section-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
           <span class="material-icons">article</span>
-          Per segment: <strong>dense_caption</strong> (search embed) · <strong>reasoning_content</strong> (UI narrative) · <strong>vlm_structured</strong> (objects/actions/events) · <strong>object_classes</strong> (perception)
+          Per segment: <strong>reasoning_content</strong> (UI narrative + text search embed) · <strong>vectors</strong> (visual search) · <strong>object_classes</strong> (perception)
         </div>
       </section>
 

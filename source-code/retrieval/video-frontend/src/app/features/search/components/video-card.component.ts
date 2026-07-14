@@ -14,10 +14,10 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
   standalone: true,
   imports: [CommonModule, MatCardModule, MatIconModule, MatChipsModule, MatTooltipModule, MatProgressSpinnerModule],
   template: `
-    <mat-card class="video-card" (click)="onPlay()" 
+    <mat-card class="video-card"
               (mouseenter)="onHoverStart()" 
               (mouseleave)="onHoverEnd()">
-      <div class="video-preview-container">
+      <div class="video-preview-container" (click)="onPlay()">
         <video #videoElement
                [src]="videoUrl || null"
                class="video-preview"
@@ -132,7 +132,7 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       background: var(--bg-card);
       border: 1px solid var(--border-color);
       border-radius: 16px;
-      cursor: pointer;
+      cursor: default;
       transition: all 0.3s ease;
       overflow: hidden;
       position: relative;
@@ -151,6 +151,11 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       height: 200px;
       background: #000;
       overflow: hidden;
+      cursor: pointer !important;
+    }
+
+    .video-preview-container * {
+      cursor: pointer !important;
     }
 
     .preview-loading {
@@ -221,6 +226,9 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       border-radius: 12px;
       padding: 0.75rem;
       margin-bottom: 0.5rem;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
       
       .reasoning-icon {
         color: rgba(6, 255, 165, 0.8);

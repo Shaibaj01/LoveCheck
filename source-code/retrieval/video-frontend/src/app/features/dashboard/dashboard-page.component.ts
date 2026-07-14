@@ -144,11 +144,11 @@ interface DashboardKpiCard {
             </mat-card-header>
             <mat-card-content>
               <div class="quality-row">
-                <span>Structured JSON parsed</span>
-                <strong>{{ data.quality.structured_parse_ok_pct }}%</strong>
-                <span class="muted">({{ data.quality.structured_parse_ok }}/{{ data.overview.segment_rows }})</span>
+                <span>Reasoning text present</span>
+                <strong>{{ data.quality.reasoning_ok_pct }}%</strong>
+                <span class="muted">({{ data.quality.reasoning_ok }}/{{ data.overview.segment_rows }})</span>
               </div>
-              <div class="quality-bar"><div class="fill" [style.width.%]="data.quality.structured_parse_ok_pct"></div></div>
+              <div class="quality-bar"><div class="fill" [style.width.%]="data.quality.reasoning_ok_pct"></div></div>
               <div class="quality-row">
                 <span>Detector coverage</span>
                 <strong>{{ data.quality.perception_ok_pct }}%</strong>
@@ -193,14 +193,16 @@ interface DashboardKpiCard {
           <mat-card class="panel">
             <mat-card-header>
               <mat-card-title>Object detection heatmap</mat-card-title>
-              <mat-card-subtitle>How many segments contain each class (YOLO)</mat-card-subtitle>
+              <mat-card-subtitle>Sum of concurrent YOLO counts per class (peak boxes/frame)</mat-card-subtitle>
             </mat-card-header>
             <mat-card-content>
               @if (data.objects.length) {
                 <div class="object-heatmap-scroll">
                   <div class="object-heatmap">
                     @for (obj of data.objects; track obj.label) {
-                      <div class="heatmap-row" [matTooltip]="obj.segment_count + ' segments with ' + obj.label">
+                      <div
+                        class="heatmap-row"
+                        [matTooltip]="obj.instance_count + ' instances across ' + obj.segment_count + ' segments'">
                         <span class="heatmap-label">{{ obj.label }}</span>
                         <div class="heatmap-track">
                           <div
@@ -208,14 +210,14 @@ interface DashboardKpiCard {
                             [style.width.%]="objectBarWidth(obj, data.objects)">
                           </div>
                         </div>
-                        <span class="heatmap-count">{{ obj.segment_count }}</span>
+                        <span class="heatmap-count">{{ obj.instance_count }}</span>
                         <span class="heatmap-gutter" aria-hidden="true"></span>
                       </div>
                     }
                   </div>
                 </div>
               } @else {
-                <p class="empty-panel">No object_classes populated yet.</p>
+                <p class="empty-panel">No object_counts populated yet.</p>
               }
             </mat-card-content>
           </mat-card>
@@ -1290,8 +1292,8 @@ export class DashboardPageComponent implements OnInit, OnDestroy {
     return relativeBarWidth(day.segment_rows, all.map(d => d.segment_rows));
   }
 
-  objectBarWidth(obj: { segment_count: number }, all: { segment_count: number }[]): number {
-    return relativeBarWidth(obj.segment_count, all.map(o => o.segment_count));
+  objectBarWidth(obj: { instance_count: number }, all: { instance_count: number }[]): number {
+    return relativeBarWidth(obj.instance_count, all.map(o => o.instance_count));
   }
 
   shortDate(isoDate: string): string {

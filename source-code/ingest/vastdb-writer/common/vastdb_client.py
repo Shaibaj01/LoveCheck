@@ -57,9 +57,6 @@ class VastDBClient:
             ("segment_start_sec", pa.float64()),
             ("segment_end_sec", pa.float64()),
             ("reasoning_content", pa.utf8()),
-            ("dense_caption", pa.utf8()),
-            ("vlm_structured", pa.string()),
-            ("structured_parse_ok", pa.bool_()),
             ("perception_json", pa.string()),
             ("object_classes", pa.utf8()),
             ("object_counts", pa.utf8()),
@@ -136,16 +133,13 @@ class VastDBClient:
         try:
             source = embedding_event.get("source", "")
             filename = embedding_event.get("filename", "")
-            reasoning_content = embedding_event.get("reasoning_content", "")
-            dense_caption = (embedding_event.get("dense_caption") or "").strip()
-            vlm_structured = embedding_event.get("vlm_structured", "") or ""
-            structured_parse_ok = bool(embedding_event.get("structured_parse_ok", False))
+            reasoning_content = (embedding_event.get("reasoning_content") or "").strip()
             embedding = embedding_event.get("embedding", [])
             visual_embedding = embedding_event.get("visual_embedding") or []
             visual_embedding_ok = bool(embedding_event.get("visual_embedding_ok", False))
             visual_embedding_model = embedding_event.get("visual_embedding_model", "") or ""
 
-            if not reasoning_content and not dense_caption:
+            if not reasoning_content:
                 return True
 
             if not embedding:
@@ -240,9 +234,6 @@ class VastDBClient:
                 "segment_start_sec": segment_start_sec,
                 "segment_end_sec": segment_end_sec,
                 "reasoning_content": reasoning_content,
-                "dense_caption": dense_caption or reasoning_content,
-                "vlm_structured": vlm_structured if isinstance(vlm_structured, str) else str(vlm_structured),
-                "structured_parse_ok": structured_parse_ok,
                 "perception_json": embedding_event.get("perception_json", "") or "",
                 "object_classes": embedding_event.get("object_classes", "") or "",
                 "object_counts": embedding_event.get("object_counts", "{}") or "{}",

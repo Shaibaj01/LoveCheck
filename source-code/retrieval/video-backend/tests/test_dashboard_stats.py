@@ -25,7 +25,8 @@ class DashboardStatsTests(unittest.TestCase):
                 "capture_type": "streets",
                 "location": "midtown",
                 "object_classes": "person,forklift",
-                "structured_parse_ok": True,
+                "object_counts": '{"person": 3, "forklift": 1}',
+                "reasoning_content": "Forklift near pedestrians.",
                 "perception_ok": True,
                 "is_public": True,
             },
@@ -40,7 +41,8 @@ class DashboardStatsTests(unittest.TestCase):
                 "capture_type": "streets",
                 "location": "midtown",
                 "object_classes": "person",
-                "structured_parse_ok": False,
+                "object_counts": '{"person": 2}',
+                "reasoning_content": "",
                 "perception_ok": False,
                 "is_public": True,
             },
@@ -55,7 +57,7 @@ class DashboardStatsTests(unittest.TestCase):
                 "capture_type": "",
                 "location": "",
                 "object_classes": "",
-                "structured_parse_ok": True,
+                "reasoning_content": "Segment two reasoning.",
                 "perception_ok": True,
                 "is_public": False,
             },
@@ -67,6 +69,18 @@ class DashboardStatsTests(unittest.TestCase):
         self.assertEqual(stats["overview"]["fully_indexed_videos"], 1)
         self.assertEqual(stats["overview"]["indexed_clips"], 2)
         self.assertEqual(stats["overview"]["re_ingest_rows"], 1)
+        self.assertEqual(stats["quality"]["reasoning_ok"], 2)
+        self.assertEqual(stats["quality"]["reasoning_ok_pct"], 66.7)
+
+        by_label = {item["label"]: item for item in stats["objects"]}
+        self.assertEqual(by_label["person"]["segment_count"], 2)
+        self.assertEqual(by_label["person"]["instance_count"], 5)
+        self.assertEqual(by_label["forklift"]["segment_count"], 1)
+        self.assertEqual(by_label["forklift"]["instance_count"], 1)
+        self.assertNotIn("object_classes", stats["metadata"])
+        self.assertEqual(len(stats["uploads_by_day"]), 1)
+        self.assertEqual(stats["recent_videos"][0]["indexed_clips"], 2)
+        self.assertEqual(stats["recent_videos"][0]["re_ingest_rows"], 1)
 
     def test_fully_indexed_videos_partial_parent(self):
         rows = [
@@ -95,15 +109,6 @@ class DashboardStatsTests(unittest.TestCase):
         stats = build_dashboard_stats(rows)
         self.assertEqual(stats["overview"]["unique_videos"], 2)
         self.assertEqual(stats["overview"]["fully_indexed_videos"], 1)
-
-        labels = {item["label"]: item["segment_count"] for item in stats["objects"]}
-        self.assertEqual(labels["person"], 2)
-        self.assertEqual(labels["forklift"], 1)
-        self.assertNotIn("object_classes", stats["metadata"])
-
-        self.assertEqual(len(stats["uploads_by_day"]), 1)
-        self.assertEqual(stats["recent_videos"][0]["indexed_clips"], 2)
-        self.assertEqual(stats["recent_videos"][0]["re_ingest_rows"], 1)
 
     def test_stream_session_grouping(self):
         rows = [

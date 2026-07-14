@@ -92,7 +92,7 @@ Upload Video → vss-chunks bucket
                     ↓
             video-detector (YOLO11 → object_classes + bbox sidecars)
                     ↓
-            video-reasoner (Cosmos-Reason2 → dense_caption + reasoning_content)
+            video-reasoner (Cosmos-Reason2 → reasoning_content)
                     ↓
             video-embedder (vectors text + vectors_visual video)
                     ↓

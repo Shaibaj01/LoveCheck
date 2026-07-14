@@ -5,13 +5,13 @@ T = TypeVar("T")
 
 
 def _segment_dict_rank(seg: dict) -> tuple:
-    """Prefer newest ingest, then richer caption, for duplicate segment_number rows."""
+    """Prefer newest ingest, then richer reasoning text, for duplicate segment_number rows."""
     ts = seg.get("upload_timestamp")
     if ts is not None and hasattr(ts, "isoformat"):
         ts_key = ts.isoformat()
     else:
         ts_key = str(ts or "")
-    cap = len(str(seg.get("dense_caption") or ""))
+    cap = len(str(seg.get("reasoning_content") or ""))
     return (ts_key, cap)
 
 

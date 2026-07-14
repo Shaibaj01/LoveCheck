@@ -3,9 +3,7 @@ export interface TimelineSegment {
   segment_start_sec: number;
   segment_end_sec: number;
   source: string;
-  dense_caption?: string;
-  reasoning_content?: string;
-  vlm_structured?: string;
+  reasoning_content: string;
   object_classes?: string;
   perception_ok?: boolean;
   similarity_score: number;
@@ -25,7 +23,6 @@ export interface ChunkSearchResult {
   best_match_end_sec: number;
   preview_source: string;
   reasoning_content: string;
-  dense_caption?: string;
   is_public: boolean;
   upload_timestamp: string;
   tags: string[];
@@ -47,9 +44,6 @@ export interface VideoSearchResult {
   filename: string;
   source: string;
   reasoning_content: string;
-  dense_caption?: string;
-  vlm_structured?: string;
-  structured_parse_ok?: boolean;
   is_public: boolean;
   upload_timestamp: string;
   duration: number;

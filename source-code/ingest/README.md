@@ -7,7 +7,7 @@ The system supports customizable metadata fields that flow through the entire pi
 | Step | Capability | Status |
 |------|------------|--------|
 | 1 | Timeline + `original_video` grouping | Done |
-| 2 | Structured VLM + `dense_caption` + 2048 text embed | Done |
+| 2 | Plain `reasoning_content` text embed + hybrid visual | Done |
 | 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
 | 4 | YOLO11 detector → sidecar + `object_classes` (replaces Cosmos perception lite) | Done |
 | 5 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
@@ -35,19 +35,15 @@ Upload / streaming / batch-sync dropdowns (capture types, scenario labels, field
 
 See [`source-code/shared/README.md`](../shared/README.md) for Docker build context and optional local symlink script.
 
-**Dual embeddings (stored in VastDB per segment):**
+**Search embeddings (stored in VastDB per segment):**
 
-- **`vectors`** — Text embedding of `dense_caption` (Cosmos-Embed1: **256-dim**, `nvidia/cosmos-embed1`)
+- **`vectors`** — Text embedding of `reasoning_content` only (Cosmos-Embed1: **256-dim**, `nvidia/cosmos-embed1`)
 - **`vectors_visual`** — Video embedding of segment MP4 (same Cosmos-Embed1 NIM, **256-dim**)
+- **`object_classes`** — YOLO detector only (filter + reasoner prompt context)
 
-Local stack guide: `docs/COSMOS_LOCAL_STACK.md` (Reason2 :8001, Embed1 :8002).
+**Reasoning text (stored in VastDB per segment):**
 
-**Structured VLM output (stored in VastDB per segment):**
-
-- **`vlm_structured`** - JSON string with objects, actions, events, hazards
-- **`dense_caption`** - Short canonical text used for vector embedding (search index)
-- **`reasoning_content`** - Human-readable narrative for UI display
-- **`structured_parse_ok`** - Whether JSON parsing succeeded for this segment
+- **`reasoning_content`** — Plain prose from scene prompt + YOLO object hints (embedded for search, shown in UI)
 
 **Timeline and grouping (stored in VastDB per segment):**
 
