@@ -102,6 +102,9 @@ def _finalize(vecs: torch.Tensor) -> List[List[float]]:
 def embed_videos(clips: List[np.ndarray]) -> List[List[float]]:
     """Embed a batch of decoded clips. Each clip is sampled to NUM_FRAMES first."""
     batch = np.stack([sample_frames(c) for c in clips])  # (B, n, H, W, 3)
+    # Cosmos-Embed1 processor requires channel-first BTCHW; frames decode as
+    # channel-last (H, W, 3), so permute or the model reads H as the channel axis.
+    batch = np.ascontiguousarray(batch.transpose(0, 1, 4, 2, 3))  # -> (B, n, 3, H, W)
     inputs = _processor(videos=batch).to(DEVICE, dtype=DTYPE)
     out = _model.get_video_embeddings(**inputs)
     return _finalize(_extract(out))

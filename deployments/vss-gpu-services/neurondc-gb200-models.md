@@ -180,6 +180,15 @@ curl -s localhost:8003/healthz
 # remote: https://beta-api.neurondc.com/bc47cc/model-6b140d/v1/infer
 ```
 
+> **502 on `/v1/infer` while `/healthz` is fine?** The container lost its live GPU
+> attach — `healthz` shows `cuda_available:false` and the first real inference
+> fails with `Invalid CUDA 'device=0' ... torch.cuda.is_available(): False`, which
+> the gateway surfaces as `502`. This happens after a docker daemon / nvidia-runtime
+> reload even though `docker inspect` still lists the GPU in `DeviceRequests`.
+> **Fix:** recreate the container (`docker rm -f model-6b140d` + the `docker run`
+> above) to re-trigger GPU injection; `healthz` should then report
+> `cuda_available:true`.
+
 ---
 
 ## Cosmos-Embed1 — `model-6b140e` (GPU 2, port 8004) — native PyTorch
@@ -238,10 +247,16 @@ curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/health \
   -H "Authorization: Bearer ${TOKEN}"
 ```
 
-> **Gotchas (already fixed in the Dockerfile/requirements):** the image must
-> `COPY server.py router.py embedder.py` (not just `server.py`), and `transformers`
-> must be pinned `==4.44.2` — 4.45+ removed `find_pruneable_heads_and_indices`,
-> which Cosmos-Embed1's QFormer imports.
+> **Gotchas (already fixed in the code/Dockerfile/requirements):**
+> - The image must `COPY server.py router.py embedder.py` (not just `server.py`).
+> - `transformers` must be pinned `==4.44.2` — 4.45+ removed
+>   `find_pruneable_heads_and_indices`, which Cosmos-Embed1's QFormer imports.
+> - Video frames must be fed **channel-first `BTCHW`**. Frames decode channel-last
+>   `(T, H, W, 3)`, so `embed_videos` permutes to `(B, n, 3, H, W)` before the
+>   processor. Without it the model reads the height (e.g. `1080`) as the channel
+>   and returns `500: Expected tensor of shape BTCHW ... got channel size 1080`,
+>   which surfaces at the ingest embedder as a failed **visual** embedding
+>   (text still succeeds, so it's easy to miss).
 
 > **Re-ingest required:** this server's frame sampling differs from the NIM, so its
 > vectors live in a different space. Use a fresh bucket/schema/collection and
