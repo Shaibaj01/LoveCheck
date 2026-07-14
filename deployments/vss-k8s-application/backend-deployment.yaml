@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: your.registry/vss-video-backend:v1
+        image: dcache-var.vastdata.com:5000/dev/solutions/vss-video-backend:v3
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

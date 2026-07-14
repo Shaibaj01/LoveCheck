@@ -19,6 +19,8 @@ class Settings(BaseModel):
     embeddingmodel: str
     embeddingdimensions: int
     nvidia_api_key: Optional[str] = None
+    # Optional Bearer token for hosted/routed embedding APIs (sent as Authorization when set)
+    embedding_authorization: str = ""
 
     # Visual embedding settings (multimodal NIM)
     visual_embedding_enabled: bool = True
