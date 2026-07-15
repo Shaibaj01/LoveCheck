@@ -17,9 +17,15 @@ const QUERY_ACTION_WORDS = new Set([
 ]);
 
 export interface SegmentObjectSource {
-  vlm_structured?: string | null;
   object_classes?: string | null;
+  object_counts?: string | null;
   perception_ok?: boolean | null;
+}
+
+export interface ObjectChip {
+  label: string;
+  count?: number;
+  display: string;
 }
 
 function tokenizeQuery(query: string): string[] {
@@ -123,91 +129,9 @@ function parseObjectClassList(raw?: string | null): string[] {
   return raw.split(/[,;|]/).map(normalizeObjectLabel).filter(Boolean);
 }
 
-function parseVlmObjectNames(vlmStructured?: string | null): string[] {
-  if (!vlmStructured?.trim()) return [];
-  try {
-    let data: unknown = JSON.parse(vlmStructured);
-    if (typeof data === 'string') data = JSON.parse(data);
-    if (!data || typeof data !== 'object' || !Array.isArray((data as { objects?: unknown }).objects)) {
-      return [];
-    }
-    const labels: string[] = [];
-    for (const obj of (data as { objects: unknown[] }).objects) {
-      if (typeof obj === 'string' && obj.trim()) {
-        labels.push(normalizeObjectLabel(obj));
-        continue;
-      }
-      if (obj && typeof obj === 'object') {
-        const label = normalizeObjectLabel((obj as { type?: string }).type ?? '');
-        if (label) labels.push(label);
-      }
-    }
-    return labels;
-  } catch {
-    return [];
-  }
-}
-
-function parseVlmObjectChips(vlmStructured?: string | null): string[] {
-  if (!vlmStructured?.trim()) return [];
-  try {
-    let data: unknown = JSON.parse(vlmStructured);
-    if (typeof data === 'string') data = JSON.parse(data);
-    if (!data || typeof data !== 'object' || !Array.isArray((data as { objects?: unknown }).objects)) {
-      return [];
-    }
-    const labels: string[] = [];
-    for (const obj of (data as { objects: unknown[] }).objects) {
-      if (typeof obj === 'string' && obj.trim()) {
-        labels.push(obj.trim());
-        continue;
-      }
-      if (obj && typeof obj === 'object') {
-        const typed = obj as { type?: string; count?: unknown };
-        const chip = formatObjectChipLabel(typed.type ?? '', typed.count);
-        if (chip) labels.push(chip);
-      }
-    }
-    return labels;
-  } catch {
-    return [];
-  }
-}
-
-function formatObjectChipLabel(type: string, count: unknown): string {
-  const label = type.trim();
-  if (!label) return '';
-  if (count == null || count === '') return label;
-  const numeric = Number(count);
-  if (Number.isFinite(numeric) && numeric > 1 && numeric <= 30) {
-    return `${Math.trunc(numeric)} ${label}`;
-  }
-  return label;
-}
-
 export function segmentDisplayCaption(segment: {
-  dense_caption?: string | null;
   reasoning_content?: string | null;
-  vlm_structured?: string | null;
 }): string {
-  if (segment.vlm_structured?.trim()) {
-    try {
-      let data: unknown = JSON.parse(segment.vlm_structured);
-      if (typeof data === 'string') data = JSON.parse(data);
-      const summary = (data as { scene_summary?: string }).scene_summary?.trim();
-      if (summary) return summary;
-    } catch {
-      // ignore malformed structured JSON
-    }
-  }
-
-  const dense = segment.dense_caption?.trim();
-  if (dense) {
-    const objectsIdx = dense.indexOf(' | Objects:');
-    if (objectsIdx > 0) return dense.slice(0, objectsIdx).trim();
-    return dense;
-  }
-
   const reasoning = segment.reasoning_content?.trim();
   if (reasoning) {
     const firstLine = reasoning.split('\n')[0]?.trim();
@@ -217,12 +141,44 @@ export function segmentDisplayCaption(segment: {
 }
 
 export function parseStructuredObjects(segment: SegmentObjectSource): string[] {
-  if (segment.perception_ok && segment.object_classes?.trim()) {
-    return dedupeObjectLabels(parseObjectClassList(segment.object_classes));
-  }
+  return dedupeObjectLabels(parseObjectClassList(segment.object_classes));
+}
 
-  const labels = [...parseVlmObjectChips(segment.vlm_structured), ...parseObjectClassList(segment.object_classes)];
-  return dedupeObjectLabels(labels);
+function parseObjectCounts(raw?: string | null): Record<string, number> {
+  if (!raw?.trim()) return {};
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      const label = normalizeObjectLabel(String(key || ''));
+      const n = typeof value === 'number' ? value : Number(value);
+      if (label && Number.isFinite(n) && n > 0) {
+        out[label.toLowerCase()] = Math.floor(n);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Per-segment chips with peak concurrent counts when available (`person 3`). */
+export function parseObjectChips(segment: SegmentObjectSource, max = 8): ObjectChip[] {
+  const counts = parseObjectCounts(segment.object_counts);
+  const classLabels = dedupeObjectLabels(parseObjectClassList(segment.object_classes));
+  const labels = classLabels.length
+    ? classLabels
+    : dedupeObjectLabels(Object.keys(counts));
+
+  return labels.slice(0, max).map(label => {
+    const count = counts[label.toLowerCase()];
+    return {
+      label,
+      count: count && count > 0 ? count : undefined,
+      display: count && count > 0 ? `${label} ${count}` : label,
+    };
+  });
 }
 
 /** Union of class names across a chunk timeline (no detection totals). */
@@ -233,7 +189,6 @@ export function chunkObjectTags(
   const labels = new Set<string>();
   for (const seg of timeline) {
     parseObjectClassList(seg.object_classes).forEach(label => labels.add(label));
-    parseVlmObjectNames(seg.vlm_structured).forEach(label => labels.add(label));
   }
   return dedupeObjectLabels(Array.from(labels)).slice(0, max);
 }
@@ -257,7 +212,6 @@ export interface PreviewSegmentLike {
   segment_start_sec: number;
   segment_end_sec: number;
   source: string;
-  dense_caption?: string | null;
   reasoning_content?: string | null;
   similarity_score: number;
   query_highlight: boolean;
@@ -265,7 +219,6 @@ export interface PreviewSegmentLike {
 }
 
 export interface PreviewChunkLike {
-  dense_caption?: string | null;
   reasoning_content?: string;
   timeline: PreviewSegmentLike[];
 }
@@ -289,7 +242,7 @@ export function pickPreviewSegment(timeline: PreviewSegmentLike[]): PreviewSegme
 export function previewCaption(chunk: PreviewChunkLike): string {
   const seg = pickPreviewSegment(chunk.timeline);
   if (seg) {
-    return segmentDisplayCaption(seg) || (chunk.dense_caption || chunk.reasoning_content || '').trim();
+    return segmentDisplayCaption(seg) || (chunk.reasoning_content || '').trim();
   }
-  return (chunk.dense_caption || chunk.reasoning_content || '').trim();
+  return (chunk.reasoning_content || '').trim();
 }

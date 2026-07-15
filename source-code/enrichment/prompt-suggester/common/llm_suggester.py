@@ -9,42 +9,39 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from opentelemetry import trace
 
-from .event_dedupe import dedupe_key_events, dedupe_prompts
+from .event_dedupe import (
+    dedupe_key_events,
+    dedupe_prompts,
+    grounded_in_reasoning,
+    normalize_search_prompt,
+)
 from .models import KeyEventSuggestion, Settings
 from .stream_index import stream_fields_from_row, timeline_sec
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-SYSTEM_PROMPT = """You help operators search a NYC street-safety video index.
-Output JSON only.
+MAX_QUERY_WORDS = 8
 
-Input: SAMPLE SEGMENTS — sparse clip captions from recent videos.
+SYSTEM_PROMPT = """You write grounded search phrases for a video index.
 
-Goals:
-1) search_prompts: exactly {search_count} SHORT search-box queries (not captions).
-   - At most 6 words. One line. No period. No commas.
-   - Each prompt MUST use a DIFFERENT primary subject (vehicle type, person role, hazard, brand).
-   - Lead with subject + ACTION (blocking, turning, crossing, delivering, near-miss, conflict).
-   - NEVER repeat the same subject with only a different landmark ("food trucks near X" is banned).
-   - At most ONE food truck/cart/vendor prompt in the whole list. At most ONE taxi/cab prompt.
-   - Do NOT use idle scenes: waiting at crosswalk, passing taxi, parked vehicles, "near sign/hydrant".
-   - Do NOT add filler: urban setting, daylight, clear skies, no hazards, bustling street.
-   - Good: "UPS truck blocking bike lane"
-   - Good: "Cyclist swerving around open door"
-   - Bad: "Food trucks near traffic lights" / "Pedestrians waiting at crosswalk"
+Input: SAMPLE SEGMENTS — each line has an index i and that segment's reasoning_content.
 
-2) key_events: up to {events_count} UNIQUE investigative moments across ALL videos.
-   - Max {max_per_video} key_events per video unless severity is high.
-   - Same diversity rules as search_prompts — no landmark-only duplicates.
-   - SKIP idle parked vehicles, waiting pedestrians, generic "near landmark" lines.
-   - Prefer: conflicts, blocking, deliveries, jaywalking, construction hazards, brands, near-misses.
-   - label: 3–8 word headline, Title Case, MUST differ from query_text.
-   - query_text: SHORT search phrase — max 6 words, subject + action (not "X near Y").
+For EVERY sample segment, produce exactly one item:
+- Rephrase only what that segment's reasoning_content already says.
+- Do NOT invent people, objects, colors, brands, streets, actions, or predicted moves
+  that are not written in that reasoning_content. Rephrase; do not invent.
+- Prefer the single densest phrase for that scene — keep concrete details that appear
+  in the reasoning (colors, brands, street names, vehicle type/color, predicted next
+  move, notable actions) when they fit in the word limit.
+- query_text: max 8 words, one line, no period, no commas.
+- label: short Title Case headline (3–8 words), also grounded; may mirror query_text.
 
-Keep JSON compact. No markdown. Close all brackets.
-Schema:
-{{"search_prompts":["..."],"key_events":[{{"query_text":"...","label":"...","original_video":"...","filename":"...","segment_start_sec":0,"segment_end_sec":5}}]}}
+No domain bias. No preferred scene shapes. No padding.
+
+Output JSON only (no markdown):
+{{"items":[{{"i":0,"query_text":"...","label":"..."}}]}}
+Include one object in items for every sample index (0..n-1).
 """
 
 
@@ -54,31 +51,14 @@ def _video_meta(row: dict) -> Tuple[str, str]:
     return ov, fn
 
 
-def _corpus_object_hints(segments: List[dict], limit: int = 14) -> str:
-    from collections import Counter
-
-    counts: Counter = Counter()
-    for seg in segments:
-        raw = str(seg.get("object_classes") or "")
-        for part in re.split(r"[,;|]", raw):
-            name = part.strip().lower()
-            if name and name not in ("person", "car"):
-                counts[name] += 1
-    if not counts:
-        return ""
-    top = ", ".join(k for k, _ in counts.most_common(limit))
-    return f"Distinct objects in corpus (spread prompts across these; do not repeat one type): {top}\n\n"
-
-
 def _format_corpus(segments: List[dict], max_segment_lines: int) -> str:
     parts: List[str] = ["=== SAMPLE SEGMENTS ==="]
-    for seg in segments[:max_segment_lines]:
+    for idx, seg in enumerate(segments[:max_segment_lines]):
         ov, fn = _video_meta(seg)
         sn = int(seg.get("segment_number") or 0)
         start = float(seg.get("segment_start_sec") or 0)
         end = float(seg.get("segment_end_sec") or start + 5)
-        cap = str(seg.get("dense_caption") or seg.get("reasoning_content") or "")[:350]
-        objs = str(seg.get("object_classes") or "")
+        cap = str(seg.get("reasoning_content") or "").strip()
         stream = stream_fields_from_row(seg)
         stream_note = ""
         if stream.get("stream_id") is not None:
@@ -87,8 +67,8 @@ def _format_corpus(segments: List[dict], max_segment_lines: int) -> str:
                 f" @ {timeline_sec(seg):.0f}s"
             )
         parts.append(
-            f"- video={ov} | file={fn} | seg={sn} | {start:.0f}-{end:.0f}s"
-            f"{stream_note} | objects={objs} | {cap}"
+            f"- i={idx} | video={ov} | file={fn} | seg={sn} | {start:.0f}-{end:.0f}s"
+            f"{stream_note}\n  reasoning: {cap}"
         )
     return "\n".join(parts)
 
@@ -116,30 +96,31 @@ def _repair_json(text: str) -> str:
     return s
 
 
-def _salvage_prompts(text: str) -> List[str]:
-    block = re.search(r'"search_prompts"\s*:\s*\[(.*?)\]', text, re.DOTALL)
-    if not block:
-        return []
-    return [m.group(1).replace('\\"', '"') for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', block.group(1))]
-
-
-def _salvage_key_events(text: str) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
+def _salvage_items(text: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
     pattern = (
-        r'\{\s*"query_text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"label"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,'
-        r'\s*"original_video"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"filename"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,'
-        r'\s*"segment_start_sec"\s*:\s*([\d.]+)\s*,\s*"segment_end_sec"\s*:\s*([\d.]+)\s*\}'
+        r'\{\s*"i"\s*:\s*(\d+)\s*,\s*"query_text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*'
+        r'"label"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}'
     )
     for m in re.finditer(pattern, text):
-        events.append({
+        items.append({
+            "i": int(m.group(1)),
+            "query_text": m.group(2).replace('\\"', '"'),
+            "label": m.group(3).replace('\\"', '"'),
+        })
+    if items:
+        return items
+    # Legacy salvage (older NYC-shaped schema)
+    legacy = (
+        r'\{\s*"query_text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"label"\s*:\s*"((?:[^"\\]|\\.)*)"'
+    )
+    for m in re.finditer(legacy, text):
+        items.append({
+            "i": len(items),
             "query_text": m.group(1).replace('\\"', '"'),
             "label": m.group(2).replace('\\"', '"'),
-            "original_video": m.group(3).replace('\\"', '"'),
-            "filename": m.group(4).replace('\\"', '"'),
-            "segment_start_sec": float(m.group(5)),
-            "segment_end_sec": float(m.group(6)),
         })
-    return events
+    return items
 
 
 def _parse_llm_json(content: str) -> Dict[str, Any]:
@@ -162,127 +143,92 @@ def _parse_llm_json(content: str) -> Dict[str, Any]:
         "[SUGGEST] JSON parse failed (%s); salvaging partial LLM output",
         last_err,
     )
-    return {
-        "search_prompts": _salvage_prompts(content),
-        "key_events": _salvage_key_events(content),
-    }
+    return {"items": _salvage_items(content)}
 
 
 def _new_batch_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
 
 
-def _normalize_key_event(ev: KeyEventSuggestion) -> KeyEventSuggestion:
-    from .event_dedupe import normalize_search_prompt
-
-    q = normalize_search_prompt(ev.query_text.strip(), max_words=8) or ev.query_text.strip()[:80]
-    lbl = (ev.label or "").strip()
-    if not lbl or lbl.lower() == q.lower():
-        lbl = ""
-    if len(lbl) > 80:
-        lbl = " ".join(lbl.split()[:8])
-    return ev.model_copy(
-        update={
-            "query_text": q,
-            "label": lbl,
-            "original_video": (ev.original_video or "").strip(),
-            "filename": (ev.filename or "").strip(),
-        }
-    )
-
-
-def _enrich_events_from_segments(
-    events: List[Dict[str, Any]],
+def _items_to_events(
+    items: List[Dict[str, Any]],
     segments: List[dict],
 ) -> List[Dict[str, Any]]:
-    """Attach original_video/filename from corpus when the LLM omits them."""
-    from .event_dedupe import similar_text
-
-    enriched: List[Dict[str, Any]] = []
-    for ev in events:
-        ov = str(ev.get("original_video") or "").strip()
-        if ov:
-            if not str(ev.get("filename") or "").strip():
-                for seg in segments:
-                    seg_ov, seg_fn = _video_meta(seg)
-                    if seg_ov == ov:
-                        ev = {**ev, "filename": seg_fn}
-                        break
-            enriched.append(ev)
+    """Map LLM items onto corpus segments; drop ungrounded phrases."""
+    events: List[Dict[str, Any]] = []
+    for raw in items:
+        if not isinstance(raw, dict):
             continue
-
-        needle = str(ev.get("label") or ev.get("query_text") or "").strip()
-        if not needle:
+        try:
+            idx = int(raw.get("i"))
+        except (TypeError, ValueError):
             continue
-        start = float(ev.get("segment_start_sec") or 0)
-        best_seg: Optional[dict] = None
-        best_score = 0.0
-        for seg in segments:
-            seg_start = float(seg.get("segment_start_sec") or 0)
-            if abs(seg_start - start) > 10:
-                continue
-            cap = str(seg.get("dense_caption") or seg.get("reasoning_content") or "")
-            if similar_text(needle, cap, threshold=0.28):
-                score = len(_tokens_overlap(needle, cap))
-                if score > best_score:
-                    best_score = score
-                    best_seg = seg
-        if not best_seg:
-            logger.warning("[SUGGEST] Dropping key_event without video: %s", needle[:72])
+        if idx < 0 or idx >= len(segments):
             continue
-        seg_ov, seg_fn = _video_meta(best_seg)
-        enriched.append({
-            **ev,
-            "original_video": seg_ov,
-            "filename": seg_fn,
-            "segment_start_sec": float(best_seg.get("segment_start_sec") or start),
-            "segment_end_sec": float(
-                best_seg.get("segment_end_sec") or float(best_seg.get("segment_start_sec") or start) + 5
-            ),
-        })
-    return enriched
-
-
-def _tokens_overlap(a: str, b: str) -> set:
-    from .event_dedupe import _tokens
-    return _tokens(a) & _tokens(b)
+        seg = segments[idx]
+        reasoning = str(seg.get("reasoning_content") or "")
+        q = normalize_search_prompt(
+            str(raw.get("query_text") or ""),
+            max_words=MAX_QUERY_WORDS,
+        )
+        if not q or not grounded_in_reasoning(q, reasoning):
+            logger.info(
+                "[SUGGEST] Dropping ungrounded item i=%s: %s",
+                idx,
+                (raw.get("query_text") or "")[:72],
+            )
+            continue
+        lbl = str(raw.get("label") or "").strip()
+        if not lbl or lbl.lower() == q.lower():
+            lbl = ""
+        else:
+            lbl = normalize_search_prompt(lbl, max_words=MAX_QUERY_WORDS)
+            if lbl and not grounded_in_reasoning(lbl, reasoning):
+                lbl = ""
+        ov, fn = _video_meta(seg)
+        start = float(seg.get("segment_start_sec") or 0)
+        end = float(seg.get("segment_end_sec") or start + 5)
+        events.append(
+            KeyEventSuggestion(
+                query_text=q,
+                label=lbl,
+                original_video=ov,
+                filename=fn,
+                segment_start_sec=start,
+                segment_end_sec=end,
+            ).model_dump()
+        )
+    return events
 
 
 def generate_suggestions(
     settings: Settings,
     segments: List[dict],
 ) -> Tuple[List[str], List[Dict[str, Any]], str]:
-    """Call Cosmos; dedupe LLM key events."""
+    """Call Cosmos; keep only phrases grounded in each segment's reasoning."""
     if not segments:
         return [], [], ""
 
     batch_id = _new_batch_id()
     segment_lines = min(settings.suggestions_max_segments, 48)
-    corpus = _format_corpus(segments, segment_lines)
-    max_per_video = getattr(settings, "suggestions_max_events_per_video", 3)
-    event_target = settings.suggestions_events_count
-    if len(segments) > 80:
-        event_target = min(event_target, 18)
+    sample = segments[:segment_lines]
+    corpus = _format_corpus(sample, segment_lines)
 
-    system = SYSTEM_PROMPT.format(
-        search_count=settings.suggestions_search_count,
-        events_count=event_target,
-        max_per_video=max_per_video,
-    )
     user = (
-        f"Corpus: {len(segments)} sample segments.\n"
-        f"{_corpus_object_hints(segments)}{corpus}"
+        f"Corpus: {len(sample)} sample segments. "
+        f"Return one grounded item per index i=0..{len(sample) - 1}.\n\n"
+        f"{corpus}"
     )
 
     max_tokens = max(settings.cosmos_max_tokens, 4000)
     payload: Dict[str, Any] = {
         "model": settings.cosmos_model,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ],
         "max_tokens": max_tokens,
-        "temperature": settings.cosmos_temperature,
+        "temperature": min(settings.cosmos_temperature, 0.2),
         "response_format": {"type": "json_object"},
     }
 
@@ -290,9 +236,8 @@ def generate_suggestions(
         span.set_attributes({
             "cosmos_url": settings.cosmos_url,
             "model": settings.cosmos_model,
-            "segments_sampled": len(segments),
+            "segments_sampled": len(sample),
             "max_tokens": max_tokens,
-            "event_target": event_target,
         })
         response = requests.post(settings.cosmos_url, json=payload, timeout=180)
         if response.status_code == 400 and "response_format" in (response.text or ""):
@@ -307,26 +252,25 @@ def generate_suggestions(
         logger.warning("[SUGGEST] LLM hit max_tokens=%s; using salvage/repair", max_tokens)
 
     data = _parse_llm_json(content)
+    raw_items = data.get("items") or []
+    if not raw_items and (data.get("key_events") or data.get("search_prompts")):
+        # Older schema fallback: ignore inventable key_events path without index
+        for p in data.get("search_prompts") or []:
+            raw_items.append({"i": len(raw_items) % max(len(sample), 1), "query_text": p, "label": ""})
 
-    prompts = dedupe_prompts([
-        str(p).strip() for p in data.get("search_prompts", []) if str(p).strip()
-    ], limit=settings.suggestions_search_count)
-
-    llm_events: List[Dict[str, Any]] = []
-    for ev in data.get("key_events", []):
-        if not isinstance(ev, dict) or not ev.get("query_text"):
-            continue
-        normalized = _normalize_key_event(KeyEventSuggestion.model_validate(ev))
-        llm_events.append(normalized.model_dump())
-
-    llm_events = _enrich_events_from_segments(llm_events, segments)
-    events = dedupe_key_events(llm_events)
+    events = _items_to_events(raw_items if isinstance(raw_items, list) else [], sample)
+    events = dedupe_key_events(events)
     events.sort(
         key=lambda e: (
-            float(e.get("stream_position_sec") or e.get("segment_start_sec") or 0),
+            float(e.get("segment_start_sec") or 0),
             str(e.get("original_video") or ""),
         )
     )
     events = events[: settings.suggestions_events_count]
+
+    prompts = dedupe_prompts(
+        [str(e.get("query_text") or "") for e in events],
+        limit=settings.suggestions_search_count,
+    )
 
     return prompts, events, batch_id

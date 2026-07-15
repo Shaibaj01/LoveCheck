@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
+from src.utils.browse_chunk import fully_indexed_videos
 from src.utils.stream_index import row_source_key, stream_fields_from_row
 from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
 
@@ -22,7 +23,40 @@ def _split_object_classes(value: Any) -> List[str]:
         label = part.strip().lower()
         if label:
             parts.append(label)
-    return parts
+    # Preserve order, drop dupes within a row
+    seen: Set[str] = set()
+    out: List[str] = []
+    for label in parts:
+        if label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out
+
+
+def _parse_object_counts(value: Any) -> Dict[str, int]:
+    """Parse YOLO object_counts JSON into {class: concurrent_count}."""
+    if value is None or value == "":
+        return {}
+    data = value
+    if isinstance(value, str):
+        try:
+            data = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, raw in data.items():
+        label = str(key or "").strip().lower()
+        if not label:
+            continue
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out[label] = n
+    return out
 
 
 def _parse_upload_day(value: Any) -> Optional[str]:
@@ -94,10 +128,13 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     other_rows = 0
 
     parent_videos: Set[str] = set()
+    rows_by_video: Dict[str, List[dict]] = defaultdict(list)
     for row in segment_rows:
         ov = str(row.get("original_video") or row.get("source") or "").strip()
         if ov:
             parent_videos.add(ov)
+            rows_by_video[ov].append(row)
+    fully_indexed_count = len(fully_indexed_videos(rows_by_video))
 
     source_counter: Counter[str] = Counter()
     for row in segment_rows:
@@ -106,10 +143,19 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
     re_ingest_clips = sum(1 for count in source_counter.values() if count > 1)
     indexed_clips = len(source_counter)
 
-    object_counter: Counter[str] = Counter()
+    segment_counter: Counter[str] = Counter()
+    instance_counter: Counter[str] = Counter()
     for row in segment_rows:
-        for label in _split_object_classes(row.get("object_classes")):
-            object_counter[label] += 1
+        counts = _parse_object_counts(row.get("object_counts"))
+        classes = _split_object_classes(row.get("object_classes"))
+        labels = set(counts) | set(classes)
+        for label in labels:
+            segment_counter[label] += 1
+            if label in counts:
+                instance_counter[label] += counts[label]
+            else:
+                # Fallback when only object_classes is present
+                instance_counter[label] += 1
 
     metadata_breakdown: Dict[str, List[Dict[str, Any]]] = {}
     metadata_fields = [f for f in FILTERABLE_METADATA_COLUMNS if f != "object_classes"]
@@ -129,7 +175,7 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
             uploads_by_day[day] += 1
 
     public_segments = sum(1 for r in segment_rows if bool(r.get("is_public")))
-    structured_ok = sum(1 for r in segment_rows if bool(r.get("structured_parse_ok")))
+    reasoning_ok = sum(1 for r in segment_rows if str(r.get("reasoning_content") or "").strip())
     perception_ok = sum(1 for r in segment_rows if bool(r.get("perception_ok")))
     with_objects = sum(1 for r in segment_rows if _split_object_classes(r.get("object_classes")))
 
@@ -213,8 +259,8 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
 
     segment_total = len(segment_rows)
     quality = {
-        "structured_parse_ok": structured_ok,
-        "structured_parse_ok_pct": round((structured_ok / segment_total) * 100, 1) if segment_total else 0.0,
+        "reasoning_ok": reasoning_ok,
+        "reasoning_ok_pct": round((reasoning_ok / segment_total) * 100, 1) if segment_total else 0.0,
         "perception_ok": perception_ok,
         "perception_ok_pct": round((perception_ok / segment_total) * 100, 1) if segment_total else 0.0,
         "with_object_classes": with_objects,
@@ -229,6 +275,7 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
             "segment_rows": segment_total,
             "other_rows": other_rows,
             "unique_videos": len(parent_videos),
+            "fully_indexed_videos": fully_indexed_count,
             "indexed_clips": indexed_clips,
             "re_ingest_rows": re_ingest_rows,
             "re_ingest_clips": re_ingest_clips,
@@ -241,8 +288,12 @@ def build_dashboard_stats(rows: List[dict]) -> Dict[str, Any]:
         },
         "quality": quality,
         "objects": [
-            {"label": label, "segment_count": count}
-            for label, count in object_counter.most_common(25)
+            {
+                "label": label,
+                "segment_count": segment_counter[label],
+                "instance_count": instance_counter[label],
+            }
+            for label, _ in instance_counter.most_common(25)
         ],
         "metadata": metadata_breakdown,
         "uploads_by_day": [
@@ -325,6 +376,7 @@ def empty_dashboard_stats() -> Dict[str, Any]:
             "segment_rows": 0,
             "other_rows": 0,
             "unique_videos": 0,
+            "fully_indexed_videos": 0,
             "indexed_clips": 0,
             "re_ingest_rows": 0,
             "re_ingest_clips": 0,
@@ -335,8 +387,8 @@ def empty_dashboard_stats() -> Dict[str, Any]:
             "private_segment_rows": 0,
         },
         "quality": {
-            "structured_parse_ok": 0,
-            "structured_parse_ok_pct": 0.0,
+            "reasoning_ok": 0,
+            "reasoning_ok_pct": 0.0,
             "perception_ok": 0,
             "perception_ok_pct": 0.0,
             "with_object_classes": 0,

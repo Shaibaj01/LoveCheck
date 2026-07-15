@@ -4,46 +4,69 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from common.event_dedupe import dedupe_key_events, dedupe_prompts  # noqa: E402
+from common.event_dedupe import (  # noqa: E402
+    dedupe_key_events,
+    dedupe_prompts,
+    grounded_in_reasoning,
+    normalize_search_prompt,
+)
 
 
-USER_EXAMPLES = [
-    "Pedestrians waiting at crosswalk",
-    "Food cart with ice cream truck",
-    "Food trucks near intersection",
-    "Yellow taxi passing crosswalk",
-    "Food cart near one-way sign",
-    "Food cart near fire hydrant",
-    "Food trucks near crosswalk",
-    "Food trucks near traffic lights",
-    "Food trucks near Nathan's Famous",
-    "Food trucks near food cart",
-]
+def test_normalize_caps_at_eight_words():
+    q = normalize_search_prompt(
+        "red UPS truck blocking the bike lane while turning left onto Broadway",
+        max_words=8,
+    )
+    assert len(q.split()) <= 8
 
 
-def test_dedupe_user_food_truck_spam():
-    out = dedupe_prompts(USER_EXAMPLES, limit=10)
-    assert len(out) == 0
+def test_grounded_accepts_rephrase():
+    reasoning = (
+        "A red UPS delivery truck is blocking the bike lane and appears about "
+        "to turn left onto Broadway."
+    )
+    assert grounded_in_reasoning("red UPS truck blocking bike lane", reasoning)
+    assert grounded_in_reasoning("UPS truck turning left Broadway", reasoning)
 
 
-def test_dedupe_keeps_action_prompts():
-    prompts = [
-        "UPS truck blocking bike lane",
-        "Cyclist swerving around open door",
-        "Delivery van double parked",
-        "Construction fence blocking sidewalk",
-    ]
-    out = dedupe_prompts(prompts, limit=10)
-    assert len(out) == 4
+def test_grounded_rejects_invention():
+    reasoning = "A cyclist rides past a parked sedan on a sunny street."
+    assert not grounded_in_reasoning("UPS truck blocking bike lane", reasoning)
+    assert not grounded_in_reasoning("jaywalking near-miss with taxi", reasoning)
 
 
-def test_dedupe_key_events_global_food_vendor():
+def test_dedupe_prompts_similar_only():
+    out = dedupe_prompts(
+        [
+            "red UPS truck blocking lane",
+            "red UPS truck blocking the lane",
+            "Cyclist swerving around open door",
+        ],
+        limit=10,
+    )
+    assert len(out) == 2
+
+
+def test_dedupe_key_events_same_slot():
     events = [
-        {"query_text": "Food trucks near crosswalk", "label": "Vendors At Crosswalk", "original_video": "a.mp4", "segment_start_sec": 10},
-        {"query_text": "Food cart near hydrant", "label": "Cart By Hydrant", "original_video": "b.mp4", "segment_start_sec": 40},
-        {"query_text": "UPS truck blocking lane", "label": "Blocked Lane", "original_video": "c.mp4", "segment_start_sec": 20},
+        {
+            "query_text": "red truck blocking bike lane",
+            "label": "Blocked Lane",
+            "original_video": "a.mp4",
+            "segment_start_sec": 10,
+        },
+        {
+            "query_text": "red truck blocking bike lane",
+            "label": "Blocked Lane Again",
+            "original_video": "a.mp4",
+            "segment_start_sec": 10,
+        },
+        {
+            "query_text": "cyclist past open car door",
+            "label": "Open Door",
+            "original_video": "b.mp4",
+            "segment_start_sec": 40,
+        },
     ]
     out = dedupe_key_events(events)
-    food = [e for e in out if "food" in e["query_text"].lower() or "cart" in e["query_text"].lower()]
-    assert len(food) <= 1
-    assert any("UPS" in e["query_text"] for e in out)
+    assert len(out) == 2

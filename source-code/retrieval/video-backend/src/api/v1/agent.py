@@ -51,9 +51,7 @@ async def agent_ask(request: AgentAskRequest, current_user: CurrentUser = None):
         top_results = []
         for seg in segments[: request.top_k]:
             top_results.append({
-                "summary": seg.get("dense_caption") or seg.get("reasoning_content") or "",
-                "vlm_structured": seg.get("vlm_structured") or "",
-                "dense_caption": seg.get("dense_caption") or "",
+                "summary": seg.get("reasoning_content") or "",
                 "reasoning_content": seg.get("reasoning_content") or "",
                 "original_video": request.original_video,
                 "segment_number": seg.get("segment_number"),
@@ -83,7 +81,7 @@ async def agent_ask(request: AgentAskRequest, current_user: CurrentUser = None):
     if search_response.llm_synthesis:
         answer = search_response.llm_synthesis.get("response", "")
     elif search_response.results:
-        answer = search_response.results[0].dense_caption or search_response.results[0].reasoning_content
+        answer = search_response.results[0].reasoning_content
     else:
         answer = "No matching segments found."
 
@@ -105,10 +103,10 @@ def _answer_from_search(search_response: VideoSearchResponse) -> str:
         return getattr(synth, "response", "") or ""
     if search_response.chunk_results:
         chunk = search_response.chunk_results[0]
-        return chunk.dense_caption or chunk.reasoning_content or ""
+        return chunk.reasoning_content or ""
     if search_response.results:
         hit = search_response.results[0]
-        return hit.dense_caption or hit.reasoning_content or ""
+        return hit.reasoning_content or ""
     return "No matching segments found."
 
 

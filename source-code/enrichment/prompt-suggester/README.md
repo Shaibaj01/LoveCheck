@@ -1,11 +1,11 @@
 # Prompt suggester (DataEngine enrichment)
 
-Reads recent segment captions from `vss-collection`, calls **Cosmos-Reason2**, writes deduplicated search prompts and key events to `vss-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
+Reads recent `reasoning_content` from `vss-collection`, calls **Cosmos-Reason2**, and writes grounded search prompts + key events to `vss-prompts-events`. Served by video-backend `GET /api/v1/suggestions` and shown in the UI:
 
 - **Search** — suggestion chips on empty state
 - **Dashboard** — key events table with in-place segment preview
 
-Post-processing drops repetitive “subject near landmark” prompts, caps duplicate subjects (food vendor, taxi, etc.), and filters low-value idle scenes before write. The backend applies the same dedupe when serving stored rows.
+For each sampled segment the model returns **one** short phrase (≤8 words) that only rephrases that segment’s reasoning — concrete details already present (colors, brands, streets, vehicle type, predicted next move). No domain priors or YOLO hints. Phrases that are not grounded in the source reasoning are dropped. Search chips are the deduped set of those phrases.
 
 ## Secret keys (`vss2-secret`)
 

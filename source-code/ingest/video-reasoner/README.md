@@ -1,13 +1,14 @@
 # Video Reasoner
 
-DataEngine function that analyzes video segments using **Cosmos-Reason2** to generate structured descriptions.
+DataEngine function that analyzes video segments using **Cosmos-Reason2** to generate plain-text descriptions.
 
 ## What It Does
 
 - Triggered when segments land in `video-chunks-segments` bucket
 - Sends segment MP4 (base64) to Cosmos-Reason2
-- Produces `dense_caption`, `vlm_structured`, and `reasoning_content`
-- Perception lite (always on) → object list conditions main VLM
+- Produces normalized `reasoning_content` (plain prose, max 1024 chars)
+- Shared instruction asks for searchable atoms (color, brand/logo, vehicle type, sign text, clear counts, action, likely next move) when clearly visible — still plain prose, no inventing
+- YOLO object classes from upstream detector are injected into the prompt
 - Passes results to `video-embedder`
 
 ## Configuration
@@ -18,13 +19,13 @@ Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-tem
 
 | Setting | Default |
 |---------|---------|
-| `cosmos_host` | (required) |
+| `cosmos_host` | (required) — hostname or `hostname/path/prefix` for routed APIs |
 | `cosmos_port` | 8001 |
 | `cosmoshttpscheme` | `http` (set `https` for TLS-terminated endpoints) |
+| `cosmos_authorization` | (optional) Bearer token sent as `Authorization` when set |
 | `cosmos_model` | ./Cosmos-Reason2-8B |
 | `cosmos_max_tokens` | 4000 |
 | `cosmos_temperature` | 0.2 |
-| `perception_max_tokens` | 512 |
 
 Local stack guide: `docs/COSMOS_LOCAL_STACK.md`
 
@@ -44,7 +45,7 @@ Set `scenario` in ingest secret or per-video via S3 metadata:
 | `retail` | Store cameras, customer behavior |
 | `warehouse` | Industrial safety, PPE compliance |
 | `nyc_control` | NYC command-and-control / public-safety monitoring |
-| `nyc_safety_surveillance` | NYC street surveillance — detailed structured street safety JSON |
+| `nyc_safety_surveillance` | NYC street surveillance — pedestrians, vehicles, signage, safety |
 | `egocentric` | First-person perspective |
 | `general` | Generic video description (default) |
 

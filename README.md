@@ -55,7 +55,8 @@ The system has two main parts:
 | **Advanced Search & AI Settings** | Max clip cards, synthesis clip count, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Explore mode** | Browse indexed uploads by day and location — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
-| **Search suggestions & key events** | Cosmos-generated prompts from prompt-suggester → VastDB `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
+| **Search suggestions & key events** | Grounded ≤8-word rephrases of segment `reasoning_content` → `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
+| **Object detection counts** | YOLO peak concurrent per class (`object_counts`); UI chips + dashboard heatmap | [video-detector](source-code/ingest/video-detector/README.md) |
 | **Agent APIs** | Tool wrappers + grounded Q&A for external agents | [video-backend](source-code/retrieval/video-backend/README.md#agent-apis) |
 | **Time Filtering** | Filter by upload time (presets or custom range) | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
 | **Video Streaming** | Capture YouTube videos to S3 | [video-streaming](source-code/video-streaming/README.md) |
@@ -72,14 +73,14 @@ The system has two main parts:
 | [scripts](source-code/scripts/README.md) | Build scripts for retrieval images and DataEngine functions |
 | [video-backend](source-code/retrieval/video-backend/README.md) | REST API, authentication, search |
 | [video-frontend](source-code/retrieval/video-frontend/README.md) | Angular web UI (Search, Explore, Dashboard) |
-| [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Scheduled search prompts + key events → VastDB |
+| [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) | Grounded search chips + key events → VastDB |
 | [video-streaming](source-code/video-streaming/README.md) | YouTube capture service |
 | [video-batch-sync](source-code/video-batch-sync/README.md) | S3 batch copy service |
 | [video-segmenter](source-code/ingest/video-segmenter/README.md) | Splits videos into segments |
-| [video-detector](source-code/ingest/video-detector/README.md) | YOLO11 object detection + bbox sidecars |
-| [video-reasoner](source-code/ingest/video-reasoner/README.md) | AI video analysis |
-| [video-embedder](source-code/ingest/video-embedder/README.md) | Vector embeddings |
-| [vastdb-writer](source-code/ingest/vastdb-writer/README.md) | Stores vectors in VastDB |
+| [video-detector](source-code/ingest/video-detector/README.md) | YOLO11 object detection + peak counts + bbox sidecars |
+| [video-reasoner](source-code/ingest/video-reasoner/README.md) | Plain searchable `reasoning_content` (Cosmos-Reason2) |
+| [video-embedder](source-code/ingest/video-embedder/README.md) | Text (`reasoning_content`) + visual embeddings |
+| [vastdb-writer](source-code/ingest/vastdb-writer/README.md) | Stores vectors and segment rows in VastDB |
 
 ---
 
@@ -88,13 +89,13 @@ The system has two main parts:
 ```
 Upload Video → vss-chunks bucket
                     ↓
-            video-segmenter (5s segments)
+            video-segmenter (~5s clips, trim to capture_interval)
                     ↓
-            video-detector (YOLO11 → object_classes + bbox sidecars)
+            video-detector (YOLO11 → object_classes + peak object_counts + bbox sidecars)
                     ↓
-            video-reasoner (Cosmos-Reason2 → dense_caption + reasoning_content)
+            video-reasoner (Cosmos-Reason2 → searchable plain reasoning_content ≤1024)
                     ↓
-            video-embedder (vectors text + vectors_visual video)
+            video-embedder (vectors from reasoning_content + vectors_visual from MP4)
                     ↓
             vastdb-writer (segment rows in VastDB)
                     ↓
@@ -102,14 +103,16 @@ Upload Video → vss-chunks bucket
                     ↓
          prompt-suggester (optional enrichment)
                     ↓
-         vss-prompts-events (search prompts + key events)
+         vss-prompts-events (grounded search chips + key events)
 ```
 
-**Search flow:** query embed (Cosmos-Embed1) → hybrid search → clip cards with upload-time badge and match timeline → Cosmos-Reason2 synthesis → player with bbox overlay
+**Search flow:** query embed (Cosmos-Embed1) → hybrid search (`reasoning_content` + visual) → clip cards with upload-time badge and match timeline → Cosmos-Reason2 synthesis → player with bbox overlay and `label N` object chips
 
 **Explore flow:** browse by upload date and **location** (fully indexed chunks only) → clip cards with segment timeline and upload-time badge → full-chunk player with bbox toggle and **Summarize Video**
 
-**Dashboard flow:** VastDB KPIs + ingest quality + S3 vs index alignment → key events table (from prompt-suggester) with in-place segment preview
+**Dashboard flow:** VastDB KPIs + ingest quality + object **instance** heatmap (sum of peak counts) + S3 vs index alignment → key events (grounded rephrases) with in-place segment preview
+
+**Enrichment flow:** sample recent `reasoning_content` → one grounded ≤8-word phrase per sample (no inventing) → search chips + key events
 
 **Agent flow:** `GET/POST /api/v1/tools/*` for VastDB/search/explore/synthesize → `POST /api/v1/agent/ask` or `/search-and-answer` for grounded answers
 

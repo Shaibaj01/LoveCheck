@@ -72,9 +72,9 @@ DASHBOARD_SCAN_COLUMNS = (
     "source", "filename", "original_video", "segment_number", "total_segments",
     "segment_start_sec", "segment_end_sec", "extra_metadata",
     "upload_timestamp", "camera_id", "capture_type", "location",
-    "object_classes", "structured_parse_ok", "perception_ok", "is_public", "allowed_users",
+    "object_classes", "object_counts", "perception_ok", "is_public", "allowed_users",
     # Browse / explore chunk cards (one scan avoids per-video queries)
-    "reasoning_content", "dense_caption", "vlm_structured", "tags", "duration",
+    "reasoning_content", "tags", "duration",
 )
 
 settings = get_settings()
@@ -265,9 +265,6 @@ class VastDBService:
                     filename,
                     source,
                     reasoning_content,
-                    dense_caption,
-                    vlm_structured,
-                    structured_parse_ok,
                     allowed_users,
                     is_public,
                     upload_timestamp,
@@ -500,9 +497,6 @@ class VastDBService:
                                 filename=str(row['filename']) if pd.notna(row.get('filename')) else '',
                                 source=str(row['source']) if pd.notna(row.get('source')) else '',
                                 reasoning_content=str(row['reasoning_content']) if pd.notna(row.get('reasoning_content')) else '',
-                                dense_caption=str(row['dense_caption']) if pd.notna(row.get('dense_caption')) else None,
-                                vlm_structured=str(row['vlm_structured']) if pd.notna(row.get('vlm_structured')) else None,
-                                structured_parse_ok=bool(row['structured_parse_ok']) if pd.notna(row.get('structured_parse_ok')) else None,
                                 is_public=is_public_bool,
                                 upload_timestamp=row['upload_timestamp'],
                                 duration=row.get('duration'),
@@ -654,9 +648,9 @@ class VastDBService:
                         "segment_start_sec": best.segment_start_sec,
                         "segment_end_sec": best.segment_end_sec,
                         "source": best.source,
-                        "dense_caption": best.dense_caption or "",
                         "reasoning_content": best.reasoning_content,
                         "object_classes": best.object_classes or "",
+                        "object_counts": best.object_counts or "",
                     }
                 ]
 
@@ -666,19 +660,16 @@ class VastDBService:
                 matched = match_by_number.get(sn)
                 score = matched.similarity_score if matched else 0.0
                 highlight = self._segment_query_highlight(seg, query_terms)
-                vlm_structured = str(seg.get("vlm_structured") or "")
-                if matched and matched.vlm_structured:
-                    vlm_structured = matched.vlm_structured
+                counts = seg.get("object_counts")
                 timeline.append(
                     TimelineSegment(
                         segment_number=sn,
                         segment_start_sec=float(seg.get("segment_start_sec") or 0),
                         segment_end_sec=float(seg.get("segment_end_sec") or 0),
                         source=str(seg.get("source") or ""),
-                        dense_caption=str(seg.get("dense_caption") or "") or None,
                         reasoning_content=str(seg.get("reasoning_content") or "") or None,
-                        vlm_structured=vlm_structured or None,
                         object_classes=str(seg.get("object_classes") or "") or None,
+                        object_counts=str(counts) if counts not in (None, "") else None,
                         perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
                         similarity_score=score,
                         is_search_match=matched is not None,
@@ -733,7 +724,6 @@ class VastDBService:
                     best_match_end_sec=float(display_seg.segment_end_sec if display_seg else best.segment_end_sec),
                     preview_source=display_seg.source if display_seg else best.source,
                     reasoning_content=(display_seg.reasoning_content or "") if display_seg else best.reasoning_content,
-                    dense_caption=(display_seg.dense_caption or None) if display_seg else best.dense_caption,
                     is_public=best.is_public,
                     upload_timestamp=best.upload_timestamp,
                     tags=best.tags,
@@ -1060,9 +1050,6 @@ class VastDBService:
                     filename,
                     source,
                     reasoning_content,
-                    dense_caption,
-                    vlm_structured,
-                    structured_parse_ok,
                     allowed_users,
                     is_public,
                     upload_timestamp,
@@ -1133,9 +1120,6 @@ class VastDBService:
                 filename=row['filename'],
                 source=row['source'],
                 reasoning_content=row['reasoning_content'],
-                dense_caption=row.get('dense_caption'),
-                vlm_structured=row.get('vlm_structured'),
-                structured_parse_ok=bool(row['structured_parse_ok']) if pd.notna(row.get('structured_parse_ok')) else None,
                 is_public=is_public_bool,
                 upload_timestamp=row['upload_timestamp'],
                 duration=row['duration'],
@@ -1377,8 +1361,7 @@ class VastDBService:
         )
         sql_query = f"""
             SELECT
-                filename, source, reasoning_content, dense_caption, vlm_structured,
-                structured_parse_ok, allowed_users, is_public, upload_timestamp,
+                filename, source, reasoning_content, allowed_users, is_public, upload_timestamp,
                 duration, segment_number, total_segments, segment_start_sec, segment_end_sec,
                 original_video, tags, cosmos_model, tokens_used, cached_prompt_tokens,
                 camera_id, capture_type, location,
@@ -1396,15 +1379,13 @@ class VastDBService:
                 "filename": str(row.get("filename", "")),
                 "source": str(row.get("source", "")),
                 "reasoning_content": str(row.get("reasoning_content", "")),
-                "dense_caption": str(row.get("dense_caption", "")),
-                "vlm_structured": str(row.get("vlm_structured", "")),
-                "structured_parse_ok": bool(row.get("structured_parse_ok", False)),
                 "segment_number": int(row.get("segment_number") or 0),
                 "total_segments": int(row.get("total_segments") or 0),
                 "segment_start_sec": float(row.get("segment_start_sec") or 0),
                 "segment_end_sec": float(row.get("segment_end_sec") or 0),
                 "original_video": str(row.get("original_video", "")),
                 "object_classes": str(row.get("object_classes", "")),
+                "object_counts": str(row.get("object_counts")) if pd.notna(row.get("object_counts")) and row.get("object_counts") not in ("", None) else "",
                 "perception_ok": bool(row.get("perception_ok")) if pd.notna(row.get("perception_ok")) else None,
                 "perception_source": str(row.get("perception_source") or ""),
                 "detection_sidecar_uri": str(row.get("detection_sidecar_uri") or ""),
@@ -1448,16 +1429,16 @@ class VastDBService:
         best_sn = int(first.get("segment_number") or 1)
         for seg in segments:
             sn = int(seg.get("segment_number") or 0)
+            counts = seg.get("object_counts")
             timeline.append(
                 TimelineSegment(
                     segment_number=sn,
                     segment_start_sec=float(seg.get("segment_start_sec") or 0),
                     segment_end_sec=float(seg.get("segment_end_sec") or 0),
                     source=str(seg.get("source") or ""),
-                    dense_caption=str(seg.get("dense_caption") or "") or None,
                     reasoning_content=str(seg.get("reasoning_content") or "") or None,
-                    vlm_structured=str(seg.get("vlm_structured") or "") or None,
                     object_classes=str(seg.get("object_classes") or "") or None,
+                    object_counts=str(counts) if counts not in (None, "") else None,
                     perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
                     similarity_score=0.0,
                     is_search_match=False,
@@ -1510,7 +1491,6 @@ class VastDBService:
             best_match_end_sec=float(first.get("segment_end_sec") or 0),
             preview_source=str(first.get("source") or ""),
             reasoning_content=str(first.get("reasoning_content") or ""),
-            dense_caption=str(first.get("dense_caption") or "") or None,
             is_public=bool(first.get("is_public", True)),
             upload_timestamp=upload_ts,
             tags=tags,

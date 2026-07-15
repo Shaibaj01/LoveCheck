@@ -375,6 +375,9 @@ type FloatPhase = 'idle' | 'embedding' | 'searching' | 'player' | 'error';
       border-bottom: 1px solid var(--border-color);
       max-height: 120px;
       overflow-y: auto;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
 
       ::ng-deep .query-term-text {
         color: #22c55e;
@@ -511,7 +514,7 @@ export class KeyEventSearchFloatComponent implements OnChanges {
   captionHtml(): SafeHtml {
     const seg = this.currentSegment();
     if (!seg) return '';
-    const text = seg.dense_caption || seg.reasoning_content || '';
+    const text = seg.reasoning_content || '';
     const html = highlightQueryTerms(text, this.queryTerms);
     return this.sanitizer.bypassSecurityTrustHtml(html);
   }
@@ -670,8 +673,6 @@ export class KeyEventSearchFloatComponent implements OnChanges {
       filename: String(s['filename'] ?? ev.filename ?? ''),
       source: String(s['source'] ?? ''),
       reasoning_content: String(s['reasoning_content'] ?? ''),
-      dense_caption: s['dense_caption'] ? String(s['dense_caption']) : undefined,
-      structured_parse_ok: Boolean(s['structured_parse_ok']),
       is_public: Boolean(s['is_public']),
       upload_timestamp: String(s['upload_timestamp'] ?? ev.upload_timestamp ?? ''),
       duration: Number(s['duration'] ?? 0),

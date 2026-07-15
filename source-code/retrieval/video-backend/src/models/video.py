@@ -11,9 +11,6 @@ class VideoSearchResult(BaseModel):
     filename: str
     source: str
     reasoning_content: str
-    dense_caption: Optional[str] = None
-    vlm_structured: Optional[str] = None
-    structured_parse_ok: Optional[bool] = None
     is_public: bool
     upload_timestamp: datetime
     duration: float
@@ -53,10 +50,9 @@ class TimelineSegment(BaseModel):
     segment_start_sec: float
     segment_end_sec: float
     source: str
-    dense_caption: Optional[str] = None
     reasoning_content: Optional[str] = None
-    vlm_structured: Optional[str] = None
     object_classes: Optional[str] = None
+    object_counts: Optional[str] = None
     perception_ok: Optional[bool] = None
     similarity_score: float = 0.0
     is_search_match: bool = False
@@ -76,7 +72,6 @@ class ChunkSearchResult(BaseModel):
     best_match_end_sec: float
     preview_source: str
     reasoning_content: str
-    dense_caption: Optional[str] = None
     is_public: bool
     upload_timestamp: datetime
     tags: List[str]

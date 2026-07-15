@@ -1,3 +1,4 @@
+import base64
 import gzip
 import json
 import logging
@@ -6,6 +7,8 @@ from urllib.parse import unquote
 
 import boto3
 import requests
+
+from .object_counts import estimate_unique_object_counts
 
 
 class S3Client:
@@ -29,6 +32,10 @@ class S3Client:
             ExpiresIn=expires_in,
         )
 
+    def download_bytes(self, bucket: str, key: str) -> bytes:
+        response = self.client.get_object(Bucket=bucket, Key=key)
+        return response["Body"].read()
+
     def upload_bytes(self, content: bytes, bucket: str, key: str) -> bool:
         try:
             self.client.put_object(
@@ -46,16 +53,50 @@ class S3Client:
 class YoloInferClient:
     def __init__(self, settings):
         self.settings = settings
-        host = (settings.yolo_infer_host or "").strip()
+        host = (settings.yolo_infer_host or "").strip().rstrip("/")
         port = int(settings.yolo_infer_port or 8022)
-        self.base_url = f"http://{host}:{port}".rstrip("/")
+        scheme = "http"
+        if host.startswith("https://"):
+            scheme, host = "https", host[8:]
+        elif host.startswith("http://"):
+            scheme, host = "http", host[7:]
+        elif port == 443:
+            scheme = "https"
+        host = host.strip("/")
+        default_port = 443 if scheme == "https" else 80
+        if "/" in host:
+            if port != default_port:
+                hostname, _, path = host.partition("/")
+                self.base_url = f"{scheme}://{hostname}:{port}/{path}"
+            else:
+                self.base_url = f"{scheme}://{host}"
+        elif port == default_port:
+            self.base_url = f"{scheme}://{host}"
+        else:
+            self.base_url = f"{scheme}://{host}:{port}"
 
-    def infer(self, presigned_url: str, include_frames: bool = True) -> Dict[str, Any]:
-        payload = {"url": presigned_url, "include_frames": include_frames}
+    def infer(
+        self,
+        video_content: bytes,
+        filename: str,
+        include_frames: bool = True,
+    ) -> Dict[str, Any]:
+        payload = {
+            "video_base64": base64.b64encode(video_content).decode(),
+            "filename": filename,
+            "include_frames": include_frames,
+        }
+        headers = {"Content-Type": "application/json"}
+        token = (self.settings.detector_authorization or "").strip()
+        if token:
+            headers["Authorization"] = (
+                token if token.lower().startswith("bearer ") else f"Bearer {token}"
+            )
         resp = requests.post(
             f"{self.base_url}/v1/infer",
             json=payload,
-            timeout=300,
+            headers=headers,
+            timeout=600,
         )
         resp.raise_for_status()
         return resp.json()
@@ -66,26 +107,43 @@ def normalize_yolo_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(perception, dict):
         perception = {}
 
+    frames = raw.get("frames") or perception.get("frames")
+
     object_classes = raw.get("object_classes") or perception.get("object_classes") or []
     if isinstance(object_classes, list):
         classes = [str(c).strip().lower() for c in object_classes if str(c).strip()]
     else:
         classes = [p.strip().lower() for p in str(object_classes).split(",") if p.strip()]
 
-    object_counts = raw.get("object_counts") or perception.get("object_counts") or {}
-    if isinstance(object_counts, str):
+    raw_counts = raw.get("object_counts") or perception.get("object_counts") or {}
+    if isinstance(raw_counts, str):
         try:
-            object_counts = json.loads(object_counts)
+            raw_counts = json.loads(raw_counts)
         except json.JSONDecodeError:
-            object_counts = {}
+            raw_counts = {}
+    if not isinstance(raw_counts, dict):
+        raw_counts = {}
+
+    frame_count = int(perception.get("frame_count") or raw.get("frame_count") or 0)
+    if frame_count <= 0 and isinstance(frames, list):
+        frame_count = len(frames)
+
+    object_counts = estimate_unique_object_counts(
+        frames if isinstance(frames, list) else None,
+        raw_counts=raw_counts,
+        frame_count=frame_count,
+    )
+    if object_counts and not classes:
+        classes = sorted(object_counts.keys())
 
     source_model = str(perception.get("source") or raw.get("source") or "yolo11_coco")
     summary_doc = {
         "source": source_model,
         "object_classes": classes,
         "object_counts": object_counts,
+        "object_counts_mode": "max_per_frame" if (isinstance(frames, list) and frames) else "per_frame_avg",
         "max_detection_conf": float(raw.get("max_detection_conf") or perception.get("max_detection_conf") or 0.0),
-        "frame_count": int(perception.get("frame_count") or raw.get("frame_count") or 0),
+        "frame_count": frame_count,
         "detection_count": int(perception.get("detection_count") or raw.get("detection_count") or 0),
     }
 
@@ -98,7 +156,7 @@ def normalize_yolo_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         "detection_frame_count": summary_doc["frame_count"],
         "detection_count": summary_doc["detection_count"],
         "perception_json": json.dumps(summary_doc, ensure_ascii=False),
-        "frames": raw.get("frames") or perception.get("frames"),
+        "frames": frames,
     }
 
 

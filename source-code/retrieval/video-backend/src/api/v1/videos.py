@@ -383,9 +383,7 @@ async def synthesize_video_chunk(
     top_results = []
     for seg in capped:
         top_results.append({
-            "summary": seg.get("dense_caption") or seg.get("reasoning_content") or "",
-            "vlm_structured": seg.get("vlm_structured") or "",
-            "dense_caption": seg.get("dense_caption") or "",
+            "summary": seg.get("reasoning_content") or "",
             "reasoning_content": seg.get("reasoning_content") or "",
             "original_video": body.original_video,
             "segment_number": seg.get("segment_number"),
