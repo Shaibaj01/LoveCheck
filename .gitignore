@@ -31,6 +31,3 @@ deployments/vss-k8s-application/backend-secret.yaml
 deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file.yaml
 deployments/dataengine-vss-ingest-pipeline/vss-cli-secret-file.yaml
 deployments/dataengine-vss-enrichment-pipeline/vss-enrichment-secret-file.yaml
-
-# Local-only GPU model bringup (kept on disk, not tracked)
-deployments/vss-gpu-services/
