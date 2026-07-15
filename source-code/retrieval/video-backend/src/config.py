@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     )
     embedding_dimensions: int = Field(default=256, description="Embedding dimensions (256 for Cosmos-Embed1)")
     nvidia_api_key: Optional[str] = Field(default="", description="NVIDIA API key (for cloud)")
+    embedding_authorization: str = Field(default="", description="Optional Bearer token for hosted/routed embedding APIs (sent as Authorization when set)")
     embedding_local_nim: bool = Field(default=False, description="True = use local NIM (embedding_host/port), False = NVIDIA Cloud")
 
     # Visual / multimodal embedding (hybrid search)
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
     cosmos_host: str = Field(default="", description="Cosmos-Reason2 host (same as ingest reasoner)")
     cosmos_port: int = Field(default=8001, description="Cosmos-Reason2 port")
     cosmoshttpscheme: str = Field(default="http", description="http or https for Cosmos-Reason2")
+    cosmos_authorization: str = Field(default="", description="Optional Bearer token for hosted/routed Cosmos-Reason2 API (sent as Authorization when set)")
     cosmos_model: str = Field(default="./Cosmos-Reason2-8B", description="Cosmos-Reason2 model id")
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for synthesis")
     synthesis_max_tokens: int = Field(default=2000, description="Max tokens per synthesis completion chunk")
@@ -131,10 +133,23 @@ def load_settings_from_yaml(yaml_path: str) -> dict:
 
 
 def cosmos_synthesis_url(settings: Settings) -> str:
-    """OpenAI-compatible chat completions URL for Cosmos-Reason2 text synthesis."""
-    scheme = (settings.cosmoshttpscheme or "http").strip()
-    host = (settings.cosmos_host or "").strip()
-    return f"{scheme}://{host}:{settings.cosmos_port}/v1/chat/completions"
+    """OpenAI-compatible chat completions URL for Cosmos-Reason2 text synthesis.
+
+    Supports host with a path prefix (e.g. gateway/tenant/model) and omits the port
+    when it matches the scheme default (443 https / 80 http)."""
+    scheme = (settings.cosmoshttpscheme or "http").rstrip(":/")
+    host = (settings.cosmos_host or "").strip().strip("/")
+    port = int(settings.cosmos_port)
+    default_port = 443 if scheme == "https" else 80
+    if "/" in host:
+        base = f"{scheme}://{host}"
+        if port != default_port:
+            hostname, _, path = host.partition("/")
+            base = f"{scheme}://{hostname}:{port}/{path}"
+        return f"{base}/v1/chat/completions"
+    if port == default_port:
+        return f"{scheme}://{host}/v1/chat/completions"
+    return f"{scheme}://{host}:{port}/v1/chat/completions"
 
 
 def get_settings() -> Settings:

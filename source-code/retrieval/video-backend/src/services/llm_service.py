@@ -48,6 +48,7 @@ class LLMService:
                 "(same host/port as ingest video-reasoner)."
             )
         self.cosmos_url = cosmos_synthesis_url(self.settings)
+        self.cosmos_authorization = (self.settings.cosmos_authorization or "").strip()
         self.model_name = self.settings.cosmos_model
         self.timeout = self.settings.synthesis_timeout_seconds
         self.max_tokens = self.settings.synthesis_max_tokens
@@ -305,10 +306,12 @@ Use Clip N labels from the headers above; do not list filenames."""
         """Text-only Cosmos-Reason2 chat/completions (same API as ingest, no video payload)."""
         effective_system_prompt = system_prompt if system_prompt else self.default_prompt
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer not-used",
-        }
+        headers = {"Content-Type": "application/json"}
+        token = self.cosmos_authorization
+        if token:  # only sent for routed/gateway APIs; local vLLM needs no auth header
+            headers["Authorization"] = (
+                token if token.lower().startswith("bearer ") else f"Bearer {token}"
+            )
 
         messages = [
             {"role": "system", "content": effective_system_prompt},

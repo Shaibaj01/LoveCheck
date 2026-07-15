@@ -22,16 +22,28 @@ class CosmosEmbed1Client:
         if "cosmos-embed" not in self.model.lower():
             self.model = COSMOS_EMBED1_MODEL
         self.nvidia_api_key = getattr(settings, "nvidia_api_key", None) or ""
+        self.embedding_authorization = getattr(settings, "embedding_authorization", "") or ""
         self.is_cloud = not getattr(settings, "embedding_local_nim", False)
-        scheme = getattr(settings, "embeddinghttpscheme", "http") or "http"
-        host = getattr(settings, "embeddinghost", "localhost")
-        port = getattr(settings, "embeddingport", 8002)
-        self.base_url = f"{scheme}://{host}:{port}/v1"
+        scheme = (getattr(settings, "embeddinghttpscheme", "http") or "http").rstrip(":/")
+        host = (getattr(settings, "embeddinghost", "localhost") or "localhost").strip().strip("/")
+        port = int(getattr(settings, "embeddingport", 8002) or 8002)
+        default_port = 443 if scheme == "https" else 80
+        if "/" in host:  # host carries a path prefix, e.g. gateway/tenant/model
+            hostname, _, path = host.partition("/")
+            netloc = hostname if port == default_port else f"{hostname}:{port}"
+            self.base_url = f"{scheme}://{netloc}/{path}/v1"
+        elif port == default_port:
+            self.base_url = f"{scheme}://{host}/v1"
+        else:
+            self.base_url = f"{scheme}://{host}:{port}/v1"
         self.expected_dim = int(getattr(settings, "embeddingdimensions", 256) or 256)
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
-        if self.is_cloud and self.nvidia_api_key:
+        token = (self.embedding_authorization or "").strip()
+        if token:  # explicit token wins (works for local gateways too, not just cloud)
+            headers["Authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+        elif self.is_cloud and self.nvidia_api_key:
             headers["Authorization"] = f"Bearer {self.nvidia_api_key}"
         return headers
 
