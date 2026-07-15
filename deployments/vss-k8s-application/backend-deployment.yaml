@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: your.registry/vss-video-backend:v3
+        image: your.registry/vss-video-backend:v1
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

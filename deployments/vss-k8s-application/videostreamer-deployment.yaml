@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: video-stream-capture
-        image: your.registry/vss-video-streaming:v2
+        image: your.registry/vss-video-streaming:v1
         imagePullPolicy: Always
         ports:
         - containerPort: 5000

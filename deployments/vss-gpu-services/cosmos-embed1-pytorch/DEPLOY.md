@@ -1,21 +1,32 @@
-# Deploying Cosmos-Embed1 (PyTorch) on the GB200
+# Deploying Cosmos-Embed1 (PyTorch) on a GB200
 
-Step-by-step to get this service running as slot **`model-6b140e`** on port **8004** on
-`cmp-gpu-000a.bc47cc.sea1.neurondc.com` (aarch64). See `../neurondc-gb200-models.md` for
-the host/slot conventions.
+Step-by-step to run this service as an inference slot on an **aarch64 GB200** node.
+It serves the same `POST /v1/embeddings` contract as the NVIDIA NIM, but built for ARM
+so it runs where the amd64-only NIM can't.
+
+Set these once and reuse them in every command below:
+
+```sh
+HOST=<gb200-host>          # node hostname or IP you SSH into
+SLOT=<slot-name>           # container / inference-bootstrap slot name
+PORT=<host-port>           # host port to publish (container always listens on 8000)
+GPU=<gpu-index>            # a free GPU index on the node
+DEPLOY_DIR=<deploy-dir>    # where the code lives on the node, e.g. /opt/models/cosmos-embed1-pytorch
+HF_CACHE=<hf-cache-dir>    # persistent weights cache, e.g. /opt/models/hf-cache
+```
 
 ---
 
 ## 0. Prerequisites (once)
 - SSH access to the node.
-- A free GPU index (Reason1/2 use GPU 0/1, YOLO uses GPU 3 — pick another, e.g. **2**).
+- A free GPU index (avoid GPUs already used by other slots) and a free host port.
 - An NVIDIA NGC / HuggingFace token that can pull `nvidia/Cosmos-Embed1-224p`.
 
 ```sh
 # confirm free GPUs
-ssh cmp-gpu-000a.bc47cc.sea1.neurondc.com nvidia-smi
-# confirm the slot port is free
-ssh cmp-gpu-000a.bc47cc.sea1.neurondc.com 'docker ps --filter publish=8004'
+ssh $HOST nvidia-smi
+# confirm the host port is free
+ssh $HOST "docker ps --filter publish=$PORT"
 ```
 
 ---
@@ -24,8 +35,7 @@ ssh cmp-gpu-000a.bc47cc.sea1.neurondc.com 'docker ps --filter publish=8004'
 From your laptop, in the repo root:
 
 ```sh
-scp -r deployments/vss-gpu-services/cosmos-embed1-pytorch \
-  cmp-gpu-000a.bc47cc.sea1.neurondc.com:/mnt/storage/dpeer/cosmos-embed1-pytorch
+scp -r deployments/vss-gpu-services/cosmos-embed1-pytorch $HOST:$DEPLOY_DIR
 ```
 
 (Or `git clone`/`git pull` the branch on the node if it has repo access.)
@@ -34,8 +44,8 @@ scp -r deployments/vss-gpu-services/cosmos-embed1-pytorch \
 
 ## 2. Build the image (on the node, aarch64)
 ```sh
-ssh cmp-gpu-000a.bc47cc.sea1.neurondc.com
-cd /mnt/storage/dpeer/cosmos-embed1-pytorch
+ssh $HOST
+cd $DEPLOY_DIR
 docker build -t cosmos-embed1-pytorch:224p .
 ```
 
@@ -49,32 +59,32 @@ The first run downloads the weights. Give it a token and a persistent cache so r
 don't re-download.
 
 ```sh
-mkdir -p /mnt/storage/dpeer/hf-cache
+mkdir -p $HF_CACHE
 export HF_TOKEN=<your-hf-or-ngc-token>
 ```
 
 ---
 
-## 4. Run as slot `model-6b140e` (GPU 2, host 8004 -> container 8000)
+## 4. Run the slot (GPU $GPU, host $PORT -> container 8000)
 ```sh
-docker rm -f model-6b140e 2>/dev/null || true
-docker run -d --name model-6b140e \
-  --gpus '"device=2"' \
-  --label inference-bootstrap.model_name=model-6b140e \
+docker rm -f $SLOT 2>/dev/null || true
+docker run -d --name $SLOT \
+  --gpus "\"device=$GPU\"" \
+  --label inference-bootstrap.model_name=$SLOT \
   --restart unless-stopped \
   -e HF_TOKEN=$HF_TOKEN \
   -e HUGGING_FACE_HUB_TOKEN=$HF_TOKEN \
   -e COSMOS_MODEL_ID=nvidia/Cosmos-Embed1-224p \
   -e COSMOS_NUM_FRAMES=8 \
   -e COSMOS_EMBED_DIM=256 \
-  -v /mnt/storage/dpeer/hf-cache:/models/hf \
-  -p 8004:8000 \
+  -v $HF_CACHE:/models/hf \
+  -p $PORT:8000 \
   cosmos-embed1-pytorch:224p
 ```
 
 Watch it come up (weights download on first start):
 ```sh
-docker logs -f model-6b140e     # wait for "Model ready in ..." and uvicorn "Application startup complete"
+docker logs -f $SLOT     # wait for "Model ready in ..." and uvicorn "Application startup complete"
 ```
 
 ---
@@ -83,29 +93,29 @@ docker logs -f model-6b140e     # wait for "Model ready in ..." and uvicorn "App
 
 **Local (on the node):**
 ```sh
-curl -s localhost:8004/health
+curl -s localhost:$PORT/health
 # {"status":"ok","model":"nvidia/Cosmos-Embed1-224p","dim":256,"frames":8}
 
 # text
-curl -s localhost:8004/v1/embeddings -H 'Content-Type: application/json' -d '{
+curl -s localhost:$PORT/v1/embeddings -H 'Content-Type: application/json' -d '{
   "input": "a red car at night", "request_type": "query", "model": "nvidia/cosmos-embed1"
 }' | python3 -c "import sys,json;print('dim',len(json.load(sys.stdin)['data'][0]['embedding']))"
 
 # video
 B64=$(base64 -w0 /path/to/clip.mp4)
-curl -s localhost:8004/v1/embeddings -H 'Content-Type: application/json' -d "{
+curl -s localhost:$PORT/v1/embeddings -H 'Content-Type: application/json' -d "{
   \"input\": \"data:video/mp4;base64,${B64}\", \"request_type\": \"query\"
 }" | python3 -c "import sys,json;print('dim',len(json.load(sys.stdin)['data'][0]['embedding']))"
 ```
 
-**Remote (through the gateway):**
+**Remote (through a gateway, if the node is fronted by one):**
 ```sh
-export TOKEN='4d4c84fc1c00cbf2eec3e9cef56468c66e18454dbf3bfad215d0930706b408cd'
-curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/v1/embeddings \
+export TOKEN=<gateway-bearer-token>
+curl -s https://<gateway-host>/<tenant>/<slot>/v1/embeddings \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
   -d '{"input":"a red car at night","request_type":"query"}'
 ```
-If the remote route returns `502`, the container isn't publishing **8004** — recheck `-p 8004:8000`.
+If the remote route returns `502`, the container isn't publishing the host port — recheck `-p $PORT:8000`.
 
 ---
 
@@ -114,18 +124,18 @@ Update the retrieval `backend-secret.yaml` and the ingest function secret:
 
 ```yaml
 embedding_local_nim: true
-embeddinghost: 10.33.107.20      # node internal IP (or the gateway host)
-embeddingport: 8004
+embeddinghost: <node-ip-or-gateway-host>   # node internal IP, or the gateway host
+embeddingport: <port>                      # host port (or 443 if via https gateway)
 embeddingmodel: nvidia/cosmos-embed1
-embeddinghttpscheme: http
+embeddinghttpscheme: http                  # https if via gateway
 embeddingdimensions: 256
 ```
 
 Re-apply the retrieval secret + restart backend:
 ```sh
 # from deployments/vss-k8s-application on your machine
-sed "s/NAMESPACE/vss2/g" backend-secret.yaml | kubectl apply -f -
-kubectl rollout restart deployment/video-backend -n vss2
+sed "s/NAMESPACE/<namespace>/g" backend-secret.yaml | kubectl apply -f -
+kubectl rollout restart deployment/video-backend -n <namespace>
 ```
 
 ---
@@ -143,17 +153,16 @@ sampling differs, so its vectors are a **different space**. Do NOT mix them.
 ## Manage / troubleshoot
 ```sh
 docker ps --all --filter label=inference-bootstrap.model_name
-docker logs -f model-6b140e
-docker rm -f model-6b140e          # stop/remove
-docker stats model-6b140e          # GPU/mem use
+docker logs -f $SLOT
+docker rm -f $SLOT          # stop/remove
+docker stats $SLOT          # GPU/mem use
 
 # common issues
 # - CUDA OOM        -> pick a less-loaded GPU or use 224p (not 448p)
-# - 502 remote      -> container not on port 8004
+# - 502 remote      -> container not publishing the expected host port
 # - download hangs  -> HF_TOKEN missing/invalid
-# - exec format err -> you somehow pulled an amd64 image; this one must be built on the node
+# - exec format err -> you pulled an amd64 image; this one must be built on the node
 ```
 
 ## Rollback
-The old NIM slot (`model-6b140e`, port 8004) was blocked anyway. To revert VSS, point
-the secret back at the previous x86 NIM host (`10.27.102.21:8002`) and re-ingest there.
+To revert VSS, point the secret back at a previous x86 NIM host and re-ingest there.

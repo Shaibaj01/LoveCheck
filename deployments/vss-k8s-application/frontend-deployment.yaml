@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: your.registry/vss-video-frontend:v2
+        image: your.registry/vss-video-frontend:v1
         imagePullPolicy: Always
         ports:
         - containerPort: 80

@@ -247,17 +247,6 @@ curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/health \
   -H "Authorization: Bearer ${TOKEN}"
 ```
 
-> **Gotchas (already fixed in the code/Dockerfile/requirements):**
-> - The image must `COPY server.py router.py embedder.py` (not just `server.py`).
-> - `transformers` must be pinned `==4.44.2` — 4.45+ removed
->   `find_pruneable_heads_and_indices`, which Cosmos-Embed1's QFormer imports.
-> - Video frames must be fed **channel-first `BTCHW`**. Frames decode channel-last
->   `(T, H, W, 3)`, so `embed_videos` permutes to `(B, n, 3, H, W)` before the
->   processor. Without it the model reads the height (e.g. `1080`) as the channel
->   and returns `500: Expected tensor of shape BTCHW ... got channel size 1080`,
->   which surfaces at the ingest embedder as a failed **visual** embedding
->   (text still succeeds, so it's easy to miss).
-
 > **Re-ingest required:** this server's frame sampling differs from the NIM, so its
 > vectors live in a different space. Use a fresh bucket/schema/collection and
 > re-embed all content; don't mix NIM and PyTorch vectors.
