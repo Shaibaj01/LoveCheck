@@ -32,9 +32,6 @@ class EmbeddingEvent(BaseModel):
     source: str
     filename: str
     reasoning_content: str
-    dense_caption: str | None = None
-    vlm_structured: str | None = None
-    structured_parse_ok: bool = False
     embedding: List[float]
     embedding_model: str
     embedding_dimensions: int

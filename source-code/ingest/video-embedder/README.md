@@ -5,7 +5,7 @@ DataEngine function that converts video reasoning text into vector embeddings fo
 ## What It Does
 
 - Receives reasoning text from the `video-reasoner` function
-- Embeds `dense_caption` into **text** vectors (`vectors`) via Cosmos-Embed1
+- Embeds `reasoning_content` into **text** vectors (`vectors`) via Cosmos-Embed1
 - Downloads the segment from S3 and embeds the full segment MP4 into **visual** vectors (`vectors_visual`) when enabled
 - Passes both embeddings and metadata to the next function in the pipeline
 - Preserves all metadata (camera_id, capture_type, location, etc.)

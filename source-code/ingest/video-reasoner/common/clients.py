@@ -7,7 +7,7 @@ import boto3
 from opentelemetry import trace
 
 from .prompts import get_prompt_for_scenario
-from .structured_output import process_vlm_response, wrap_prompt_with_structured_output
+from .reasoning_prompt import build_reasoning_prompt, normalize_reasoning_content
 
 
 def _safe_non_negative_int(value: Any) -> int:
@@ -136,10 +136,12 @@ class CosmosReasoningClient:
                 "temperature": self.settings.cosmos_temperature
             }
             
-            headers = {
-                "Authorization": "Bearer not-used",  # Hosted Reason2 API doesn't use real API keys
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
+            token = (self.settings.cosmos_authorization or "").strip()
+            if token:
+                headers["Authorization"] = (
+                    token if token.lower().startswith("bearer ") else f"Bearer {token}"
+                )
             
             # Retry with exponential backoff
             max_retries = 3
@@ -214,8 +216,7 @@ class CosmosReasoningClient:
         filename: str,
         prompt: Optional[str] = None,
         scenario: Optional[str] = None,
-        perception_context: Optional[str] = None,
-        perception: Optional[Dict[str, Any]] = None,
+        object_classes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Complete video analysis pipeline using Cosmos reasoning.
         
@@ -224,15 +225,14 @@ class CosmosReasoningClient:
             filename: Name of the video file
             prompt: Optional custom prompt (overrides scenario)
             scenario: Optional scenario name (overrides settings default, ignored if prompt is provided)
-            perception_context: Optional verified object summary prepended to the prompt
+            object_classes: Optional comma-separated YOLO class names injected into the prompt
         """
         if prompt is None:
             scenario_to_use = scenario if scenario else self.settings.scenario
-            prompt = get_prompt_for_scenario(scenario_to_use)
+            scene_prompt = get_prompt_for_scenario(scenario_to_use)
         else:
-            prompt = wrap_prompt_with_structured_output(prompt)
-        if perception_context:
-            prompt = perception_context + prompt
+            scene_prompt = prompt
+        prompt = build_reasoning_prompt(scene_prompt, object_classes or "")
         
         with self.tracer.start_as_current_span("Complete Video Analysis (Cosmos)") as span:
             scenario_used = scenario if scenario else self.settings.scenario
@@ -249,14 +249,13 @@ class CosmosReasoningClient:
             
             # Send base64-encoded video directly to API (no SFTP upload)
             reasoning_result = self.get_cosmos_reasoning(video_content, prompt)
-            structured = process_vlm_response(reasoning_result["reasoning_content"], perception=perception)
-            
+            reasoning_content = normalize_reasoning_content(
+                reasoning_result["reasoning_content"]
+            )
+
             result = {
                 "filename": filename,
-                "reasoning_content": structured["reasoning_content"],
-                "dense_caption": structured["dense_caption"],
-                "vlm_structured": structured["vlm_structured"],
-                "structured_parse_ok": structured["structured_parse_ok"],
+                "reasoning_content": reasoning_content,
                 "cosmos_model": reasoning_result["cosmos_model"],
                 "tokens_used": reasoning_result["tokens_used"],
                 "cached_prompt_tokens": reasoning_result.get("cached_prompt_tokens", 0),
@@ -265,8 +264,6 @@ class CosmosReasoningClient:
 
             span.set_attributes({
                 "reasoning_content_length": len(result["reasoning_content"]),
-                "dense_caption_length": len(result["dense_caption"]),
-                "structured_parse_ok": result["structured_parse_ok"],
                 "total_tokens": result["tokens_used"],
                 "cached_prompt_tokens": result["cached_prompt_tokens"],
                 "total_processing_time": result["processing_time"]

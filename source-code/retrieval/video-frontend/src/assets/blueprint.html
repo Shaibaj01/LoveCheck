@@ -364,7 +364,7 @@
                 <div class="component-features">Knowledge Retrieval, Reranking</div>
               </div>
               <div class="flip-card-back">
-                <div class="back-description">Enables semantic search in VSS: hybrid caption + video retrieval, clip grouping by upload, and timeline scene_summary evidence for always-on LLM synthesis.</div>
+                <div class="back-description">Enables semantic search in VSS: hybrid search over <code>reasoning_content</code> text vectors + segment video vectors, clip grouping by upload, and timeline reasoning evidence for always-on LLM synthesis.</div>
               </div>
             </div>
           </div>
@@ -398,7 +398,7 @@
                 <div class="component-features">SQL, Spark/Trino, ADBC, Python, Vector Search</div>
               </div>
               <div class="flip-card-back">
-                <div class="back-description">Stores dual embeddings (dense_caption + segment video), structured JSON (objects/actions/events), perception object_classes, and upload metadata. Hybrid search groups segment hits into clip timelines.</div>
+                <div class="back-description">Stores dual embeddings (<code>reasoning_content</code> + segment video vectors), YOLO <code>object_classes</code> / <code>object_counts</code> (peak concurrent), and upload metadata. Hybrid search groups segment hits into clip timelines.</div>
               </div>
             </div>
           </div>
@@ -424,7 +424,7 @@
       <!-- Ingestion Pipeline -->
       <section class="pipeline-section">
         <div class="section-title"><span class="material-icons">download</span> Ingestion Pipeline</div>
-        <div class="section-subtitle"><span class="material-icons">info</span> Video → S3 → Segment → Perception lite → Structured VLM → Dual embed → VastDB</div>
+        <div class="section-subtitle"><span class="material-icons">info</span> Video → S3 → Segment → YOLO detect → Reason (plain prose) → Dual embed → VastDB</div>
         
         <div class="pipeline-flow">
           <div class="component-box"><div class="component-icon"><span class="material-icons">video_library</span></div><div class="component-title">Video Sources</div><div class="component-desc">Upload / S3 sync + metadata</div><div class="component-badge">S3</div></div>
@@ -433,19 +433,19 @@
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">bolt</span></div><div class="component-title">Trigger</div><div class="component-desc">On upload</div><div class="component-badge">DataEngine</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">content_cut</span></div><div class="component-title">Video Segmenter</div><div class="component-desc">5s segments per upload</div><div class="component-badge">Serverless</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">content_cut</span></div><div class="component-title">Video Segmenter</div><div class="component-desc">~5s clips (trim to interval)</div><div class="component-badge">Serverless</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">center_focus_strong</span></div><div class="component-title">Perception Lite</div><div class="component-desc">Always on; lists objects</div><div class="component-badge nim">Cosmos-Reason2</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">center_focus_strong</span></div><div class="component-title">Video Detector</div><div class="component-desc">YOLO classes + peak counts</div><div class="component-badge">YOLO11</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Video Reasoner</div><div class="component-desc">JSON: summary, actions, events</div><div class="component-badge nim">Cosmos-Reason2</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Video Reasoner</div><div class="component-desc">Searchable plain prose ≤1024</div><div class="component-badge nim">Cosmos-Reason2</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">transform</span></div><div class="component-title">Video Embedder</div><div class="component-desc">dense_caption + video vectors</div><div class="component-badge nim">Cosmos-Embed1</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">transform</span></div><div class="component-title">Video Embedder</div><div class="component-desc">reasoning text + video vectors</div><div class="component-badge nim">Cosmos-Embed1</div></div>
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">save</span></div><div class="component-title">VastDB Writer</div><div class="component-desc">Segment rows + metadata</div><div class="component-badge">Serverless</div></div>
         </div>
         <div class="section-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
           <span class="material-icons">article</span>
-          Per segment: <strong>dense_caption</strong> (search embed) · <strong>reasoning_content</strong> (UI narrative) · <strong>vlm_structured</strong> (objects/actions/events) · <strong>object_classes</strong> (perception)
+          Per segment: <strong>reasoning_content</strong> (UI + text embed) · <strong>vectors</strong> / <strong>vectors_visual</strong> · <strong>object_classes</strong> + <strong>object_counts</strong> (peak concurrent)
         </div>
       </section>
 
@@ -459,7 +459,7 @@
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">functions</span></div><div class="component-title">Query Embed</div><div class="component-desc">Text + video query vectors</div><div class="component-badge nim">Cosmos-Embed1</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">merge_type</span></div><div class="component-title">Hybrid Search</div><div class="component-desc">Caption + video blend</div><div class="component-badge">VastDB</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">merge_type</span></div><div class="component-title">Hybrid Search</div><div class="component-desc">Reasoning + video blend</div><div class="component-badge">VastDB</div></div>
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">view_timeline</span></div><div class="component-title">Chunk Grouping</div><div class="component-desc">One card per upload + timeline</div><div class="component-badge">Backend</div></div>
           <div class="arrow-right"></div>
@@ -469,7 +469,7 @@
         </div>
         <div class="section-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
           <span class="material-icons">tune</span>
-          Advanced Search &amp; AI Settings: max clip cards, LLM clips analyzed, caption vs video weight, min similarity · Upload metadata filters: camera, capture type, location
+          Advanced Search &amp; AI Settings: max clip cards, LLM clips analyzed, reasoning vs video weight, min similarity · Upload metadata filters: camera, capture type, location
         </div>
       </section>
 
@@ -482,26 +482,26 @@
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">explore</span></div><div class="component-title">Explore</div><div class="component-desc">Browse by upload day; summarize on demand</div><div class="component-badge">/explore</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">dashboard</span></div><div class="component-title">Dashboard</div><div class="component-desc">VastDB stats, S3 health, key events</div><div class="component-badge">/dashboard</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">dashboard</span></div><div class="component-title">Dashboard</div><div class="component-desc">Instance heatmap, S3 health, key events</div><div class="component-badge">/dashboard</div></div>
         </div>
         <div class="section-subtitle" style="margin-top: 1rem; margin-bottom: 0;">
           <span class="material-icons">lightbulb</span>
-          Search suggestions &amp; dashboard key events come from <strong>prompt-suggester</strong> → <strong>vss-prompts-events</strong> (scheduled DataEngine function)
+          Search chips &amp; key events: <strong>prompt-suggester</strong> rephrases each sampled <code>reasoning_content</code> (≤8 words, grounded) → <strong>vss-prompts-events</strong>
         </div>
       </section>
 
       <!-- Enrichment -->
       <section class="pipeline-section">
         <div class="section-title"><span class="material-icons">auto_fix_high</span> Enrichment Pipeline</div>
-        <div class="section-subtitle"><span class="material-icons">info</span> Scheduled LLM pass over recent VastDB segments → prompts table</div>
+        <div class="section-subtitle"><span class="material-icons">info</span> Scheduled grounded rephrase of recent VastDB reasoning → prompts/events table</div>
         <div class="pipeline-flow">
-          <div class="component-box"><div class="component-icon"><span class="material-icons">grid_view</span></div><div class="component-title">VastDB</div><div class="component-desc">vss-collection segments</div><div class="component-badge">Read</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">grid_view</span></div><div class="component-title">VastDB</div><div class="component-desc">vss-collection reasoning</div><div class="component-badge">Read</div></div>
           <div class="arrow-right"></div>
           <div class="component-box"><div class="component-icon"><span class="material-icons">schedule</span></div><div class="component-title">Schedule Trigger</div><div class="component-desc">DataEngine cron</div><div class="component-badge">DataEngine</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Prompt Suggester</div><div class="component-desc">Search prompts + key events</div><div class="component-badge nim">Cosmos-Reason2</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">psychology</span></div><div class="component-title">Prompt Suggester</div><div class="component-desc">1 grounded phrase / sample</div><div class="component-badge nim">Cosmos-Reason2</div></div>
           <div class="arrow-right"></div>
-          <div class="component-box"><div class="component-icon"><span class="material-icons">save</span></div><div class="component-title">vss-prompts-events</div><div class="component-desc">UI suggestions API</div><div class="component-badge">VastDB</div></div>
+          <div class="component-box"><div class="component-icon"><span class="material-icons">save</span></div><div class="component-title">vss-prompts-events</div><div class="component-desc">Chips + key events API</div><div class="component-badge">VastDB</div></div>
         </div>
       </section>
 

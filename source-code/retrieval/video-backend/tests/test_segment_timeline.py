@@ -11,10 +11,10 @@ from src.utils.segment_timeline import (
 class SegmentTimelineTests(unittest.TestCase):
     def test_dedupe_segment_dicts_keeps_one_per_number(self):
         rows = [
-            {"segment_number": 1, "upload_timestamp": "2026-01-01", "dense_caption": "old", "source": "s3://a/1"},
-            {"segment_number": 1, "upload_timestamp": "2026-01-02", "dense_caption": "newer", "source": "s3://a/1b"},
-            {"segment_number": 2, "upload_timestamp": "2026-01-02", "dense_caption": "seg2", "source": "s3://a/2"},
-            {"segment_number": 2, "upload_timestamp": "2026-01-01", "dense_caption": "seg2-old", "source": "s3://a/2old"},
+            {"segment_number": 1, "upload_timestamp": "2026-01-01", "reasoning_content": "old", "source": "s3://a/1"},
+            {"segment_number": 1, "upload_timestamp": "2026-01-02", "reasoning_content": "newer", "source": "s3://a/1b"},
+            {"segment_number": 2, "upload_timestamp": "2026-01-02", "reasoning_content": "seg2", "source": "s3://a/2"},
+            {"segment_number": 2, "upload_timestamp": "2026-01-01", "reasoning_content": "seg2-old", "source": "s3://a/2old"},
         ]
         out = dedupe_segment_dicts(rows)
         self.assertEqual(len(out), 2)

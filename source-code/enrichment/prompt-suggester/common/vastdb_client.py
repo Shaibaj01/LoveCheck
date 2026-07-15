@@ -29,7 +29,7 @@ PROMPTS_SCHEMA = pa.schema([
 ])
 
 READ_COLUMNS = (
-    "source", "filename", "original_video", "dense_caption", "reasoning_content",
+    "source", "filename", "original_video", "reasoning_content",
     "segment_number", "segment_start_sec", "segment_end_sec", "upload_timestamp",
     "object_classes", "is_public", "extra_metadata",
 )
@@ -171,7 +171,7 @@ class VastDBClient:
         for row in arrow.to_pylist():
             if not self._in_lookback(row, cutoff):
                 continue
-            cap = str(row.get("dense_caption") or row.get("reasoning_content") or "").strip()
+            cap = str(row.get("reasoning_content") or "").strip()
             if cap:
                 segments.append(row)
 

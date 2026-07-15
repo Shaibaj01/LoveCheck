@@ -44,10 +44,10 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
     MatProgressSpinnerModule,
   ],
   template: `
-        <mat-card class="chunk-card" (click)="onOpen()"
+        <mat-card class="chunk-card"
               (mouseenter)="onHoverStart()"
               (mouseleave)="onHoverEnd()">
-      <div class="video-preview-container">
+      <div class="video-preview-container" (click)="onOpen()">
         <video
           #videoElement
           [src]="previewUrl || null"
@@ -141,10 +141,16 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         </div>
         }
 
-        <div class="reasoning-content">
+        <div class="reasoning-content" [class.expanded]="isExpanded">
           <mat-icon class="reasoning-icon">psychology</mat-icon>
-          <p [innerHTML]="highlightHtml(cardCaption())"></p>
+          <p [innerHTML]="captionHtml"></p>
         </div>
+        @if (captionNeedsExpand()) {
+          <button type="button" class="expand-toggle" (click)="toggleExpand($event)">
+            <mat-icon>{{ isExpanded ? 'expand_less' : 'expand_more' }}</mat-icon>
+            {{ isExpanded ? 'See less' : 'See more' }}
+          </button>
+        }
 
         <div class="object-tags">
           @for (obj of objectTags(); track obj) {
@@ -196,7 +202,7 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       background: var(--bg-card);
       border: 1px solid var(--border-color);
       border-radius: 16px;
-      cursor: pointer;
+      cursor: default;
       transition: all 0.3s ease;
       overflow: hidden;
 
@@ -207,11 +213,25 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       }
     }
 
+    .chunk-card mat-card-content,
+    .chunk-card .title-row,
+    .chunk-card .match-line,
+    .chunk-card .video-metadata,
+    .chunk-card .object-tags,
+    .chunk-card .tag-chips {
+      cursor: default;
+    }
+
     .video-preview-container {
       position: relative;
       height: 200px;
       background: #000;
       overflow: hidden;
+      cursor: pointer !important;
+    }
+
+    .video-preview-container * {
+      cursor: pointer !important;
     }
 
     .preview-loading {
@@ -473,10 +493,15 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       border-radius: 10px;
       padding: 0.65rem;
       margin-bottom: 0.65rem;
+      cursor: text !important;
+      user-select: text;
+      -webkit-user-select: text;
 
       .reasoning-icon {
         color: rgba(6, 255, 165, 0.85);
         flex-shrink: 0;
+        cursor: default !important;
+        user-select: none;
       }
 
       p {
@@ -484,6 +509,9 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         font-size: 0.85rem;
         line-height: 1.45;
         color: var(--text-secondary);
+        cursor: text !important;
+        user-select: text;
+        -webkit-user-select: text;
         display: -webkit-box;
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
@@ -492,7 +520,37 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         ::ng-deep .query-term-text {
           color: #22c55e;
           font-weight: 600;
+          cursor: text !important;
         }
+      }
+
+      &.expanded p {
+        -webkit-line-clamp: unset;
+        display: block;
+      }
+    }
+
+    .expand-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      background: transparent;
+      border: none;
+      color: rgba(6, 255, 165, 0.8);
+      font-size: 0.8rem;
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      margin: -0.35rem 0 0.65rem;
+      transition: color 0.2s ease;
+
+      mat-icon {
+        font-size: 1.1rem;
+        width: 1.1rem;
+        height: 1.1rem;
+      }
+
+      &:hover {
+        color: rgba(6, 255, 165, 1);
       }
     }
 
@@ -612,11 +670,14 @@ export class ChunkCardComponent implements OnChanges {
   isPlaying = false;
   previewLoading = false;
   previewFrameReady = false;
+  isExpanded = false;
+  captionHtml: SafeHtml = '';
   private queryTerms: string[] = [];
   private hoverAbort?: AbortController;
 
   ngOnChanges(changes: SimpleChanges) {
     if (changes['chunk']) {
+      this.isExpanded = false;
       this.syncFromChunk();
     }
   }
@@ -634,10 +695,23 @@ export class ChunkCardComponent implements OnChanges {
       this.previewUrl = '';
     }
     this.queryTerms = extractHighlightTerms(this.chunk.query);
+    const text = previewCaption(this.chunk);
+    this.captionHtml = this.sanitizer.bypassSecurityTrustHtml(
+      text ? highlightQueryTerms(text, this.queryTerms) : '',
+    );
   }
 
   cardCaption(): string {
     return previewCaption(this.chunk);
+  }
+
+  captionNeedsExpand(): boolean {
+    return this.cardCaption().length > 160;
+  }
+
+  toggleExpand(event: Event) {
+    event.stopPropagation();
+    this.isExpanded = !this.isExpanded;
   }
 
   onOpen(event?: Event) {
@@ -686,12 +760,6 @@ export class ChunkCardComponent implements OnChanges {
     ];
     if (seg.object_classes?.trim()) parts.push(seg.object_classes);
     return parts.join(' · ');
-  }
-
-  highlightHtml(text: string): SafeHtml {
-    if (!text) return '';
-    const html = highlightQueryTerms(text, this.queryTerms);
-    return this.sanitizer.bypassSecurityTrustHtml(html);
   }
 
   objectTags(): string[] {

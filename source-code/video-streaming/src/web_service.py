@@ -30,8 +30,36 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAPTURE_INTERVAL_SEC = 30
+CHUNK_DURATION_TOLERANCE_SEC = 0.05
+CHUNK_TRIM_TOLERANCE_SEC = 0.01
 
 _cv2 = None
+
+
+def ffprobe_duration_sec(path: str) -> float | None:
+    """Return container duration in seconds, or None if ffprobe fails."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        logger.warning("ffprobe timed out for %s", path)
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        value = float((result.stdout or "").strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _lazy_cv2():
@@ -47,13 +75,14 @@ def _lazy_cv2():
         _cv2 = cv2_module
     return _cv2
 
-def ytdlp_segment_download_timeout_sec(capture_interval: int) -> int:
+def ytdlp_segment_download_timeout_sec(capture_interval: int, segment_start: int = 0) -> int:
     """
-    Wall-clock limit for one yt-dlp+ffmpeg segment. Merging DASH and seeking
-    often exceeds capture_interval by a large margin on slow or busy links.
-    Default: max(3 minutes, 6× segment length). Override: YTDLP_SEGMENT_TIMEOUT_SEC.
+    Wall-clock limit for one yt-dlp+ffmpeg segment (live / fallback path).
+    Scales with seek depth because each invocation re-fetches YouTube DASH.
+    Default: max(5 min, 10× segment length, 90s + half the seek offset).
+    Override: YTDLP_SEGMENT_TIMEOUT_SEC.
     """
-    default = max(180, int(capture_interval * 6))
+    default = max(300, int(capture_interval * 10), 90 + int(segment_start * 0.5))
     raw = os.environ.get("YTDLP_SEGMENT_TIMEOUT_SEC", "").strip()
     if not raw:
         return default
@@ -62,6 +91,38 @@ def ytdlp_segment_download_timeout_sec(capture_interval: int) -> int:
         return max(60, n)
     except ValueError:
         return default
+
+
+def ytdlp_full_download_timeout_sec(duration: float) -> int:
+    """Wall-clock limit for downloading a full YouTube VOD once. Override: YTDLP_FULL_DOWNLOAD_TIMEOUT_SEC."""
+    if duration > 0:
+        default = max(600, int(duration * 3) + 180)
+    else:
+        default = 3600
+    default = min(default, 7200)
+    raw = os.environ.get("YTDLP_FULL_DOWNLOAD_TIMEOUT_SEC", "").strip()
+    if not raw:
+        return default
+    try:
+        return max(120, int(raw))
+    except ValueError:
+        return default
+
+
+def ytdlp_segment_max_retries() -> int:
+    raw = os.environ.get("YTDLP_SEGMENT_MAX_RETRIES", "").strip()
+    if not raw:
+        return 2
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 2
+
+
+def youtube_is_live_stream(video_info: dict) -> bool:
+    if video_info.get("is_live"):
+        return True
+    return str(video_info.get("live_status") or "").lower() == "is_live"
 
 
 def build_ytdlp_cmd(args: list) -> list:
@@ -98,6 +159,14 @@ class VideoCaptureService:
         self.temp_files = []
         self._chunk_index = 0
 
+    @staticmethod
+    def _capture_interval_sec(config) -> float:
+        """User-configured chunk size (seconds) from stream start payload."""
+        try:
+            return max(0.1, float(config.get("capture_interval", DEFAULT_CAPTURE_INTERVAL_SEC)))
+        except (TypeError, ValueError):
+            return float(DEFAULT_CAPTURE_INTERVAL_SEC)
+
     def _attach_stream_metadata(self, config, s3_metadata, chunk_index, chunk_start_sec):
         """Add stream session indexing fields for downstream segment/VastDB rows."""
         stream_id = config.get("stream_id")
@@ -106,6 +175,7 @@ class VideoCaptureService:
         s3_metadata["stream_id"] = str(stream_id)
         s3_metadata["chunk_index"] = str(chunk_index)
         s3_metadata["chunk_start_sec"] = f"{float(chunk_start_sec):.3f}"
+        s3_metadata["capture_interval"] = f"{self._capture_interval_sec(config):.3f}"
         s3_metadata["ingest_kind"] = "stream_chunk"
         return s3_metadata
 
@@ -120,6 +190,7 @@ class VideoCaptureService:
         capture_timestamp,
         chunk_index,
         chunk_start_sec,
+        chunk_duration_sec=None,
     ):
         s3_metadata = build_s3_ingest_metadata(
             camera_id=camera_id,
@@ -129,9 +200,12 @@ class VideoCaptureService:
             custom_prompt=custom_prompt,
             capture_timestamp=capture_timestamp,
         )
-        return self._attach_stream_metadata(
+        s3_metadata = self._attach_stream_metadata(
             config, s3_metadata, chunk_index, chunk_start_sec
         )
+        if chunk_duration_sec is not None:
+            s3_metadata["chunk_duration_sec"] = f"{float(chunk_duration_sec):.3f}"
+        return s3_metadata
         
     def is_youtube_url(self, url):
         """Check if the URL is a YouTube URL."""
@@ -361,118 +435,538 @@ class VideoCaptureService:
             return self.get_youtube_stream_url(stream_url)
         return stream_url
     
+    def _get_youtube_video_info(self, youtube_url: str) -> dict | None:
+        info_cmd = build_ytdlp_cmd(["--dump-json", "--no-playlist", youtube_url])
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
+        if info_result.returncode != 0:
+            logger.error(f"Failed to get video info: {info_result.stderr}")
+            return None
+        try:
+            return json.loads(info_result.stdout)
+        except json.JSONDecodeError as exc:
+            logger.error(f"Invalid video info JSON: {exc}")
+            return None
+
+    def _run_ffmpeg(self, cmd: list, timeout_sec: int, context: str) -> bool:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("ffmpeg timed out after %ss (%s)", timeout_sec, context)
+            return False
+        if result.returncode != 0:
+            stderr = (result.stderr or "")[:400]
+            logger.warning("ffmpeg failed (%s): %s", context, stderr)
+            return False
+        return True
+
+    def _trim_chunk_tail_copy(self, path: str, target_sec: float) -> bool:
+        """Drop tail past target_sec via stream-copy remux (fast, keyframe-aligned)."""
+        tmp_path = f"{path}.trim.mp4"
+        trim_cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            path,
+            "-t",
+            f"{float(target_sec):.3f}",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            tmp_path,
+        ]
+        timeout_sec = max(30, int(target_sec * 2))
+        if not self._run_ffmpeg(trim_cmd, timeout_sec, f"tail-trim {os.path.basename(path)}"):
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            return False
+        if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            return False
+        try:
+            os.replace(tmp_path, path)
+        except OSError as exc:
+            logger.error("Failed to replace trimmed chunk %s: %s", path, exc)
+            return False
+        return True
+
+    def _normalize_chunk_duration(self, path: str, target_sec: float) -> bool:
+        """When probed duration exceeds nominal, drop the tail (copy remux to target_sec)."""
+        probed = ffprobe_duration_sec(path)
+        if probed is None:
+            return False
+        if target_sec <= 0:
+            return True
+
+        if probed <= target_sec + CHUNK_TRIM_TOLERANCE_SEC:
+            if probed < target_sec - CHUNK_DURATION_TOLERANCE_SEC:
+                logger.warning(
+                    "Chunk shorter than target (%.3fs vs %.3fs): %s",
+                    probed,
+                    target_sec,
+                    os.path.basename(path),
+                )
+            return True
+
+        logger.info(
+            "Dropping tail %.3fs → %.3fs (copy remux): %s",
+            probed,
+            target_sec,
+            os.path.basename(path),
+        )
+        if not self._trim_chunk_tail_copy(path, target_sec):
+            logger.warning(
+                "Tail trim failed; segmenter caps at %.3fs: %s",
+                target_sec,
+                os.path.basename(path),
+            )
+            return True
+
+        final = ffprobe_duration_sec(path)
+        if final is not None:
+            logger.info(
+                "After tail trim probed=%.3fs nominal=%.3fs: %s",
+                final,
+                target_sec,
+                os.path.basename(path),
+            )
+        return True
+
+    def _ffmpeg_extract_segment(
+        self,
+        source_path: str,
+        segment_start: float,
+        duration_sec: float,
+        output_path: str,
+    ) -> bool:
+        duration_sec = max(0.1, float(duration_sec))
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{segment_start:.3f}",
+            "-t",
+            f"{duration_sec:.3f}",
+            "-i",
+            source_path,
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            output_path,
+        ]
+        timeout_sec = max(60, int(duration_sec * 4))
+        if not self._run_ffmpeg(
+            ffmpeg_cmd,
+            timeout_sec,
+            f"extract start={segment_start:.1f}s len={duration_sec:.1f}s",
+        ):
+            return False
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+    def _download_youtube_full_vod(self, youtube_url: str, output_path: str, duration: float) -> bool:
+        ytdlp_cmd = build_ytdlp_cmd(
+            [
+                "-f",
+                "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                "--merge-output-format",
+                "mp4",
+                "--no-playlist",
+                "-o",
+                output_path,
+                youtube_url,
+            ]
+        )
+        timeout_sec = ytdlp_full_download_timeout_sec(duration)
+        logger.info(
+            "Downloading full VOD with yt-dlp (timeout=%ss, duration≈%.0fs)",
+            timeout_sec,
+            duration,
+        )
+        try:
+            result = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            logger.error("Full VOD download timed out after %ss", timeout_sec)
+            return False
+        if result.returncode != 0:
+            logger.error(
+                "Full VOD download failed: %s",
+                (result.stderr or result.stdout or "")[:400],
+            )
+            return False
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+    def _download_youtube_segment_chunk(
+        self,
+        youtube_url: str,
+        segment_start: int,
+        capture_interval: int,
+        output_path: str,
+    ) -> bool:
+        ytdlp_cmd = build_ytdlp_cmd(
+            [
+                "-f",
+                "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                "--merge-output-format",
+                "mp4",
+                "--no-playlist",
+                "--external-downloader",
+                "ffmpeg",
+                "--external-downloader-args",
+                f"-ss {segment_start} -t {capture_interval}",
+                "-o",
+                output_path,
+                youtube_url,
+            ]
+        )
+        max_retries = ytdlp_segment_max_retries()
+        for attempt in range(max_retries + 1):
+            timeout_sec = ytdlp_segment_download_timeout_sec(capture_interval, segment_start)
+            if attempt > 0:
+                timeout_sec = int(timeout_sec * 1.5)
+                logger.info(
+                    "Retrying yt-dlp segment (attempt %s/%s, timeout=%ss, start=%ss)",
+                    attempt + 1,
+                    max_retries + 1,
+                    timeout_sec,
+                    segment_start,
+                )
+            else:
+                logger.debug(
+                    "yt-dlp segment timeout=%ss (interval=%ss, start=%ss)",
+                    timeout_sec,
+                    capture_interval,
+                    segment_start,
+                )
+            try:
+                result = subprocess.run(
+                    ytdlp_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "yt-dlp segment timed out after %ss (start=%ss, attempt %s/%s)",
+                    timeout_sec,
+                    segment_start,
+                    attempt + 1,
+                    max_retries + 1,
+                )
+                continue
+            if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return True
+            logger.warning(
+                "yt-dlp segment failed (start=%ss): %s",
+                segment_start,
+                (result.stderr or "")[:200] or "unknown error",
+            )
+        return False
+
+    def _upload_capture_chunk(
+        self,
+        temp_path: str,
+        filename: str,
+        config,
+        bucket_name: str,
+        s3_prefix: str,
+        camera_id: str,
+        capture_type: str,
+        location: str,
+        scenario: str,
+        custom_prompt: str,
+        capture_count: int,
+        chunk_start_sec: float,
+        timestamp: str,
+        nominal_chunk_sec: float,
+    ) -> bool:
+        nominal_chunk_sec = max(0.1, float(nominal_chunk_sec))
+        if not self._normalize_chunk_duration(temp_path, nominal_chunk_sec):
+            logger.error("Cannot normalize chunk duration for %s", filename)
+            return False
+        probed_sec = ffprobe_duration_sec(temp_path)
+        if probed_sec is not None:
+            logger.info(
+                "Chunk duration probed=%.3fs nominal=%.3fs (capture_interval=%.3fs): %s",
+                probed_sec,
+                nominal_chunk_sec,
+                self._capture_interval_sec(config),
+                filename,
+            )
+        s3_metadata = self._build_capture_s3_metadata(
+            config,
+            camera_id,
+            capture_type,
+            location,
+            scenario,
+            custom_prompt,
+            timestamp,
+            capture_count,
+            chunk_start_sec,
+            chunk_duration_sec=nominal_chunk_sec,
+        )
+        s3_key = f"{s3_prefix}/{filename}"
+        if not self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
+            logger.error(f"Failed to upload {filename} to S3")
+            return False
+        logger.info(f"✓ Uploaded to S3: s3://{bucket_name}/{s3_key}")
+        try:
+            os.remove(temp_path)
+            if temp_path in self.temp_files:
+                self.temp_files.remove(temp_path)
+        except OSError:
+            pass
+        return True
+
     def _capture_with_ytdlp_download(self, config, capture_interval, bucket_name, s3_prefix,
                                      camera_id, capture_type, location, scenario, custom_prompt, max_duration):
         """
-        Download time-range segments with yt-dlp (muxed video+audio via merge).
+        Download YouTube segments with yt-dlp (muxed video+audio).
 
-        Used for all YouTube captures (primary path) and as fallback when OpenCV cannot
-        open the stream. OpenCV frame recording has no audio and uses mp4v (lower quality).
+        VOD: download the full video once, then cut chunks locally with ffmpeg (fast seeks).
+        Live: per-chunk yt-dlp download with retries; one failure does not stop the session.
         """
         logger.info("Using yt-dlp segment downloads (muxed video+audio)")
         capture_count = 0
-        session_start = time.time()
-        
+        youtube_url = config["youtube_url"]
+
+        video_info = self._get_youtube_video_info(youtube_url)
+        if not video_info:
+            return 0
+
+        raw_dur = video_info.get("duration")
+        duration = float(raw_dur) if raw_dur is not None else 0.0
+        is_live = youtube_is_live_stream(video_info)
+        logger.info(
+            "YouTube %s | duration=%.1fs",
+            "LIVE" if is_live else "VOD",
+            duration,
+        )
+
+        if is_live or duration <= 0:
+            return self._capture_ytdlp_live_chunks(
+                config,
+                capture_interval,
+                bucket_name,
+                s3_prefix,
+                camera_id,
+                capture_type,
+                location,
+                scenario,
+                custom_prompt,
+                max_duration,
+                youtube_url,
+                duration,
+            )
+        return self._capture_ytdlp_vod_local(
+            config,
+            capture_interval,
+            bucket_name,
+            s3_prefix,
+            camera_id,
+            capture_type,
+            location,
+            scenario,
+            custom_prompt,
+            max_duration,
+            youtube_url,
+            duration,
+        )
+
+    def _capture_ytdlp_vod_local(
+        self,
+        config,
+        capture_interval,
+        bucket_name,
+        s3_prefix,
+        camera_id,
+        capture_type,
+        location,
+        scenario,
+        custom_prompt,
+        max_duration,
+        youtube_url,
+        duration,
+    ) -> int:
+        capture_count = 0
+        full_path = os.path.join(
+            tempfile.gettempdir(),
+            f"{config['name']}_full_{uuid.uuid4().hex[:8]}.mp4",
+        )
+        self.temp_files.append(full_path)
+
         try:
-            youtube_url = config['youtube_url']
-            
-            # Get video info first
-            info_cmd = build_ytdlp_cmd(["--dump-json", "--no-playlist", youtube_url])
-            info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
-            
-            if info_result.returncode != 0:
-                logger.error(f"Failed to get video info: {info_result.stderr}")
+            if not self._download_youtube_full_vod(youtube_url, full_path, duration):
                 return 0
-            
-            try:
-                video_info = json.loads(info_result.stdout)
-                raw_dur = video_info.get('duration')
-                duration = float(raw_dur) if raw_dur is not None else 0.0
-                logger.info(f"Video duration: {duration:.1f}s")
-            except Exception:
-                duration = 0.0
-            
-            segment_start = 0
-            while self.is_running:
-                # Check max duration
-                session_elapsed = time.time() - session_start
-                if duration > 0 and session_elapsed >= min(max_duration, duration):
-                    logger.info(f"Reached max duration or video end. Stopping.")
-                    break
-                
-                if duration > 0 and segment_start >= duration:
-                    logger.info(f"Video ended. Total segments: {capture_count}")
-                    break
-                
-                # Generate filename
+
+            effective_end = min(duration, float(max_duration))
+            segment_start = 0.0
+            consecutive_failures = 0
+            max_consecutive_failures = 3
+
+            while self.is_running and segment_start < effective_end:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"{config['name']}_{timestamp}_{uuid.uuid4().hex[:8]}.mp4"
                 temp_path = os.path.join(tempfile.gettempdir(), filename)
                 self.temp_files.append(temp_path)
-                
-                logger.info(f"Downloading segment #{capture_count + 1}: {filename}")
-                
-                # Mux best video + audio (YouTube is often DASH: separate A/V streams).
-                # Cap at 1080p for quality; merge to MP4. FFmpeg cuts the time window.
-                ytdlp_cmd = build_ytdlp_cmd(
-                    [
-                        "-f",
-                        "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-                        "--merge-output-format",
-                        "mp4",
-                        "--no-playlist",
-                        "--external-downloader",
-                        "ffmpeg",
-                        "--external-downloader-args",
-                        f"-ss {segment_start} -t {capture_interval}",
-                        "-o",
-                        temp_path,
-                        youtube_url,
-                    ]
+
+                logger.info(
+                    "Extracting segment #%s (%.1f–%.1fs): %s",
+                    capture_count + 1,
+                    segment_start,
+                    min(segment_start + capture_interval, effective_end),
+                    filename,
                 )
-                
-                timeout_sec = ytdlp_segment_download_timeout_sec(capture_interval)
-                logger.debug(f"yt-dlp subprocess timeout={timeout_sec}s (capture_interval={capture_interval}s)")
-                result = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=timeout_sec)
-                
-                if result.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                    logger.info(f"✓ Downloaded segment #{capture_count + 1}: {filename}")
-                    
-                    s3_metadata = self._build_capture_s3_metadata(
+
+                chunk_target_sec = min(
+                    float(capture_interval),
+                    max(0.0, effective_end - segment_start),
+                )
+                uploaded = False
+                if self._ffmpeg_extract_segment(
+                    full_path, segment_start, chunk_target_sec, temp_path
+                ):
+                    logger.info(f"✓ Extracted segment #{capture_count + 1}: {filename}")
+                    if self._upload_capture_chunk(
+                        temp_path,
+                        filename,
                         config,
+                        bucket_name,
+                        s3_prefix,
                         camera_id,
                         capture_type,
                         location,
                         scenario,
                         custom_prompt,
+                        capture_count,
+                        segment_start,
                         timestamp,
+                        chunk_target_sec,
+                    ):
+                        capture_count += 1
+                        consecutive_failures = 0
+                        uploaded = True
+                    else:
+                        consecutive_failures += 1
+                else:
+                    consecutive_failures += 1
+                    if segment_start >= effective_end - capture_interval:
+                        break
+
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "%s consecutive segment failures — stopping VOD capture",
+                        consecutive_failures,
+                    )
+                    break
+
+                segment_start += capture_interval
+                if uploaded and self.is_running and segment_start < effective_end:
+                    logger.info(
+                        "Pacing: waiting %ss before next chunk (real-time interval)",
+                        capture_interval,
+                    )
+                    time.sleep(capture_interval)
+
+            logger.info(f"VOD capture finished. Total segments: {capture_count}")
+            return capture_count
+        finally:
+            try:
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+                if full_path in self.temp_files:
+                    self.temp_files.remove(full_path)
+            except OSError:
+                pass
+
+    def _capture_ytdlp_live_chunks(
+        self,
+        config,
+        capture_interval,
+        bucket_name,
+        s3_prefix,
+        camera_id,
+        capture_type,
+        location,
+        scenario,
+        custom_prompt,
+        max_duration,
+        youtube_url,
+        duration,
+    ) -> int:
+        capture_count = 0
+        session_start = time.time()
+        segment_start = 0
+        consecutive_failures = 0
+        max_consecutive_failures = 3
+
+        try:
+            while self.is_running:
+                session_elapsed = time.time() - session_start
+                if duration > 0 and session_elapsed >= min(max_duration, duration):
+                    logger.info("Reached max duration or video end. Stopping.")
+                    break
+                if duration > 0 and segment_start >= duration:
+                    logger.info(f"Video ended. Total segments: {capture_count}")
+                    break
+                if session_elapsed >= max_duration:
+                    logger.info(f"Max session duration ({max_duration}s) reached. Stopping.")
+                    break
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{config['name']}_{timestamp}_{uuid.uuid4().hex[:8]}.mp4"
+                temp_path = os.path.join(tempfile.gettempdir(), filename)
+                self.temp_files.append(temp_path)
+
+                logger.info(f"Downloading segment #{capture_count + 1}: {filename}")
+
+                if self._download_youtube_segment_chunk(
+                    youtube_url, segment_start, capture_interval, temp_path
+                ):
+                    logger.info(f"✓ Downloaded segment #{capture_count + 1}: {filename}")
+                    if self._upload_capture_chunk(
+                        temp_path,
+                        filename,
+                        config,
+                        bucket_name,
+                        s3_prefix,
+                        camera_id,
+                        capture_type,
+                        location,
+                        scenario,
+                        custom_prompt,
                         capture_count,
                         float(segment_start),
-                    )
-
-                    # Upload to S3
-                    s3_key = f"{s3_prefix}/{filename}"
-                    if self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
-                        logger.info(f"✓ Uploaded to S3: s3://{bucket_name}/{s3_key}")
-                        try:
-                            os.remove(temp_path)
-                            self.temp_files.remove(temp_path)
-                        except:
-                            pass
+                        timestamp,
+                        float(capture_interval),
+                    ):
                         capture_count += 1
+                        consecutive_failures = 0
                     else:
-                        logger.error(f"Failed to upload {filename} to S3")
+                        consecutive_failures += 1
                 else:
-                    logger.warning(f"Failed to download segment: {result.stderr[:200] if result.stderr else 'unknown error'}")
+                    consecutive_failures += 1
                     if duration > 0 and segment_start >= duration - capture_interval:
-                        # Video ended
                         break
-                
+
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(
+                        "%s consecutive segment failures — stopping live capture",
+                        consecutive_failures,
+                    )
+                    break
+
                 segment_start += capture_interval
-                time.sleep(0.5)  # Small delay between segments
-                
+                time.sleep(0.5)
         except Exception as e:
-            logger.error(f"Error in yt-dlp download capture: {e}", exc_info=True)
+            logger.error(f"Error in yt-dlp live capture: {e}", exc_info=True)
         finally:
             logger.info(f"yt-dlp download capture stopped. Total segments: {capture_count}")
         return capture_count
@@ -493,7 +987,7 @@ class VideoCaptureService:
         
         try:
             stream_url = config['youtube_url']
-            capture_interval = config.get('capture_interval', DEFAULT_CAPTURE_INTERVAL_SEC)
+            capture_interval = self._capture_interval_sec(config)
             bucket_name = config.get('bucket_name', 'rawlivevideos')
             s3_prefix = config.get('s3_prefix', 'captures')
             
@@ -703,32 +1197,25 @@ class VideoCaptureService:
                 actual_duration = time.time() - chunk_start
                 if frame_count > 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     logger.info(f"✓ Captured #{capture_count + 1}: {filename} ({frame_count} frames, {actual_duration:.2f}s)")
-                    
-                    s3_metadata = self._build_capture_s3_metadata(
+                    if self._upload_capture_chunk(
+                        temp_path,
+                        filename,
                         config,
+                        bucket_name,
+                        s3_prefix,
                         camera_id,
                         capture_type,
                         location,
                         scenario,
                         custom_prompt,
-                        timestamp,
                         capture_count,
                         chunk_start_sec,
-                    )
-                    
-                    # Upload to S3 with metadata
-                    s3_key = f"{s3_prefix}/{filename}"
-                    if self.upload_to_s3(temp_path, bucket_name, s3_key, metadata=s3_metadata):
-                        logger.info(f"✓ Uploaded to S3: s3://{bucket_name}/{s3_key}")
-                        try:
-                            os.remove(temp_path)
-                            self.temp_files.remove(temp_path)
-                        except:
-                            pass
+                        timestamp,
+                        float(capture_interval),
+                    ):
+                        capture_count += 1
                     else:
                         logger.error(f"Failed to upload {filename} to S3")
-                    
-                    capture_count += 1
                 else:
                     logger.warning(f"Skipped chunk #{capture_count + 1} - no frames captured")
                     # Clean up empty file

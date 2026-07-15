@@ -12,6 +12,7 @@ class CountItem(BaseModel):
 class ObjectStatItem(BaseModel):
     label: str
     segment_count: int
+    instance_count: int = 0
 
 
 class UploadDayItem(BaseModel):
@@ -46,6 +47,7 @@ class DashboardOverview(BaseModel):
     segment_rows: int
     other_rows: int
     unique_videos: int
+    fully_indexed_videos: int = 0
     indexed_clips: int = 0
     re_ingest_rows: int = 0
     re_ingest_clips: int = 0
@@ -57,8 +59,8 @@ class DashboardOverview(BaseModel):
 
 
 class DashboardQuality(BaseModel):
-    structured_parse_ok: int
-    structured_parse_ok_pct: float
+    reasoning_ok: int
+    reasoning_ok_pct: float
     perception_ok: int
     perception_ok_pct: float
     with_object_classes: int

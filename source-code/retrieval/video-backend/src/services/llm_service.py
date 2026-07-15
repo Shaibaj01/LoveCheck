@@ -2,7 +2,6 @@
 Text synthesis for search / explore using Cosmos-Reason2 (text-only chat; no video).
 """
 import httpx
-import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -30,7 +29,7 @@ Use at most 5 bullets. Merge duplicate observations across clips. Skip generic s
 One sentence only when evidence is weak or clips disagree.
 
 Rules:
-- Use only scene_summary / objects / actions / events from the evidence.
+- Use only reasoning text / object_classes from the evidence.
 - Reference clips as "Clip N" (numbers from evidence headers). Never paste .mp4 filenames in the body.
 - No clip inventory paragraphs ("Clip 1 (file.mp4), Clip 2 …").
 - No repeated boilerplate: urban setting, daylight, clear skies, no hazards, bustling street.
@@ -108,7 +107,7 @@ class LLMService:
         # Custom system prompt from frontend is the single source of synthesis style/rules.
         user_message = f"""User Query: {query}
 
-Video Clip Evidence (timeline scene summaries from structured VLM analysis):
+Video Clip Evidence (reasoning text from indexed segments):
 {summaries_text}
 
 Write a concise summary using only this evidence. Follow the markdown sections in your system prompt.
@@ -176,21 +175,17 @@ Use Clip N labels from the headers above; do not list filenames."""
 
     @staticmethod
     def chunk_search_result_to_evidence(chunk: ChunkSearchResult) -> Dict[str, Any]:
-        """Build LLM evidence from a grouped chunk using timeline scene summaries."""
+        """Build LLM evidence from a grouped chunk using reasoning text."""
         segments: List[Dict[str, Any]] = []
         for seg in chunk.timeline:
-            parsed = LLMService._parse_structured(seg.vlm_structured)
-            scene_summary = (parsed.get("scene_summary") or "").strip()
-            if not scene_summary:
-                scene_summary = (seg.reasoning_content or seg.dense_caption or "").strip()
+            reasoning = (seg.reasoning_content or "").strip()
+            object_classes = (seg.object_classes or "").strip()
             segments.append({
                 "segment_number": seg.segment_number,
                 "segment_start_sec": seg.segment_start_sec,
                 "segment_end_sec": seg.segment_end_sec,
-                "scene_summary": scene_summary or "No scene summary available.",
-                "objects": parsed.get("objects") or [],
-                "actions": parsed.get("actions") or [],
-                "events": parsed.get("events") or [],
+                "reasoning_content": reasoning or "No reasoning text available.",
+                "object_classes": object_classes,
                 "is_search_match": seg.is_search_match,
                 "is_best_match": seg.is_best_match,
                 "query_highlight": seg.query_highlight,
@@ -210,19 +205,6 @@ Use Clip N labels from the headers above; do not list filenames."""
             "upload_timestamp": chunk.upload_timestamp,
             "segments": segments,
         }
-
-    @staticmethod
-    def _parse_structured(vlm_structured: Optional[str]) -> Dict[str, Any]:
-        if not vlm_structured or not str(vlm_structured).strip():
-            return {}
-        raw = str(vlm_structured).strip()
-        try:
-            data = json.loads(raw)
-            if isinstance(data, str):
-                data = json.loads(data)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
 
     @staticmethod
     def _clip_labels(results: List[Dict]) -> List[str]:
@@ -284,23 +266,16 @@ Use Clip N labels from the headers above; do not list filenames."""
                     pass
             elif stream.get("chunk_index") is not None:
                 stream_note = f" | chunk {stream.get('chunk_index')}"
-            block = [f"  Segment {sn} ({t0}–{t1}){flag_str}{stream_note}:", f"  scene_summary: {seg.get('scene_summary', '')}"]
-            objects = seg.get("objects") or []
-            actions = seg.get("actions") or []
-            events = seg.get("events") or []
-            if objects:
-                block.append(f"  objects: {json.dumps(objects, ensure_ascii=False)[:1200]}")
-            if actions:
-                block.append(f"  actions: {json.dumps(actions, ensure_ascii=False)[:800]}")
-            if events:
-                block.append(f"  events: {json.dumps(events, ensure_ascii=False)[:800]}")
+            block = [f"  Segment {sn} ({t0}–{t1}){flag_str}{stream_note}:", f"  reasoning: {seg.get('reasoning_content', '')}"]
+            object_classes = (seg.get("object_classes") or "").strip()
+            if object_classes:
+                block.append(f"  object_classes: {object_classes[:800]}")
             segment_blocks.append("\n".join(block))
         return header + "\n" + "\n".join(segment_blocks)
 
     def _format_legacy_segment_evidence(self, index: int, result: Dict) -> str:
-        summary = result.get("summary", "No summary available")
-        structured = (result.get("vlm_structured") or "").strip()
-        dense = (result.get("dense_caption") or "").strip()
+        reasoning = (result.get("reasoning_content") or result.get("summary") or "").strip()
+        object_classes = (result.get("object_classes") or "").strip()
         parent_label = self._parent_video_label(result.get("original_video", "Unknown video"))
         segment_num = result.get("segment_number", "?")
         total_segments = result.get("total_segments", "?")
@@ -318,15 +293,13 @@ Use Clip N labels from the headers above; do not list filenames."""
             ts_str = upload_ts.strftime("%Y-%m-%d %H:%M:%S")
         else:
             ts_str = str(upload_ts)[:19].replace("T", " ") if upload_ts else "?"
-        parsed = self._parse_structured(structured)
-        scene_summary = (parsed.get("scene_summary") or summary or dense).strip()
         header = (
             f"Clip {index}: {parent_label} (segment {segment_num}/{total_segments}, {video_time}) "
             f"[match: {score:.1%}] | Uploaded: {ts_str}"
         )
-        body_parts = [f"scene_summary: {scene_summary}"]
-        if structured and not parsed.get("scene_summary"):
-            body_parts.append(f"Structured JSON: {structured}")
+        body_parts = [f"reasoning: {reasoning or 'No reasoning text available.'}"]
+        if object_classes:
+            body_parts.append(f"object_classes: {object_classes[:800]}")
         return f"{header}\n" + "\n".join(body_parts)
     
     def _call_cosmos_chat(self, user_message: str, system_prompt: Optional[str] = None) -> Dict:

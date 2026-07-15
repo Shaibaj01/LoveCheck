@@ -91,6 +91,20 @@ def handler(ctx, event: VastEvent):
                 is_public = s3_metadata.get_is_public_bool() if s3_metadata.is_public else True
                 allowed_users = s3_metadata.get_allowed_users_list() if s3_metadata.allowed_users else []
                 tags = s3_metadata.get_tags_list()
+
+                chunk_duration_sec = None
+                chunk_duration_raw = raw_metadata.get("chunk_duration_sec")
+                capture_interval_raw = raw_metadata.get("capture_interval")
+                if chunk_duration_raw not in (None, ""):
+                    try:
+                        chunk_duration_sec = float(chunk_duration_raw)
+                    except (TypeError, ValueError):
+                        chunk_duration_sec = None
+                if chunk_duration_sec is None and capture_interval_raw not in (None, ""):
+                    try:
+                        chunk_duration_sec = float(capture_interval_raw)
+                    except (TypeError, ValueError):
+                        chunk_duration_sec = None
                 
                 # CLI/tool uploads default to public
                 if not s3_metadata.is_public and not s3_metadata.allowed_users:
@@ -147,7 +161,12 @@ def handler(ctx, event: VastEvent):
                     ctx.logger.error(f"Failed to upload segment {segment_number}/{total_segments}")
 
             with ctx.tracer.start_as_current_span("Video Segmentation and Upload") as video_span:
-                ctx.processor.process_video_segments(video_content, filename, upload_segment_callback)
+                ctx.processor.process_video_segments(
+                    video_content,
+                    filename,
+                    upload_segment_callback,
+                    max_duration_sec=chunk_duration_sec,
+                )
                 total_segments = successful_uploads + failed_uploads
                 
                 video_span.set_attributes({

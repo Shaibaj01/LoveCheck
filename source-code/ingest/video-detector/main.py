@@ -68,11 +68,18 @@ def handler(ctx, event: VastEvent):
             if not meta.get("original_video"):
                 meta["original_video"] = filename
 
-            presigned = ctx.s3_client.generate_presigned_url(
-                bucket, key, expires_in=int(ctx.settings.yolo_presign_ttl or 3600)
+            video_content = ctx.s3_client.download_bytes(bucket, key)
+            ctx.logger.info(
+                "[DOWNLOAD] %s | %.2fMB",
+                filename,
+                len(video_content) / (1024 * 1024),
             )
             include_frames = bool(ctx.settings.detection_store_frames)
-            yolo_raw = ctx.yolo_client.infer(presigned, include_frames=include_frames)
+            yolo_raw = ctx.yolo_client.infer(
+                video_content,
+                filename,
+                include_frames=include_frames,
+            )
             normalized = normalize_yolo_response(yolo_raw)
 
             sidecar_uri = ""

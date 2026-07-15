@@ -117,7 +117,7 @@ def prepare_metadata(
     metadata["segment_step_sec"] = f"{segment_step_sec:.3f}"
     metadata["segment_type"] = "video_segment"
 
-    for key in ("stream_id", "chunk_index", "chunk_start_sec", "ingest_kind", "capture_timestamp"):
+    for key in ("stream_id", "chunk_index", "chunk_start_sec", "chunk_duration_sec", "capture_interval", "ingest_kind", "capture_timestamp"):
         val = metadata.get(key) or original_metadata.get("Metadata", {}).get(key)
         if val is not None and str(val).strip() != "":
             metadata[key] = str(val).strip()
