@@ -32,6 +32,5 @@ deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file.yaml
 deployments/dataengine-vss-ingest-pipeline/vss-cli-secret-file.yaml
 deployments/dataengine-vss-enrichment-pipeline/vss-enrichment-secret-file.yaml
 
-# Local-only PyTorch model bringup docs (kept on disk, not tracked)
-deployments/vss-gpu-services/cosmos-embed1-pytorch/DEPLOY.md
-deployments/vss-gpu-services/neurondc-gb200-models.md
+# Local-only GPU model bringup (kept on disk, not tracked)
+deployments/vss-gpu-services/
