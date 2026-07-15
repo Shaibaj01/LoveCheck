@@ -1,11 +1,13 @@
 # Cosmos-Embed1 — PyTorch server (arm64 / GB200)
 
-Native-PyTorch replacement for the amd64-only Cosmos-Embed1 NIM, so it runs on the
-`bc47cc` GB200 (`aarch64`). Exposes the same `POST /v1/embeddings` contract the VSS
+Native-PyTorch replacement for the amd64-only Cosmos-Embed1 NIM, so it runs on a
+GB200 (`aarch64`). Exposes the same `POST /v1/embeddings` contract the VSS
 ingest + retrieval clients already use — the only app change is pointing the secret's
 `embeddinghost`/`embeddingport` at this service.
 
-Slot: **`model-6b140e`**, host port **8004** (per `../neurondc-gb200-models.md`).
+See `DEPLOY.md` for full step-by-step deployment. The commands below use these
+placeholders: `$HOST` (node), `$SLOT` (container/slot name), `$PORT` (host port),
+`$GPU` (free GPU index), `$DEPLOY_DIR` (code path on the node), `$HF_CACHE` (weights cache).
 
 ## Why PyTorch (not the NIM)
 The NIM is a prebuilt **amd64** container (TensorRT engines compiled for x86_64) and
@@ -24,20 +26,20 @@ run on the GB200 (same trick as the vLLM Reason1/2 slots).
 
 ## Build (on the GB200 node, aarch64)
 ```sh
-ssh cmp-gpu-000a.bc47cc.sea1.neurondc.com
-cd /mnt/storage/dpeer/cosmos-embed1-pytorch    # copy this dir here
+ssh $HOST
+cd $DEPLOY_DIR                 # copy this dir here first
 docker build -t cosmos-embed1-pytorch:224p .
 ```
 
-## Run (slot model-6b140e, GPU 2, host 8004 -> container 8000)
+## Run (GPU $GPU, host $PORT -> container 8000)
 ```sh
-docker rm -f model-6b140e 2>/dev/null || true
-docker run -d --name model-6b140e \
-  --gpus '"device=2"' \
-  --label inference-bootstrap.model_name=model-6b140e \
+docker rm -f $SLOT 2>/dev/null || true
+docker run -d --name $SLOT \
+  --gpus "\"device=$GPU\"" \
+  --label inference-bootstrap.model_name=$SLOT \
   --restart unless-stopped \
-  -v /mnt/storage/dpeer/hf-cache:/models/hf \
-  -p 8004:8000 \
+  -v $HF_CACHE:/models/hf \
+  -p $PORT:8000 \
   cosmos-embed1-pytorch:224p
 ```
 > First start downloads the weights into the mounted HF cache.
@@ -45,25 +47,25 @@ docker run -d --name model-6b140e \
 ## Verify
 ```sh
 # health
-curl -s localhost:8004/health
+curl -s localhost:$PORT/health
 
 # text
-curl -s localhost:8004/v1/embeddings -H 'Content-Type: application/json' -d '{
+curl -s localhost:$PORT/v1/embeddings -H 'Content-Type: application/json' -d '{
   "input": "a red car driving at night", "request_type": "query", "model": "nvidia/cosmos-embed1"
 }' | python3 -c "import sys,json;d=json.load(sys.stdin);print('dim',len(d['data'][0]['embedding']))"
 
 # video (base64 an mp4 first)
 B64=$(base64 -w0 clip.mp4)
-curl -s localhost:8004/v1/embeddings -H 'Content-Type: application/json' -d "{
+curl -s localhost:$PORT/v1/embeddings -H 'Content-Type: application/json' -d "{
   \"input\": \"data:video/mp4;base64,${B64}\", \"request_type\": \"query\", \"model\": \"nvidia/cosmos-embed1\"
 }" | python3 -c "import sys,json;d=json.load(sys.stdin);print('dim',len(d['data'][0]['embedding']))"
 
-# remote route (through the neurondc gateway — Bearer token REQUIRED, else 401)
-export TOKEN='<your-bearer-token>'   # e.g. 4d4c84fc...b408cd
-curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/health \
+# remote route (if the node is fronted by a gateway — Bearer token usually REQUIRED, else 401)
+export TOKEN=<gateway-bearer-token>
+curl -s https://<gateway-host>/<tenant>/<slot>/health \
   -H "Authorization: Bearer ${TOKEN}"
 
-curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/v1/embeddings \
+curl -s https://<gateway-host>/<tenant>/<slot>/v1/embeddings \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
   -d '{"input":"a red car driving at night","request_type":"query"}' \
   | python3 -c "import sys,json;print('dim',len(json.load(sys.stdin)['data'][0]['embedding']))"
@@ -73,8 +75,8 @@ curl -s https://beta-api.neurondc.com/bc47cc/model-6b140e/v1/embeddings \
 In `backend-secret.yaml` (retrieval) and the ingest function secret:
 ```yaml
 embedding_local_nim: true
-embeddinghost: 10.33.107.20     # or the gateway host
-embeddingport: 8004
+embeddinghost: <node-ip-or-gateway-host>
+embeddingport: <port>
 embeddingmodel: nvidia/cosmos-embed1
 embeddingdimensions: 256
 ```
@@ -96,4 +98,4 @@ query with it too. Do not mix NIM and PyTorch vectors in one collection.
 - Confirm `get_video_embeddings` / `get_text_embeddings` output attribute name on the
   pinned model revision (`server.py:_extract` handles common variants).
 - Confirm `AutoProcessor(videos=...)` expects `(B, T, H, W, 3)` uint8 for this revision.
-- Pick GPU index for the slot (README uses device 2; adjust to a free GPU).
+- Pick a free GPU index for the slot.
