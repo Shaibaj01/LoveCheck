@@ -1244,10 +1244,39 @@ class VideoCaptureService:
                 out.release()
             if cap is not None:
                 cap.release()
+            # Natural end / error / max-duration: clear session so /status and /start
+            # do not stay stuck "active" until a manual /stop.
+            self._clear_session(cleanup_temps=True)
             logger.info(f"Continuous capture stopped. Total captures: {capture_count}")
+
+    def _capture_thread_alive(self) -> bool:
+        return bool(self.capture_thread and self.capture_thread.is_alive())
+
+    def _heal_stale_running_flag(self) -> None:
+        """If is_running but the capture thread is dead, clear sticky session state."""
+        if self.is_running and not self._capture_thread_alive():
+            logger.warning(
+                "Capture marked running but thread is not alive; clearing stale session"
+            )
+            self._clear_session(cleanup_temps=True)
+
+    def _clear_session(self, *, cleanup_temps: bool = True) -> None:
+        """Mark capture idle and optionally remove leftover temp files."""
+        self.is_running = False
+        self.current_config = None
+        if not cleanup_temps:
+            return
+        for temp_file in list(self.temp_files):
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except OSError:
+                pass
+        self.temp_files.clear()
     
     def start_capture(self, config):
         """Start the video capture process."""
+        self._heal_stale_running_flag()
         if self.is_running:
             return False, "Capture is already running"
         
@@ -1284,24 +1313,21 @@ class VideoCaptureService:
     
     def stop_capture(self):
         """Stop the video capture process."""
+        was_stale = self.is_running and not self._capture_thread_alive()
+        if was_stale:
+            self._clear_session(cleanup_temps=True)
+            return True, "Capture was already stopped (cleared stale session)"
+
         if not self.is_running:
             return False, "Capture is not running"
         
         self.is_running = False
         
-        if self.capture_thread and self.capture_thread.is_alive():
+        if self._capture_thread_alive():
             self.capture_thread.join(timeout=10)
         
-        # Clean up temp files
-        for temp_file in self.temp_files:
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except:
-                pass
-        self.temp_files.clear()
-        
-        self.current_config = None
+        # Thread finally also clears; clear again here for the join-timeout case.
+        self._clear_session(cleanup_temps=True)
         return True, "Capture stopped successfully"
     
     def _sanitize_config(self, config):
@@ -1318,6 +1344,7 @@ class VideoCaptureService:
     
     def get_status(self):
         """Get current status."""
+        self._heal_stale_running_flag()
         return {
             'is_running': self.is_running,
             'current_config': self._sanitize_config(self.current_config),
