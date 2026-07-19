@@ -16,6 +16,8 @@ class Settings(BaseModel):
 
     cosmos_host: str = ""
     cosmos_port: int = 8001
+    cosmoshttpscheme: str = "http"
+    cosmos_authorization: str = ""
     cosmos_model: str = ""
     cosmos_max_tokens: int = 6000
     cosmos_temperature: float = 0.2
@@ -34,7 +36,22 @@ class Settings(BaseModel):
 
     @property
     def cosmos_url(self) -> str:
-        return f"http://{self.cosmos_host}:{self.cosmos_port}/v1/chat/completions"
+        """Cosmos-Reason2 chat URL. Supports host with a path prefix
+        (e.g. gateway/tenant/slot) and omits the port when it matches the
+        scheme default (443 https / 80 http)."""
+        scheme = (self.cosmoshttpscheme or "http").rstrip(":/")
+        host = (self.cosmos_host or "").strip().strip("/")
+        port = int(self.cosmos_port)
+        default_port = 443 if scheme == "https" else 80
+        if "/" in host:
+            base = f"{scheme}://{host}"
+            if port != default_port:
+                hostname, _, path = host.partition("/")
+                base = f"{scheme}://{hostname}:{port}/{path}"
+            return f"{base}/v1/chat/completions"
+        if port == default_port:
+            return f"{scheme}://{host}/v1/chat/completions"
+        return f"{scheme}://{host}:{port}/v1/chat/completions"
 
 
 class KeyEventSuggestion(BaseModel):
