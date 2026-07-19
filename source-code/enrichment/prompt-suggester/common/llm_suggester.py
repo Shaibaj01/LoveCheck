@@ -232,6 +232,11 @@ def generate_suggestions(
         "response_format": {"type": "json_object"},
     }
 
+    headers = {"Content-Type": "application/json"}
+    token = (settings.cosmos_authorization or "").strip()
+    if token:
+        headers["Authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+
     with tracer.start_as_current_span("Cosmos Suggestions LLM") as span:
         span.set_attributes({
             "cosmos_url": settings.cosmos_url,
@@ -239,10 +244,10 @@ def generate_suggestions(
             "segments_sampled": len(sample),
             "max_tokens": max_tokens,
         })
-        response = requests.post(settings.cosmos_url, json=payload, timeout=180)
+        response = requests.post(settings.cosmos_url, json=payload, headers=headers, timeout=180)
         if response.status_code == 400 and "response_format" in (response.text or ""):
             payload.pop("response_format", None)
-            response = requests.post(settings.cosmos_url, json=payload, timeout=180)
+            response = requests.post(settings.cosmos_url, json=payload, headers=headers, timeout=180)
         response.raise_for_status()
         body = response.json()
 
