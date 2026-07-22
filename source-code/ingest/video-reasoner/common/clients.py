@@ -8,6 +8,7 @@ from opentelemetry import trace
 
 from .prompts import get_prompt_for_scenario
 from .reasoning_prompt import build_reasoning_prompt, normalize_reasoning_content
+from .retry_utils import post_with_retry
 
 
 def _safe_non_negative_int(value: Any) -> int:
@@ -143,30 +144,17 @@ class CosmosReasoningClient:
                     token if token.lower().startswith("bearer ") else f"Bearer {token}"
                 )
             
-            # Retry with exponential backoff
-            max_retries = 3
-            retry_delay = 2
-            
+            # One in-process retry on connection errors; transient 5xx/429 -> TransientError.
+            # Anything still failing raises so the VastPipeline redelivers the event.
             start_time = time.time()
-            response = None
-            for attempt in range(max_retries):
-                try:
-                    if attempt > 0:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    
-                    response = self.session.post(
-                        self.cosmos_url,
-                        headers=headers,
-                        json=payload,
-                        timeout=600  # 10 minute timeout for large videos
-                    )
-                    break
-                    
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                    if attempt == max_retries - 1:
-                        raise RuntimeError(f"Request failed after {max_retries} attempts: {e}")
-            
+            response = post_with_retry(
+                self.cosmos_url,
+                session=self.session,
+                headers=headers,
+                json=payload,
+                timeout=600,  # 10 minute timeout for large videos
+            )
+
             reasoning_time = time.time() - start_time
             span.set_attributes({
                 "reasoning_time_seconds": reasoning_time,

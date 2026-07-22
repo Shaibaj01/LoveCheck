@@ -8,10 +8,9 @@ API differs from OpenAI-style embed models:
 """
 import base64
 import logging
-import time
 from typing import List, Optional
 
-import requests
+from .retry_utils import post_with_retry
 
 COSMOS_EMBED1_MODEL = "nvidia/cosmos-embed1"
 
@@ -49,22 +48,17 @@ class CosmosEmbed1Client:
 
     def _post(self, payload: dict, timeout: int = 120) -> List[List[float]]:
         url = f"{self.base_url}/embeddings"
-        last_error = None
-        for attempt in range(3):
-            response = requests.post(url, json=payload, headers=self._headers(), timeout=timeout)
-            if response.status_code == 200:
-                items = response.json().get("data", [])
-                vectors = [item.get("embedding", []) for item in items if item.get("embedding")]
-                if not vectors:
-                    raise RuntimeError("Cosmos-Embed1 returned no embeddings")
-                return vectors
-            last_error = f"{response.status_code}: {response.text[:500]}"
-            logging.error(f"[COSMOS_EMBED] attempt {attempt + 1}/3 {last_error}")
-            if response.status_code in (429, 503) and attempt < 2:
-                time.sleep(2 ** attempt)
-                continue
-            response.raise_for_status()
-        raise RuntimeError(f"Cosmos-Embed1 failed: {last_error}")
+        # One in-process retry on connection errors; transient 5xx/429 -> TransientError.
+        # Anything still failing raises so the VastPipeline redelivers the event.
+        response = post_with_retry(url, json=payload, headers=self._headers(), timeout=timeout)
+        if response.status_code == 200:
+            items = response.json().get("data", [])
+            vectors = [item.get("embedding", []) for item in items if item.get("embedding")]
+            if not vectors:
+                raise RuntimeError("Cosmos-Embed1 returned no embeddings")
+            return vectors
+        response.raise_for_status()
+        raise RuntimeError(f"Cosmos-Embed1 failed: {response.status_code}: {response.text[:500]}")
 
     def embed_texts(self, texts: List[str], *, for_query: bool = False) -> List[List[float]]:
         if not texts:
