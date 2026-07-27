@@ -18,7 +18,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 10
-        timeout: 120
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-detector
       name: video-detector-7
       revision: 1
@@ -31,7 +31,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 5
-        timeout: 300
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-reasoner
       name: video-reasoner-3
       revision: 1
@@ -44,7 +44,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 5
-        timeout: 120
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-embedder
       name: video-embedder-4
       revision: 1
@@ -57,7 +57,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 5
-        timeout: 120
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-vastdb-writer
       name: video-vastdb-writer-5
       revision: 1
@@ -70,7 +70,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 10
-        timeout: 120
+        timeout: 600
   links:
     - source:
         - video-chunk-land-trigger-1
