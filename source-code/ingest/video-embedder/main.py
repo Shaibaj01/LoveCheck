@@ -6,7 +6,7 @@ from common.embedding_client import EmbeddingClient
 from common.visual_embedding_client import VisualEmbeddingClient
 from common.s3_client import S3Client
 from common.handler_utils import parse_reasoning_event, resolve_embed_text, validate_embed_text
-from common.retry_utils import TransientError
+from common.cosmos_embed_client import TransientError
 from common.segment_index import SegmentIndexChecker
 
 

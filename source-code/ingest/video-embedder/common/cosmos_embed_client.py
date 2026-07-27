@@ -10,9 +10,21 @@ import base64
 import logging
 from typing import List, Optional
 
-from .retry_utils import post_with_retry
+import requests
 
 COSMOS_EMBED1_MODEL = "nvidia/cosmos-embed1"
+
+_CONN_EXC = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+# 401/403 included: GPU/proxy auth blips and intermittent Forbidden must not soft-ack.
+_TRANSIENT_STATUS = (401, 403, 408, 429, 500, 502, 503, 504)
+
+
+class TransientError(Exception):
+    """Retryable failure — hand the retry off to the VastPipeline."""
 
 
 class CosmosEmbed1Client:
@@ -48,17 +60,26 @@ class CosmosEmbed1Client:
 
     def _post(self, payload: dict, timeout: int = 120) -> List[List[float]]:
         url = f"{self.base_url}/embeddings"
-        # One in-process retry on connection errors; transient 5xx/429 -> TransientError.
-        # Anything still failing raises so the VastPipeline redelivers the event.
-        response = post_with_retry(url, json=payload, headers=self._headers(), timeout=timeout)
+        # One in-process retry on connection errors; transient HTTP -> TransientError
+        # so the handler raises and VastPipeline redelivers (no soft-ack).
+        try:
+            response = requests.post(url, json=payload, headers=self._headers(), timeout=timeout)
+        except _CONN_EXC as exc:
+            logging.warning("[RETRY] connection error to %s; retrying once: %s", url, exc)
+            try:
+                response = requests.post(url, json=payload, headers=self._headers(), timeout=timeout)
+            except _CONN_EXC as exc2:
+                raise TransientError(f"connection failed after 1 retry: {exc2}") from exc2
+        if response.status_code in _TRANSIENT_STATUS:
+            raise TransientError(f"transient HTTP {response.status_code}: {response.text[:300]}")
         if response.status_code == 200:
             items = response.json().get("data", [])
             vectors = [item.get("embedding", []) for item in items if item.get("embedding")]
             if not vectors:
                 raise RuntimeError("Cosmos-Embed1 returned no embeddings")
             return vectors
-        response.raise_for_status()
-        raise RuntimeError(f"Cosmos-Embed1 failed: {response.status_code}: {response.text[:500]}")
+        # Prefer redelivery over silent drop for unexpected HTTP errors.
+        raise TransientError(f"Cosmos-Embed1 failed: {response.status_code}: {response.text[:500]}")
 
     def embed_texts(self, texts: List[str], *, for_query: bool = False) -> List[List[float]]:
         if not texts:

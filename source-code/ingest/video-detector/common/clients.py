@@ -9,7 +9,18 @@ import boto3
 import requests
 
 from .object_counts import estimate_unique_object_counts
-from .retry_utils import post_with_retry
+
+_CONN_EXC = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+# 401/403 included: GPU proxy auth blips and intermittent Forbidden must not soft-ack.
+_TRANSIENT_STATUS = (401, 403, 408, 429, 500, 502, 503, 504)
+
+
+class TransientError(Exception):
+    """Retryable failure — hand the retry off to the VastPipeline."""
 
 
 class S3Client:
@@ -93,15 +104,24 @@ class YoloInferClient:
             headers["Authorization"] = (
                 token if token.lower().startswith("bearer ") else f"Bearer {token}"
             )
-        # One in-process retry on connection errors; transient 5xx/429 -> TransientError.
-        # Anything still failing raises so the VastPipeline redelivers the event.
-        resp = post_with_retry(
-            f"{self.base_url}/v1/infer",
-            json=payload,
-            headers=headers,
-            timeout=600,
-        )
-        resp.raise_for_status()
+        # One in-process retry on connection errors; transient HTTP -> TransientError
+        # so the handler raises and VastPipeline redelivers (no soft-ack).
+        url = f"{self.base_url}/v1/infer"
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=600)
+        except _CONN_EXC as exc:
+            logging.warning("[RETRY] connection error to %s; retrying once: %s", url, exc)
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=600)
+            except _CONN_EXC as exc2:
+                raise TransientError(f"connection failed after 1 retry: {exc2}") from exc2
+        if resp.status_code in _TRANSIENT_STATUS:
+            raise TransientError(f"transient HTTP {resp.status_code}: {resp.text[:300]}")
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            # Unexpected 4xx/5xx: prefer redelivery over silent drop.
+            raise TransientError(f"HTTP {resp.status_code}: {resp.text[:300]}") from exc
         return resp.json()
 
 

@@ -14,7 +14,7 @@ from common.clients import (
 )
 from common.handler_utils import parse_s3_event, should_process_event
 from common.models import Settings
-from common.retry_utils import TransientError
+from common.clients import TransientError
 from common.segment_index import SegmentIndexChecker
 
 

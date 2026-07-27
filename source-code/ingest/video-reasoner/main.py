@@ -6,7 +6,7 @@ from common.models import Settings, VideoReasoningResult
 from common.clients import S3Client, CosmosReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event, is_detector_handoff, parse_s3_uri
 from common.perception import perception_from_detector, EMPTY_PERCEPTION
-from common.retry_utils import TransientError
+from common.clients import TransientError
 from common.segment_index import SegmentIndexChecker
 
 
