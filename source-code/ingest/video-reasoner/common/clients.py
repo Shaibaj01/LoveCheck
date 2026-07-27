@@ -9,6 +9,18 @@ from opentelemetry import trace
 from .prompts import get_prompt_for_scenario
 from .reasoning_prompt import build_reasoning_prompt, normalize_reasoning_content
 
+_CONN_EXC = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+# 401/403 included: GPU/proxy auth blips and intermittent Forbidden must not soft-ack.
+_TRANSIENT_STATUS = (401, 403, 408, 429, 500, 502, 503, 504)
+
+
+class TransientError(Exception):
+    """Retryable failure — hand the retry off to the VastPipeline."""
+
 
 def _safe_non_negative_int(value: Any) -> int:
     """
@@ -143,40 +155,35 @@ class CosmosReasoningClient:
                     token if token.lower().startswith("bearer ") else f"Bearer {token}"
                 )
             
-            # Retry with exponential backoff
-            max_retries = 3
-            retry_delay = 2
-            
+            # One in-process retry on connection errors; transient HTTP -> TransientError
+            # so the handler raises and VastPipeline redelivers (no soft-ack).
             start_time = time.time()
-            response = None
-            for attempt in range(max_retries):
+            try:
+                response = self.session.post(
+                    self.cosmos_url, headers=headers, json=payload, timeout=600
+                )
+            except _CONN_EXC as exc:
+                logging.warning("[RETRY] connection error to %s; retrying once: %s", self.cosmos_url, exc)
                 try:
-                    if attempt > 0:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    
                     response = self.session.post(
-                        self.cosmos_url,
-                        headers=headers,
-                        json=payload,
-                        timeout=600  # 10 minute timeout for large videos
+                        self.cosmos_url, headers=headers, json=payload, timeout=600
                     )
-                    break
-                    
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                    if attempt == max_retries - 1:
-                        raise RuntimeError(f"Request failed after {max_retries} attempts: {e}")
-            
+                except _CONN_EXC as exc2:
+                    raise TransientError(f"connection failed after 1 retry: {exc2}") from exc2
+            if response.status_code in _TRANSIENT_STATUS:
+                raise TransientError(f"transient HTTP {response.status_code}: {response.text[:300]}")
+
             reasoning_time = time.time() - start_time
             span.set_attributes({
                 "reasoning_time_seconds": reasoning_time,
                 "http_status_code": response.status_code
             })
-            
+
             if response.status_code != 200:
-                error_text = response.text[:1000] if hasattr(response, 'text') else str(response.status_code)
-                raise RuntimeError(f"Cosmos API error ({response.status_code}): {error_text}")
-            
+                error_text = response.text[:1000] if hasattr(response, "text") else str(response.status_code)
+                # Prefer redelivery over silent drop for unexpected HTTP errors.
+                raise TransientError(f"Cosmos API error ({response.status_code}): {error_text}")
+
             response_data = response.json()
             
             choices = response_data.get("choices", [])

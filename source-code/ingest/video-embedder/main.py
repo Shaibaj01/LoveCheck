@@ -6,6 +6,19 @@ from common.embedding_client import EmbeddingClient
 from common.visual_embedding_client import VisualEmbeddingClient
 from common.s3_client import S3Client
 from common.handler_utils import parse_reasoning_event, resolve_embed_text, validate_embed_text
+from common.cosmos_embed_client import TransientError
+from common.segment_index import SegmentIndexChecker
+
+
+def _has_vdb_config(settings: Settings) -> bool:
+    return bool(
+        settings.vdbendpoint
+        and settings.vdbbucket
+        and settings.vdbschema
+        and settings.vdbaccesskey
+        and settings.vdbsecretkey
+        and settings.vdbcollection
+    )
 
 
 def init(ctx):
@@ -18,6 +31,7 @@ def init(ctx):
         ctx.visual_embedding_client = (
             VisualEmbeddingClient(settings) if settings.visual_embedding_enabled else None
         )
+        ctx.segment_index = SegmentIndexChecker(settings) if _has_vdb_config(settings) else None
 
 
 def handler(ctx, event: VastEvent):
@@ -40,6 +54,13 @@ def handler(ctx, event: VastEvent):
                 
                 source = reasoning_event.get("source", "")
                 filename = reasoning_event.get("filename", "")
+
+                # Skip redeliveries whose segment is already in VastDB before doing the
+                # expensive embed work (writer dedup would drop it anyway).
+                if ctx.segment_index and source and ctx.segment_index.is_indexed(source):
+                    ctx.logger.info(f"[SKIP] {filename} | already indexed in VastDB")
+                    return {"status": "skipped", "reason": "Already indexed"}
+
                 reasoning_content = reasoning_event.get("reasoning_content", "")
                 text_to_embed = resolve_embed_text(reasoning_content)
                 cosmos_model = reasoning_event.get("cosmos_model", "")
@@ -201,6 +222,15 @@ def handler(ctx, event: VastEvent):
             ctx.logger.info(f"[COMPLETE] {filename} | segment {segment_number}/{total_segments} | {len(embedding)} dims | metadata: camera={camera_id or 'none'}, type={capture_type or 'none'}")
             return result
             
+        except TransientError as e:
+            # Connection/5xx to the embed server after one retry: raise so the
+            # pipeline redelivers instead of acking a lost segment.
+            seg = source or filename or "unknown"
+            handler_span.set_attribute("error", True)
+            handler_span.set_attribute("error.message", str(e))
+            handler_span.record_exception(e)
+            ctx.logger.error(f"Embedding transient failure on {seg}, raising for pipeline retry: {e}")
+            raise
         except Exception as e:
             handler_span.set_attribute("error", True)
             handler_span.set_attribute("error.message", str(e))

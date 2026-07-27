@@ -6,6 +6,7 @@ from common.models import Settings, VideoReasoningResult
 from common.clients import S3Client, CosmosReasoningClient
 from common.handler_utils import parse_s3_event, should_process_event, is_detector_handoff, parse_s3_uri
 from common.perception import perception_from_detector, EMPTY_PERCEPTION
+from common.clients import TransientError
 from common.segment_index import SegmentIndexChecker
 
 
@@ -41,6 +42,10 @@ def handler(ctx, event: VastEvent):
     with ctx.tracer.start_as_current_span("Video Reasoner Handler") as handler_span:
         try:
             data = event.get_data()
+            if isinstance(data, dict) and data.get("status") in ("error", "skipped"):
+                reason = data.get("error") or data.get("reason") or "upstream error"
+                ctx.logger.warning(f"[SKIP] upstream {data.get('status')}: {reason}")
+                return {"status": "skipped", "reason": reason}
             event_type = getattr(event, 'get_type', lambda: 'element_trigger')()
             handler_span.set_attribute("event_type", event_type)
             detector_handoff = is_detector_handoff(data)
@@ -308,6 +313,15 @@ def handler(ctx, event: VastEvent):
                 ctx.segment_index.mark_indexed(source)
             return result
             
+        except TransientError as e:
+            # Connection/5xx to the reasoning model after one retry: raise so the
+            # pipeline redelivers instead of acking a lost segment.
+            seg = locals().get("source") or locals().get("filename") or "unknown"
+            handler_span.set_attribute("error", True)
+            handler_span.set_attribute("error.message", str(e))
+            handler_span.record_exception(e)
+            ctx.logger.error(f"Reasoning transient failure on {seg}, raising for pipeline retry: {e}")
+            raise
         except Exception as e:
             handler_span.set_attribute("error", True)
             handler_span.set_attribute("error.message", str(e))
