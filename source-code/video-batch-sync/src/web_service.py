@@ -12,6 +12,10 @@ Date: 2024
 import time
 import logging
 import threading
+import os
+import tempfile
+import uuid
+import shutil
 from datetime import datetime
 from flask import Flask, request, jsonify
 import boto3
@@ -20,6 +24,13 @@ from typing import Dict, List, Optional, Tuple
 from boto3.s3.transfer import TransferConfig
 
 from ingest_metadata import build_s3_ingest_metadata
+from video_chunker import (
+    DEFAULT_CHUNK_DURATION_SEC,
+    estimate_chunk_count,
+    iter_video_chunks,
+    normalize_chunk_duration,
+    probe_duration_sec,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -41,6 +52,8 @@ class BatchSyncJob:
         self.start_time = datetime.utcnow()
         self.end_time = None
         self.current_file = None
+        self.source_files_total = 0
+        self.source_files_completed = 0
 
 class BatchSyncService:
     def __init__(self):
@@ -218,20 +231,220 @@ class BatchSyncService:
             logger.error(f"Error copying file {source_key}: {error_msg}")
             return False, error_msg
     
-    def generate_dest_key(self, username: str, original_key: str) -> str:
-        """Generate destination key with timestamp: {username}/{timestamp}_{original_name}.mp4"""
-        # Extract original filename
+    def generate_dest_key(
+        self,
+        username: str,
+        original_key: str,
+        chunk_index: Optional[int] = None,
+    ) -> str:
+        """Generate destination key: {username}/{timestamp}_{name}[_chunk_NNNN].mp4"""
         original_name = original_key.split('/')[-1]
-        # Remove .mp4 extension if present
         if original_name.lower().endswith('.mp4'):
             original_name = original_name[:-4]
-        
-        # Generate timestamp
+
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        
-        # Generate destination key
-        dest_key = f"{username}/{timestamp}_{original_name}.mp4"
-        return dest_key
+        if chunk_index is not None:
+            return f"{username}/{timestamp}_{original_name}_chunk_{chunk_index:04d}.mp4"
+        return f"{username}/{timestamp}_{original_name}.mp4"
+
+    def _download_source_to_temp(
+        self,
+        source_client,
+        source_bucket: str,
+        source_key: str,
+    ) -> str:
+        suffix = os.path.splitext(source_key)[1] or ".mp4"
+        fd, path = tempfile.mkstemp(suffix=suffix, prefix="vss-src-")
+        os.close(fd)
+        logger.info("Downloading s3://%s/%s -> %s", source_bucket, source_key, path)
+        source_client.download_file(source_bucket, source_key, path)
+        return path
+
+    def _build_chunk_metadata(
+        self,
+        base_metadata: Dict[str, str],
+        *,
+        stream_id: str,
+        chunk_index: int,
+        chunk_start_sec: float,
+        chunk_duration_sec: float,
+        capture_interval_sec: float,
+        original_filename: str,
+    ) -> Dict[str, str]:
+        meta = dict(base_metadata)
+        meta.update({
+            "stream_id": stream_id,
+            "chunk_index": str(chunk_index),
+            "chunk_start_sec": f"{chunk_start_sec:.3f}",
+            "chunk_duration_sec": f"{chunk_duration_sec:.3f}",
+            "capture_interval": f"{capture_interval_sec:.3f}",
+            "ingest_kind": "batch_chunk",
+            "original-filename": original_filename,
+        })
+        return meta
+
+    def _should_split_chunks(self, config: dict) -> bool:
+        raw = config.get("chunk_duration_sec", DEFAULT_CHUNK_DURATION_SEC)
+        try:
+            return float(raw) > 0
+        except (TypeError, ValueError):
+            return True
+
+    def _chunk_duration_sec(self, config: dict) -> float:
+        return normalize_chunk_duration(config.get("chunk_duration_sec", DEFAULT_CHUNK_DURATION_SEC))
+
+    def _upload_delay_sec(self, config: dict) -> float:
+        """UI batch_size slider: seconds to wait between chunk/source uploads."""
+        try:
+            delay = float(config.get("batch_size", 1.0))
+        except (TypeError, ValueError):
+            delay = 1.0
+        return max(0.0, delay)
+
+    def _paced_wait(self, job: "BatchSyncJob", delay_sec: float) -> bool:
+        """Sleep up to delay_sec unless the job is stopped. Returns False if stopped."""
+        if delay_sec <= 0:
+            return True
+        deadline = time.time() + delay_sec
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return True
+            with self._lock:
+                current_job = self.jobs.get(job.job_id)
+                if not current_job or current_job.status != "running":
+                    job.status = "stopped"
+                    return False
+            time.sleep(min(1.0, remaining))
+
+    def _process_source_file(
+        self,
+        job: BatchSyncJob,
+        source_client,
+        dest_client,
+        config: dict,
+        source_key: str,
+        base_metadata: Dict[str, str],
+    ) -> None:
+        """Upload one source MP4 (split into chunks or copy whole). Updates job counters."""
+        split_chunks = self._should_split_chunks(config)
+        chunk_duration = self._chunk_duration_sec(config)
+
+        if not split_chunks:
+            job.total_files += 1
+            dest_key = self.generate_dest_key(job.username, source_key)
+            success, error_msg = self.copy_file_with_metadata(
+                source_client,
+                dest_client,
+                config['source_bucket'],
+                source_key,
+                config['dest_bucket'],
+                dest_key,
+                base_metadata,
+                config['source_s3_endpoint'],
+                config['dest_s3_endpoint'],
+            )
+            if success:
+                job.completed_files += 1
+            else:
+                job.failed_files += 1
+                job.failed_file_list.append({
+                    'source_key': source_key,
+                    'error': error_msg or 'Copy operation failed',
+                })
+            return
+
+        local_path = None
+        chunk_dir = None
+        stream_id = str(uuid.uuid4())
+        original_filename = source_key.split('/')[-1]
+
+        try:
+            local_path = self._download_source_to_temp(
+                source_client, config['source_bucket'], source_key
+            )
+            duration = probe_duration_sec(local_path)
+            total_chunks = estimate_chunk_count(duration, chunk_duration)
+            job.total_files += total_chunks
+            upload_delay = self._upload_delay_sec(config)
+
+            chunk_dir = tempfile.mkdtemp(prefix="vss-chunk-out-")
+            chunks_produced = 0
+            for chunk in iter_video_chunks(local_path, chunk_duration, work_dir=chunk_dir):
+                with self._lock:
+                    current_job = self.jobs.get(job.job_id)
+                    if not current_job or current_job.status != 'running':
+                        job.status = 'stopped'
+                        break
+
+                dest_key = self.generate_dest_key(job.username, source_key, chunk.chunk_index)
+                chunk_metadata = self._build_chunk_metadata(
+                    base_metadata,
+                    stream_id=stream_id,
+                    chunk_index=chunk.chunk_index,
+                    chunk_start_sec=chunk.chunk_start_sec,
+                    chunk_duration_sec=chunk.chunk_duration_sec,
+                    capture_interval_sec=chunk_duration,
+                    original_filename=original_filename,
+                )
+
+                try:
+                    with open(chunk.path, "rb") as chunk_file:
+                        dest_client.upload_fileobj(
+                            chunk_file,
+                            config['dest_bucket'],
+                            dest_key,
+                            ExtraArgs={'Metadata': chunk_metadata},
+                            Config=TransferConfig(
+                                multipart_threshold=8 * 1024 * 1024,
+                                multipart_chunksize=8 * 1024 * 1024,
+                                max_concurrency=1,
+                            ),
+                        )
+                    job.completed_files += 1
+                    chunks_produced += 1
+                    if (
+                        upload_delay > 0
+                        and chunk.chunk_index + 1 < total_chunks
+                        and job.status == "running"
+                    ):
+                        logger.info(
+                            "Pacing: waiting %.1fs before next chunk upload (rate limit)",
+                            upload_delay,
+                        )
+                        if not self._paced_wait(job, upload_delay):
+                            break
+                except Exception as exc:
+                    job.failed_files += 1
+                    job.failed_file_list.append({
+                        'source_key': source_key,
+                        'chunk_index': chunk.chunk_index,
+                        'error': str(exc),
+                    })
+                finally:
+                    try:
+                        os.remove(chunk.path)
+                    except OSError:
+                        pass
+
+            if chunks_produced == 0 and job.status == 'running':
+                job.failed_files += 1
+                job.failed_file_list.append({
+                    'source_key': source_key,
+                    'error': 'No chunks produced from source video',
+                })
+        except Exception as exc:
+            job.failed_files += 1
+            job.failed_file_list.append({'source_key': source_key, 'error': str(exc)})
+            logger.error("Chunking failed for %s: %s", source_key, exc, exc_info=True)
+        finally:
+            if local_path and os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except OSError:
+                    pass
+            if chunk_dir and os.path.isdir(chunk_dir):
+                shutil.rmtree(chunk_dir, ignore_errors=True)
     
     def run_batch_sync(self, job: BatchSyncJob):
         """Run batch sync operation in background thread"""
@@ -265,9 +478,10 @@ class BatchSyncService:
                 config['source_prefix']
             )
             
-            job.total_files = len(mp4_files)
+            job.total_files = 0
+            job.source_files_total = len(mp4_files)
             
-            if job.total_files == 0:
+            if job.source_files_total == 0:
                 logger.warning(f"No MP4 files found in s3://{config['source_bucket']}/{config['source_prefix']}")
                 job.status = 'completed'
                 job.end_time = datetime.utcnow()
@@ -290,13 +504,8 @@ class BatchSyncService:
                 custom_prompt=config.get('custom_prompt'),
             )
             
-            # Copy files with rate limiting
-            # batch_size is now delay in seconds between files (not files per second)
-            # If user provides delay directly, use it; otherwise convert from old "files per second" format
-            delay_between_files = config.get('batch_size', 1.0)
-            if delay_between_files <= 0:
-                delay_between_files = 0  # No delay
-            
+            upload_delay = self._upload_delay_sec(config)
+
             for file_info in mp4_files:
                 # Check if job was stopped
                 with self._lock:
@@ -310,41 +519,37 @@ class BatchSyncService:
                 source_key = file_info['key']
                 job.current_file = source_key
                 
-                # Generate destination key
-                dest_key = self.generate_dest_key(job.username, source_key)
-                
-                # Copy file
-                success, error_msg = self.copy_file_with_metadata(
+                self._process_source_file(
+                    job,
                     source_client,
                     dest_client,
-                    config['source_bucket'],
+                    config,
                     source_key,
-                    config['dest_bucket'],
-                    dest_key,
                     metadata,
-                    config['source_s3_endpoint'],
-                    config['dest_s3_endpoint']
                 )
-                
-                if success:
-                    job.completed_files += 1
-                else:
-                    job.failed_files += 1
-                    job.failed_file_list.append({
-                        'source_key': source_key,
-                        'error': error_msg or 'Copy operation failed'
-                    })
-                
-                # Rate limiting: wait before next file
-                if delay_between_files > 0 and job.completed_files + job.failed_files < job.total_files:
-                    time.sleep(delay_between_files)
+                job.source_files_completed += 1
+
+                if upload_delay > 0 and job.source_files_completed < job.source_files_total:
+                    logger.info(
+                        "Pacing: waiting %.1fs before next source video (rate limit)",
+                        upload_delay,
+                    )
+                    if not self._paced_wait(job, upload_delay):
+                        break
             
             # Mark job as completed
             job.status = 'completed'
             job.end_time = datetime.utcnow()
             job.current_file = None
             
-            logger.info(f"Batch sync completed for {job.username}: {job.completed_files}/{job.total_files} files")
+            logger.info(
+                "Batch sync completed for %s: %s chunks uploaded, %s failed (%s/%s source files)",
+                job.username,
+                job.completed_files,
+                job.failed_files,
+                job.source_files_completed,
+                job.source_files_total,
+            )
             
         except Exception as e:
             logger.error(f"Error in batch sync job {job.job_id}: {e}", exc_info=True)
@@ -407,7 +612,10 @@ class BatchSyncService:
                 'current_file': job.current_file,
                 'source_bucket': job.config.get('source_bucket'),
                 'source_prefix': job.config.get('source_prefix'),
-                'dest_bucket': job.config.get('dest_bucket')
+                'dest_bucket': job.config.get('dest_bucket'),
+                'source_files_total': job.source_files_total,
+                'source_files_completed': job.source_files_completed,
+                'chunk_duration_sec': job.config.get('chunk_duration_sec', DEFAULT_CHUNK_DURATION_SEC),
             }
     
     def stop_batch_sync(self, username: str) -> Tuple[bool, str]:

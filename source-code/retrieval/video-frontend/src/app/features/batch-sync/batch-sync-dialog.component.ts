@@ -45,8 +45,9 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
 
       <div class="dialog-content">
         <p class="description">
-          Copy MP4 files from a source S3 bucket to the destination bucket using server-side copy operations.
-          Files are automatically processed by the ingest pipeline after copying.
+          Copy MP4 files from a source S3 bucket to the destination ingest bucket.
+          Each video is split into fixed-length chunks (like live streaming) before upload.
+          Chunks are processed automatically by the ingest pipeline.
         </p>
 
         <form [formGroup]="syncForm" class="sync-form">
@@ -143,7 +144,15 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
             <mat-slider min="0.1" max="60" step="0.1" class="delay-slider">
               <input matSliderThumb formControlName="batch_size">
             </mat-slider>
+            <span class="field-hint">Delay between chunk uploads and between source videos (rate limiting)</span>
           </div>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Chunk duration (seconds)</mat-label>
+            <input matInput type="number" formControlName="chunk_duration_sec" min="0" max="600" step="1">
+            <mat-icon matSuffix>movie</mat-icon>
+            <span class="field-hint">Default 30s. Set 0 to upload whole files without splitting.</span>
+          </mat-form-field>
 
           <!-- Video Metadata -->
           <h3 class="section-title">
@@ -690,6 +699,7 @@ export class BatchSyncDialogComponent implements OnInit {
       source_bucket_path: ['', [Validators.required]],
       // Batch config
       batch_size: [1, [Validators.required, Validators.min(0.1), Validators.max(60)]],
+      chunk_duration_sec: [30, [Validators.required, Validators.min(0), Validators.max(600)]],
       // Metadata
       tags: [''],
       isPrivate: [false],
@@ -886,6 +896,7 @@ export class BatchSyncDialogComponent implements OnInit {
       source_prefix: prefix,
       source_use_ssl: formValue.source_s3_endpoint?.startsWith('https://'),
       batch_size: formValue.batch_size,
+      chunk_duration_sec: Number(formValue.chunk_duration_sec ?? 30),
       is_public: !formValue.isPrivate,
       tags: tags.length > 0 ? tags : undefined,
       allowed_users: allowedUsers.length > 0 ? allowedUsers : undefined,

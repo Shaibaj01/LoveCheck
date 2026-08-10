@@ -58,7 +58,18 @@ class BatchSyncStartRequest(BaseModel):
     dest_use_ssl: Optional[bool] = Field(None, description="Use SSL for destination S3 endpoint")
     
     # Batch sync configuration
-    batch_size: float = Field(default=1.0, ge=0.1, le=60.0, description="Delay between files in seconds (rate limiting)")
+    batch_size: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=60.0,
+        description="Delay in seconds between chunk uploads and between source videos (rate limiting)",
+    )
+    chunk_duration_sec: float = Field(
+        default=30.0,
+        ge=0,
+        le=600,
+        description="Split each source video into chunks of this many seconds (0 = copy whole file)",
+    )
     
     # Video metadata (same for all files)
     is_public: bool = Field(default=True, description="Make videos publicly accessible")
@@ -200,7 +211,7 @@ async def start_batch_sync(
     Start batch sync operation
     
     Copies MP4 files from source S3 bucket to destination S3 bucket
-    using server-side copy operations.
+    using server-side copy (whole file) or ffmpeg chunking when chunk_duration_sec > 0.
     
     Args:
         request: Batch sync start configuration
@@ -237,6 +248,7 @@ async def start_batch_sync(
             "dest_bucket": dest_bucket,
             "dest_use_ssl": dest_use_ssl,
             "batch_size": request.batch_size,
+            "chunk_duration_sec": request.chunk_duration_sec,
             "is_public": request.is_public,
             "tags": request.tags or [],
             "allowed_users": request.allowed_users or [],
@@ -248,7 +260,8 @@ async def start_batch_sync(
         }
         
         logger.info(f"[BATCH_SYNC] Destination: s3://{dest_bucket}")
-        logger.info(f"[BATCH_SYNC] Delay between files: {request.batch_size} seconds")
+        logger.info(f"[BATCH_SYNC] Upload delay (chunks + source videos): {request.batch_size} seconds")
+        logger.info(f"[BATCH_SYNC] Chunk duration: {request.chunk_duration_sec} seconds")
         logger.info(f"[BATCH_SYNC] Metadata: camera_id={request.camera_id}, capture_type={request.capture_type}, location={request.location}, scenario={request.scenario}, custom_prompt={'set' if request.custom_prompt else 'none'}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:

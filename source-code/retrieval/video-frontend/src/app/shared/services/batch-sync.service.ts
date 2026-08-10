@@ -29,7 +29,10 @@ export interface BatchSyncStartRequest {
   dest_use_ssl?: boolean;
   
   // Batch sync configuration
+  /** Seconds to wait between chunk uploads and between source videos (UI rate-limit slider). */
   batch_size: number;
+  /** Seconds per chunk (default 30). Use 0 to copy whole files without splitting. */
+  chunk_duration_sec?: number;
   
   // Video metadata
   is_public: boolean;
@@ -59,6 +62,9 @@ export interface BatchSyncStatus {
     source_bucket?: string;
     source_prefix?: string;
     dest_bucket?: string;
+    source_files_total?: number;
+    source_files_completed?: number;
+    chunk_duration_sec?: number;
   } | null;
   message?: string;
 }
