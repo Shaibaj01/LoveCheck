@@ -42,9 +42,23 @@ import { interval } from 'rxjs';
             </div>
 
             <div class="progress-row">
-              <span class="label">Progress:</span>
-              <span class="value">{{ status()?.completed_files || 0 }} / {{ status()?.total_files || 0 }} files</span>
+              <span class="label">Chunks:</span>
+              <span class="value">{{ status()?.completed_files || 0 }} / {{ status()?.total_files || 0 }} uploaded</span>
             </div>
+
+            @if (status()?.source_files_total) {
+              <div class="progress-row">
+                <span class="label">Source videos:</span>
+                <span class="value">{{ status()?.source_files_completed || 0 }} / {{ status()?.source_files_total }} processed</span>
+              </div>
+            }
+
+            @if (status()?.chunk_duration_sec != null && status()?.chunk_duration_sec > 0) {
+              <div class="progress-row">
+                <span class="label">Chunk size:</span>
+                <span class="value">{{ status()?.chunk_duration_sec }}s</span>
+              </div>
+            }
 
             <div class="destination-row">
               <span class="label">Source:</span>
