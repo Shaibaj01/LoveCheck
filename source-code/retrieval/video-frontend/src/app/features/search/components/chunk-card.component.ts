@@ -23,8 +23,8 @@ import {
   extractHighlightTerms,
   highlightQueryTerms,
   objectMatchesQuery,
-  chunkObjectTags,
   previewCaption,
+  previewObjectTags,
 } from '../../../shared/utils/query-highlight.util';
 import { explorePlayLabel as formatExplorePlayLabel } from '../../../shared/utils/chunk-display.util';
 import { formatAbsoluteTime, formatUploadBadgeTime } from '../../../shared/utils/time.util';
@@ -763,7 +763,7 @@ export class ChunkCardComponent implements OnChanges {
   }
 
   objectTags(): string[] {
-    return chunkObjectTags(this.chunk.timeline, 8);
+    return previewObjectTags(this.chunk, 8);
   }
 
   explorePlayLabel(): string {
