@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Node (frontend)
+node_modules/
+dist/
+
+# Local symlinks to shared/ingest_metadata.py (see scripts/link-ingest-metadata.sh)
+source-code/retrieval/video-backend/src/ingest_metadata.py
+source-code/video-streaming/src/ingest_metadata.py
+source-code/video-batch-sync/src/ingest_metadata.py
+
+# Local secrets / certs (do not commit)
+*.pem
+*.key
+deployments/vss-k8s-application/backend-secret.yaml
+# Filled DataEngine secrets (keep *-secret-file-template.yaml in git)
+deployments/dataengine-vss-ingest-pipeline/*secret-file.yaml
+
+# YOLO weights downloaded on GPU host (yolo11s.pt, etc.)
+scripts/vss-blueprint-models/**/*.pt

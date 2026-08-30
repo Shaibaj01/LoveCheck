@@ -2,8 +2,10 @@
 Video management API endpoints
 """
 import asyncio
+import gzip
+import json
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, status, Query, UploadFile, File, Form, Request, Response
 from fastapi.responses import StreamingResponse
 from src.services.auth_service import CurrentUser
@@ -14,6 +16,8 @@ from src.services.s3_service import (
 )
 from src.services.vastdb_service import get_vastdb_service
 from src.config import get_settings
+from src.schemas.explore import ExploreResponse, VideoSynthesizeRequest, VideoSynthesizeResponse
+from src.ingest_metadata import parse_comma_list, truncate_custom_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/videos", tags=["Videos"])
@@ -97,14 +101,14 @@ async def upload_video(
     await sem.acquire()
     try:
         s3_service = get_s3_service()
-        tags_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
-        allowed_users_list = [u.strip() for u in allowed_users.split(',') if u.strip()] if allowed_users else []
+        tags_list = parse_comma_list(tags)
+        allowed_users_list = parse_comma_list(allowed_users)
         scenario_value = scenario.strip() if scenario else ""
 
         camera_id_value = camera_id.strip() if camera_id else None
         capture_type_value = capture_type.strip() if capture_type else None
         location_value = location.strip() if location else None
-        custom_prompt_value = custom_prompt.strip()[:800] if custom_prompt else None
+        custom_prompt_value = truncate_custom_prompt(custom_prompt)
         
         object_key = await s3_service.upload_file(
             file=file,
@@ -304,6 +308,149 @@ async def get_playback_presigned_url(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate playback URL: {str(e)}",
+        )
+
+
+CHUNK_SUMMARIZE_SYSTEM_PROMPT = """You are a video analyst summarizing ONE parent video chunk from segment evidence only.
+
+Output markdown with:
+**Overview** — 2–4 factual sentences covering the full clip in chronological order.
+
+**Timeline** — up to 8 bullets: `start–end sec` — what happened (use segment timestamps from evidence).
+
+Rules:
+- Use only facts from the provided segment evidence.
+- Do not invent people, actions, or times outside segment ranges.
+- No generic filler (urban setting, daylight, clear skies).
+- Stay under ~250 words unless the user question requires more detail."""
+
+
+@router.get("/explore", response_model=ExploreResponse)
+async def explore_videos(
+    current_user: CurrentUser,
+    scope: str = Query(default="all", pattern="^(all|mine|public)$"),
+    date: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload date (YYYY-MM-DD)",
+    ),
+    location: Optional[str] = Query(
+        default=None,
+        description="Filter chunks by upload metadata location label",
+    ),
+    limit: int = Query(default=48, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Browse indexed video chunks by upload date without a search query."""
+    logger.info(
+        "Explore request from %s: scope=%s date=%s limit=%s offset=%s",
+        current_user.username,
+        scope,
+        date,
+        limit,
+        offset,
+    )
+    vastdb = get_vastdb_service()
+    payload = vastdb.list_explore_chunks(
+        current_user, scope=scope, date=date, location=location, limit=limit, offset=offset
+    )
+    return ExploreResponse(**payload)
+
+
+@router.post("/synthesize", response_model=VideoSynthesizeResponse)
+async def synthesize_video_chunk(
+    body: VideoSynthesizeRequest,
+    current_user: CurrentUser,
+):
+    """On-demand LLM synthesis over all segments for one parent video (no VastDB write)."""
+    from datetime import datetime, timezone
+
+    from src.services.llm_service import get_llm_service
+
+    logger.info(
+        "Synthesize request from %s: video='%s'",
+        current_user.username,
+        body.original_video,
+    )
+    vastdb = get_vastdb_service()
+    segments = vastdb.list_segments_for_video(body.original_video, current_user)
+    if not segments:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No accessible segments found for video: {body.original_video}",
+        )
+
+    capped = segments[: body.max_segments]
+    top_results = []
+    for seg in capped:
+        top_results.append({
+            "summary": seg.get("reasoning_content") or "",
+            "reasoning_content": seg.get("reasoning_content") or "",
+            "original_video": body.original_video,
+            "segment_number": seg.get("segment_number"),
+            "segment_start_sec": seg.get("segment_start_sec"),
+            "segment_end_sec": seg.get("segment_end_sec"),
+            "similarity_score": 1.0,
+        })
+
+    llm = get_llm_service()
+    synthesis = llm.synthesize_search_results(
+        query=body.question,
+        top_results=top_results,
+        custom_system_prompt=body.system_prompt or CHUNK_SUMMARIZE_SYSTEM_PROMPT,
+    )
+
+    return VideoSynthesizeResponse(
+        original_video=body.original_video,
+        segment_count=len(segments),
+        segments_used=len(capped),
+        answer=synthesis.get("response", ""),
+        llm_synthesis=synthesis,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("s3://"):
+        raise ValueError(f"Invalid S3 URI: {uri}")
+    rest = uri[5:]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        raise ValueError(f"Invalid S3 URI: {uri}")
+    return bucket, key
+
+
+@router.get("/detections")
+async def get_video_detections(
+    source: str = Query(..., description="Segment clip S3 URI (source)"),
+    current_user: CurrentUser = None,
+) -> Dict[str, Any]:
+    """Load YOLO detection sidecar JSON for a segment (bbox overlay)."""
+    logger.info("Detections request from %s: source=%s", current_user.username, source)
+    vastdb_service = get_vastdb_service()
+    segment = vastdb_service.get_video_by_source(source, current_user)
+    if not segment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found")
+
+    sidecar_uri = (segment.detection_sidecar_uri or "").strip()
+    if not sidecar_uri:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No detection sidecar for segment")
+
+    try:
+        bucket, key = _parse_s3_uri(sidecar_uri)
+        raw = get_s3_service().get_object_bytes(bucket, key)
+        if key.lower().endswith(".gz"):
+            raw = gzip.decompress(raw)
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Sidecar JSON must be an object")
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to load detections for %s: %s", source, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load detections: {exc}",
         )
 
 

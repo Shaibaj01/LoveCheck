@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 from urllib.parse import unquote
 
 
@@ -66,4 +66,22 @@ def should_process_event(key: str, event_name: str) -> Tuple[bool, str]:
         return False, "Not a segment - skipping (only process segments)"
     
     return True, ""
+
+
+def is_detector_handoff(event_data: Dict[str, Any]) -> bool:
+    return (
+        isinstance(event_data, dict)
+        and event_data.get("detector_status") == "success"
+        and str(event_data.get("source", "")).startswith("s3://")
+    )
+
+
+def parse_s3_uri(source: str) -> Dict[str, str]:
+    if not source.startswith("s3://"):
+        raise ValueError(f"Invalid S3 URI: {source}")
+    rest = source[5:]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        raise ValueError(f"Invalid S3 URI: {source}")
+    return {"bucket": bucket, "key": unquote(key)}
 

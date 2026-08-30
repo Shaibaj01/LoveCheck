@@ -73,7 +73,6 @@ export class AuthService {
     this.httpClient.post<LoginResponse>(`${environment.apiUrl}/auth/login`, loginData)
       .subscribe({
         next: (response) => {
-          // Login succeeded - store token and navigate
           this.state.update((state) => ({ 
             ...state, 
             token: response.access_token, 

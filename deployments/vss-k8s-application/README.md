@@ -13,11 +13,15 @@ Deploy the VSS Blueprint web application to Kubernetes.
   - VMS hostname and tenant name for user authentication (see [User Authentication](../../source-code/retrieval/video-backend/README.md))
 
 - **Storage resources:**
-  - S3 buckets: `video-chunks` and `video-chunks-segments`
-  - VastDB bucket: `processed-videos-db`
+  - S3 buckets: `vss-chunks` and `vss-chunks-segments` (segmenter writes `{upload_bucket}-segments` by default)
+  - VastDB bucket: `vss-db`, schema `vss-schema`, tables `vss-collection` and `vss-prompts-events`
 
 - **AI/ML services:**
-  - NVIDIA NIM Endpoints or API key (for embeddings and LLM)
+  - Cosmos-Embed1 NIM (hybrid search embeddings)
+  - Cosmos-Reason2 NIM (search/explore synthesis; same host as ingest reasoner)
+  - YOLO11 infer service (ingest `video-detector`)
+  - Optional NVIDIA Cloud API key when `embedding_local_nim: false`
+  - GPU host deploy: [vss-blueprint-models](../../scripts/vss-blueprint-models/README.md)
 
 - **Network access:**
   - Ability to modify `/etc/hosts` on your local machine
@@ -26,42 +30,45 @@ Deploy the VSS Blueprint web application to Kubernetes.
 
 ## Step 1: Configure Backend Secret
 
-Edit `backend-secret.yaml` with your credentials:
+Copy the example and fill in credentials locally (**do not commit** `backend-secret.yaml`):
 
 ```bash
+cp backend-secret.yaml.example backend-secret.yaml
 vim backend-secret.yaml
 ```
 
 | Section | Key Settings |
 |---------|--------------|
-| **VastDB** | `vdb_endpoint`, `vdb_bucket`, `vdb_schema`, `vdb_collection`, credentials |
-| **S3** | `s3_endpoint` (must match tenant), `s3_upload_bucket`, `s3_segments_bucket`, credentials |
-| **NVIDIA** | `nvidia_api_key`, `embedding_model`, `llm_model_name`, `embedding_local_nim`, `llm_local_nim` |
+| **VastDB** | `vdb_endpoint`, `vdb_bucket` (`vss-db`), `vdb_schema` (`vss-schema`), `vdb_collection` (`vss-collection`), `vdb_prompts_collection` (`vss-prompts-events`), credentials |
+| **S3** | `s3_endpoint` (must match tenant), `s3_upload_bucket` (`vss-chunks`), `s3_segments_bucket` (`vss-chunks-segments`), credentials |
+| **Cosmos-Embed1** | `embedding_host`, `embedding_port`, `embedding_model`, `embedding_local_nim`, `nvidia_api_key` |
+| **Cosmos-Reason2** | `cosmos_host`, `cosmos_port`, `cosmoshttpscheme`, `cosmos_model`, `synthesis_*` |
+| **UI** | `display_timezone` (IANA, e.g. `Asia/Jerusalem`) |
 | **Auth** | `vast_host`, `tenant_name`, `jwt_secret` (see [setup](../../source-code/retrieval/video-backend/README.md#user-authentication)) |
 
 ---
 
 ## Step 2: Docker Images
 
-Build the imager using Dockerfile and replace `your.registry` in each `*-deployment.yaml` with your own registry host.
-From the repo root (`vss-blueprint/`), build and push (adjust tags and platform as needed for your cluster):
+Build images with the helper script (recommended) or manually. Replace registry paths in each `*-deployment.yaml`.
 
 ```bash
-# Backend
-docker build -t your.registry/vss-video-backend:v1 -f source-code/retrieval/video-backend/Dockerfile source-code/retrieval/video-backend
-docker push your.registry/vss-video-backend:v1
+# Recommended — sets REGISTRY/TAG; builds backend, frontend, streaming, batch-sync
+REGISTRY=your.registry/vss TAG=v1 source-code/scripts/build-retrieval-images.sh
+```
 
-# Frontend
-docker build -t your.registry/vss-video-frontend:v1 -f source-code/retrieval/video-frontend/Dockerfile source-code/retrieval/video-frontend
-docker push your.registry/vss-video-frontend:v1
+Manual builds from `source-code/` as context (see [shared README](../../source-code/shared/README.md#docker-builds)):
 
-# Video streaming
-docker build -t your.registry/vss-video-streaming:v1 -f source-code/video-streaming/Dockerfile source-code/video-streaming
-docker push your.registry/vss-video-streaming:v1
+```bash
+cd source-code
 
-# Video batch sync
-docker build -t your.registry/vss-video-batch-sync:v1 -f source-code/video-batch-sync/Dockerfile source-code/video-batch-sync
-docker push your.registry/vss-video-batch-sync:v1
+docker buildx build -f retrieval/video-backend/Dockerfile -t your.registry/vss-video-backend:v2 --push .
+
+docker buildx build -f retrieval/video-frontend/Dockerfile -t your.registry/vss-video-frontend:v2 --push retrieval/video-frontend
+
+docker buildx build -f video-streaming/Dockerfile -t your.registry/vss-video-streaming:v2 --push .
+
+docker buildx build -f video-batch-sync/Dockerfile -t your.registry/vss-video-batch-sync:v2 --push .
 ```
 
 If your cluster requires a specific architecture (for example `linux/amd64`), add `--platform linux/amd64` to each `docker build`. Ensure your registry is reachable from the cluster (image pull secrets if the registry is private).
@@ -125,7 +132,7 @@ http://video-lab.<cluster_name>.vastdata.com
 
 ### Authentication fails
 - Verify `s3_endpoint` matches tenant
-- See [Auth Troubleshooting](../../source-code/retrieval/video-backend/README.md#troubleshooting)
+- See [User Authentication](../../source-code/retrieval/video-backend/README.md#user-authentication)
 
 ### View Logs
 

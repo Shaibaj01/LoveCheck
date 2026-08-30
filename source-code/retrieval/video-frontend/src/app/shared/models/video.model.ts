@@ -1,13 +1,57 @@
+export interface TimelineSegment {
+  segment_number: number;
+  segment_start_sec: number;
+  segment_end_sec: number;
+  source: string;
+  reasoning_content: string;
+  object_classes?: string;
+  object_counts?: string | null;
+  perception_ok?: boolean;
+  similarity_score: number;
+  is_search_match: boolean;
+  query_highlight: boolean;
+  is_best_match: boolean;
+}
+
+export interface ChunkSearchResult {
+  original_video: string;
+  filename: string;
+  chunk_duration_sec: number;
+  total_segments: number;
+  similarity_score: number;
+  best_segment_number: number;
+  best_match_start_sec: number;
+  best_match_end_sec: number;
+  preview_source: string;
+  reasoning_content: string;
+  is_public: boolean;
+  upload_timestamp: string;
+  tags: string[];
+  matched_segment_count: number;
+  query: string;
+  timeline: TimelineSegment[];
+  camera_id?: string;
+  capture_type?: string;
+  location?: string;
+  cosmos_model?: string;
+  tokens_used?: number;
+  cached_prompt_tokens?: number | null;
+  stream_id?: string | null;
+  chunk_index?: number | null;
+  stream_chunk_total?: number | null;
+}
+
 export interface VideoSearchResult {
   filename: string;
   source: string;
   reasoning_content: string;
-  video_url: string;
   is_public: boolean;
   upload_timestamp: string;
   duration: number;
   segment_number: number;
   total_segments: number;
+  segment_start_sec: number;
+  segment_end_sec: number;
   original_video: string;
   tags: string[];
   similarity_score: number;
@@ -28,7 +72,6 @@ export interface SearchRequest {
   tags?: string[];
   include_public?: boolean;
   public_only?: boolean;  // When true, only public videos (scope "Public Only")
-  use_llm?: boolean;
   system_prompt?: string;  // Custom LLM system prompt (overrides backend default)
   time_filter?: string;  // 'all', '5m', '15m', '1h', '24h', '7d', 'custom'
   custom_start_date?: string;  // ISO 8601 format for custom date range
@@ -36,6 +79,7 @@ export interface SearchRequest {
   metadata_filters?: Record<string, any>;  // Dynamic metadata filters
   min_similarity?: number;  // Minimum similarity score threshold (0.1 - 0.8)
   llm_top_n?: number;  // Number of results to send to LLM for analysis
+  hybrid_text_weight?: number;
 }
 
 export interface LLMSynthesis {
@@ -50,7 +94,9 @@ export interface LLMSynthesis {
 
 export interface SearchResponse {
   results: VideoSearchResult[];
+  chunk_results?: ChunkSearchResult[];
   total: number;
+  chunk_total?: number;
   query: string;
   embedding_time_ms: number;
   search_time_ms: number;
@@ -84,5 +130,47 @@ export interface MetadataField {
 export interface MetadataSchema {
   schema: MetadataField[];
   table: string;
+}
+
+export type VideoScope = 'all' | 'mine' | 'public';
+
+export interface ExploreUploadDay {
+  date: string;
+  chunk_count: number;
+}
+
+export interface ExploreLocationItem {
+  label: string;
+  chunk_count: number;
+}
+
+export interface ExploreResponse {
+  chunks: ChunkSearchResult[];
+  total: number;
+  uploads_by_day: ExploreUploadDay[];
+  locations?: ExploreLocationItem[];
+  scope: VideoScope;
+  selected_date?: string | null;
+  selected_location?: string | null;
+  limit: number;
+  offset: number;
+  table_available?: boolean;
+  table_message?: string | null;
+}
+
+export interface VideoSynthesizeRequest {
+  original_video: string;
+  question?: string;
+  max_segments?: number;
+  system_prompt?: string;
+}
+
+export interface VideoSynthesizeResponse {
+  original_video: string;
+  segment_count: number;
+  segments_used: number;
+  answer: string;
+  llm_synthesis: LLMSynthesis;
+  generated_at: string;
 }
 

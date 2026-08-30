@@ -7,8 +7,9 @@ A VAST DataEngine serverless function that stores video embeddings and metadata 
 - Receives vector embeddings and metadata from the `video-embedder` function
 - Stores embeddings in VastDB as vector columns
 - Stores metadata (camera_id, capture_type, location, etc.) as regular columns
-- Stores reasoning text for display in search results
-- Creates database records for each video segment
+- Stores reasoning text for display and text search
+- Stores YOLO `object_classes` and peak concurrent `object_counts`
+- Creates database records for each video segment (timeline: `segment_start_sec`, `segment_end_sec`; grouping: `original_video` parent S3 URI)
 
 ## Easy to Adjust
 
@@ -37,7 +38,7 @@ Configure in `ingest/vss-video-ingest-secret-template.yaml`:
 ## What Runs It
 
 - **Runtime**: VAST DataEngine serverless runtime
-- **Image**: `your.registry/vss-vastdb-writer:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-ingest-function-images))
+- **Image**: `your.registry/vss-vastdb-writer:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-dataengine-function-images))
 - **Resources**: Configure CPU/Memory in DataEngine UI pipeline settings
 - **Dependencies**: Python 3.11, ADBC driver for VastDB, libadbc_driver_vastdb.so
 

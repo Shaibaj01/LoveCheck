@@ -6,19 +6,38 @@ from pydantic import BaseModel
 
 class Settings(BaseModel):
     """Configuration settings for reasoning embedder"""
-    # Embedding settings (NVIDIA NIM)
+    # S3 (segment download for visual embeddings)
+    s3accesskey: str
+    s3secretkey: str
+    s3endpoint: str
+
+    # Cosmos-Embed1 NIM (text + visual)
     embeddinghost: str
     embeddingport: int
     embeddinghttpscheme: str = "http"
     embedding_local_nim: bool = False
     embeddingmodel: str
     embeddingdimensions: int
-    nvidia_api_key: Optional[str] = None  # Optional NVIDIA Cloud API key
+    nvidia_api_key: Optional[str] = None
+    # Optional Bearer token for hosted/routed embedding APIs (sent as Authorization when set)
+    embedding_authorization: str = ""
+
+    # Visual embedding settings (multimodal NIM)
+    visual_embedding_enabled: bool = True
+    visual_embedding_model: str = "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1"
+    visual_embedding_dimensions: int = 256
+    # Optional VastDB settings for idempotency checks
+    vdbendpoint: str = ""
+    vdbbucket: str = ""
+    vdbschema: str = ""
+    vdbaccesskey: str = ""
+    vdbsecretkey: str = ""
+    vdbcollection: str = ""
     
     @classmethod
     def from_ctx_secrets(cls, secrets: Dict[str, str]) -> 'Settings':
         """Load settings from runtime context secrets (uses model defaults for missing optional fields)"""
-        raw = secrets["videoreasonsecret"]
+        raw = secrets["vss2-secret"]
         config = {field: raw[field] for field in cls.__annotations__.keys() if field in raw}
         return cls(**config)
 
@@ -32,7 +51,6 @@ class ReasoningEvent(BaseModel):
     tokens_used: int
     cached_prompt_tokens: int = 0
     processing_time: float
-    video_url: str
     status: str = "success"
     
     # Metadata fields (passed through pipeline)
@@ -43,6 +61,8 @@ class ReasoningEvent(BaseModel):
     segment_number: int | None = None
     total_segments: int | None = None
     segment_duration: float | None = None
+    segment_start_sec: float | None = None
+    segment_end_sec: float | None = None
     original_video: str | None = None
 
     # Stream capture metadata (from video-streaming service)
@@ -52,6 +72,12 @@ class ReasoningEvent(BaseModel):
     
     # Analysis scenario metadata
     scenario: str | None = None
+
+    perception_json: str | None = None
+    object_classes: str | None = None
+    object_counts: str | None = None
+    max_detection_conf: float | None = None
+    perception_ok: bool = False
 
 
 class EmbeddingResult(BaseModel):
@@ -62,11 +88,14 @@ class EmbeddingResult(BaseModel):
     embedding: List[float]
     embedding_model: str
     embedding_dimensions: int
+    visual_embedding: List[float] = []
+    visual_embedding_model: str = ""
+    visual_embedding_dimensions: int = 0
+    visual_embedding_ok: bool = False
     cosmos_model: str
     tokens_used: int
     cached_prompt_tokens: int = 0
     processing_time: float
-    video_url: str
     status: str = "success"
     
     # Metadata fields (passed to vastdb-writer)
@@ -77,6 +106,8 @@ class EmbeddingResult(BaseModel):
     segment_number: int | None = None
     total_segments: int | None = None
     segment_duration: float | None = None
+    segment_start_sec: float | None = None
+    segment_end_sec: float | None = None
     original_video: str | None = None
     
     # Stream capture metadata (from video-streaming service)
@@ -86,4 +117,10 @@ class EmbeddingResult(BaseModel):
     
     # Analysis scenario metadata
     scenario: str | None = None
+
+    perception_json: str | None = None
+    object_classes: str | None = None
+    object_counts: str | None = None
+    max_detection_conf: float | None = None
+    perception_ok: bool = False
 

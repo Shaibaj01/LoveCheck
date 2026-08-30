@@ -5,7 +5,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
 ## Features
 
 - Captures YouTube streams and VOD videos
-- Splits into configurable segments (default: 10 seconds)
+- Splits into configurable chunks (default: 30 seconds)
 - Uploads to S3 with metadata
 - Auto-triggers ingest pipeline
 - VOD auto-stops when video ends; live streams run until stopped
@@ -14,7 +14,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
 
 1. Navigate to **Settings → Start Video Stream**
 2. Enter YouTube URL (S3 credentials are pre-filled from backend config)
-3. Configure segment duration and metadata (camera_id, capture_type, location)
+3. Configure segment duration and metadata (camera_id, capture_type, location, scenario) — same options as Upload; labels from backend ingest-config
 4. Click "Start Stream"
 5. Use "Stop Stream" to stop capture
 
@@ -31,7 +31,7 @@ REST API service that captures YouTube videos and uploads segments to S3, trigge
   "secret_key": "...",
   "s3_endpoint": "http://...",
   "bucket_name": "video-chunks",
-  "capture_interval": 10,
+  "capture_interval": 30,
   "camera_id": "cam-01",
   "capture_type": "traffic",
   "location": "downtown",
@@ -55,7 +55,19 @@ Health check.
 
 ## Technical Details
 
-- **Format**: MP4 (H.264)
-- **Resolution**: Up to 720p
-- **Image**: `your.registry/vss-video-streaming:v1` (placeholder — build and push from this directory with `docker build`; see [K8s deployment guide](../../deployments/vss-k8s-application/README.md#step-2-docker-images))
+- **Format**: MP4 (H.264 + AAC for YouTube via yt-dlp)
+- **Resolution**: Up to 1080p (YouTube path)
+- **YouTube VOD**: full video downloaded once, then chunked locally with ffmpeg stream-copy; any chunk > `capture_interval` gets a fast tail trim (copy remux) before upload; metadata `chunk_duration_sec` = nominal interval; segmenter caps segmentation to the same value
+- **YouTube live**: per-chunk yt-dlp with retries; one timeout does not stop the session; same trim/normalize before upload
+- **Image**: `your.registry/vss-video-streaming:v1` — build from `source-code/` (see [shared README](../shared/README.md#docker-builds))
 - **Internal**: `video-stream-capture-service:5000`
+- **S3 metadata**: built via `build_s3_ingest_metadata()` from [`shared/ingest_metadata.py`](../shared/ingest_metadata.py)
+
+### Optional env (streaming pod)
+
+| Variable | Purpose |
+|----------|---------|
+| `YTDLP_COOKIES_FILE` | Netscape cookies for YouTube (datacenter / bot checks) |
+| `YTDLP_SEGMENT_TIMEOUT_SEC` | Per-chunk yt-dlp timeout (live path); default scales with seek offset |
+| `YTDLP_FULL_DOWNLOAD_TIMEOUT_SEC` | Full VOD download timeout before local ffmpeg chunking |
+| `YTDLP_SEGMENT_MAX_RETRIES` | Retries per live chunk on timeout (default `2`) |

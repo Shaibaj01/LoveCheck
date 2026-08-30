@@ -9,6 +9,7 @@ from moviepy.editor import VideoFileClip
 # If the final ceil()-based segment would be shorter than this (seconds), drop it and
 # extend the previous segment to video end (avoids MoviePy/ffmpeg failures on ~1-frame tails).
 MIN_TAIL_SEGMENT_SEC = 0.5
+CHUNK_TRIM_TOLERANCE_SEC = 0.01
 
 
 class VideoProcessor:
@@ -22,10 +23,11 @@ class VideoProcessor:
         self.output_format = settings.output_format
     
     def process_video_segments(
-        self, 
-        video_content: bytes, 
-        original_filename: str, 
-        upload_callback: Optional[Callable] = None
+        self,
+        video_content: bytes,
+        original_filename: str,
+        upload_callback: Optional[Callable] = None,
+        max_duration_sec: Optional[float] = None,
     ) -> List[Tuple[bytes, int, int, float, float, float]]:
         """
         Process video into segments with optional upload callback per segment
@@ -51,10 +53,20 @@ class VideoProcessor:
             # Probe duration with a short-lived reader (do not reuse one VideoFileClip for all segments).
             logging.info(f"Loading video file: {original_filename}")
             probe = VideoFileClip(temp_input_path)
-            total_duration = probe.duration
+            probed_duration = probe.duration
             probe.close()
             del probe
             gc.collect()
+
+            total_duration = probed_duration
+            if max_duration_sec is not None and max_duration_sec > 0:
+                total_duration = min(probed_duration, float(max_duration_sec))
+                if total_duration < probed_duration - CHUNK_TRIM_TOLERANCE_SEC:
+                    logging.info(
+                        "Capping segmentation at chunk_duration_sec=%.3fs (probed=%.3fs)",
+                        max_duration_sec,
+                        probed_duration,
+                    )
 
             total_segments = math.ceil(total_duration / self.segment_duration)
             # Collapse negligible tail (e.g. 20.01s with 5s steps → avoid a 0.01s "segment 5")

@@ -14,31 +14,33 @@ def parse_reasoning_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     logging.info(f"[PARSER] Parsing reasoning event: {event_data}")
     
-    # Validate required fields
-    required_fields = ["source", "filename", "reasoning_content"]
+    required_fields = ["source", "filename"]
     for field in required_fields:
         if field not in event_data:
             raise ValueError(f"Missing required field '{field}' in reasoning event")
+
+    reasoning = (event_data.get("reasoning_content") or "").strip()
+    if not reasoning:
+        raise ValueError("Missing reasoning_content in reasoning event")
     
-    logging.info(f"[PARSER] Parsed reasoning event - filename: {event_data['filename']}, content_length: {len(event_data.get('reasoning_content', ''))}")
+    logging.info(
+        f"[PARSER] Parsed reasoning event - filename: {event_data['filename']}, "
+        f"reasoning={len(reasoning)} chars"
+    )
     
     return event_data
 
 
-def validate_reasoning_content(reasoning_content: str) -> bool:
-    """
-    Validate reasoning content is not empty
-    
-    Args:
-        reasoning_content: The reasoning text
-    
-    Returns:
-        True if valid, False otherwise
-    """
-    if not reasoning_content or len(reasoning_content.strip()) == 0:
-        logging.warning("[VALIDATOR] Reasoning content is empty")
-        return False
-    
-    logging.info(f"[VALIDATOR] Reasoning content is valid ({len(reasoning_content)} characters)")
-    return True
+def resolve_embed_text(reasoning_content: str) -> str:
+    """Plain caption text for Cosmos-Embed1 from normalized reasoning_content."""
+    return (reasoning_content or "").strip()
 
+
+def validate_embed_text(reasoning_content: str) -> bool:
+    """Validate text available for embedding."""
+    text = resolve_embed_text(reasoning_content)
+    if not text:
+        logging.warning("[VALIDATOR] No reasoning_content to embed")
+        return False
+    logging.info(f"[VALIDATOR] Embed text valid ({len(text)} characters)")
+    return True

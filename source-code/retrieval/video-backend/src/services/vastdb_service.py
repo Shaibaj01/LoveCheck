@@ -10,10 +10,18 @@ import time
 import os
 import urllib.request
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 from src.config import get_settings
-from src.models.video import VideoSearchResult
+from src.models.video import VideoSearchResult, ChunkSearchResult
 from src.models.user import User
+from src.utils.browse_chunk import prepare_browse_segments
+from src.utils.explore_index import (
+    build_explore_catalog,
+    group_accessible_rows,
+    location_filter_options,
+    uploads_by_day_counts,
+)
+from src.utils.segment_timeline import dedupe_by_segment_number, dedupe_segment_dicts
 
 # Import ADBC driver manager
 try:
@@ -60,6 +68,15 @@ def _patched_build_query_data_request(schema, predicate, field_names):
 _internal.build_query_data_request = _patched_build_query_data_request
 print("[VastDB] Applied monkey patch to support tables with vector columns")  # Use print for import-time logging
 # ============================================================================
+DASHBOARD_SCAN_COLUMNS = (
+    "source", "filename", "original_video", "segment_number", "total_segments",
+    "segment_start_sec", "segment_end_sec", "extra_metadata",
+    "upload_timestamp", "camera_id", "capture_type", "location",
+    "object_classes", "object_counts", "perception_ok", "is_public", "allowed_users",
+    # Browse / explore chunk cards (one scan avoids per-video queries)
+    "reasoning_content", "tags", "duration",
+)
+
 settings = get_settings()
 
 
@@ -147,7 +164,10 @@ class VastDBService:
         custom_end_date: Optional[str] = None,
         metadata_filters: dict = None,
         min_similarity: float = 0.4,
-        user_query_text: Optional[str] = None
+        user_query_text: Optional[str] = None,
+        search_mode: str = "text",
+        query_visual_embedding: Optional[List[float]] = None,
+        hybrid_text_weight: float = 0.6,
     ) -> tuple[List[VideoSearchResult], float, int, str]:
         """
         Perform similarity search with permission filtering, time filtering, and dynamic metadata filtering
@@ -174,6 +194,58 @@ class VastDBService:
         """
         start_time = time.time()
         permission_filtered_count = 0
+        mode = (search_mode or "text").lower().strip()
+
+        if mode == "hybrid":
+            if not query_visual_embedding:
+                raise ValueError("query_visual_embedding is required for hybrid search")
+            text_results, text_ms, text_perm, sql_text = self.similarity_search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                user=user,
+                tags=tags,
+                include_public=include_public,
+                public_only=public_only,
+                time_filter=time_filter,
+                custom_start_date=custom_start_date,
+                custom_end_date=custom_end_date,
+                metadata_filters=metadata_filters,
+                min_similarity=min_similarity,
+                user_query_text=user_query_text,
+                search_mode="text",
+            )
+            visual_results, visual_ms, visual_perm, sql_visual = self.similarity_search(
+                query_embedding=query_visual_embedding,
+                top_k=top_k,
+                user=user,
+                tags=tags,
+                include_public=include_public,
+                public_only=public_only,
+                time_filter=time_filter,
+                custom_start_date=custom_start_date,
+                custom_end_date=custom_end_date,
+                metadata_filters=metadata_filters,
+                min_similarity=min_similarity,
+                user_query_text=user_query_text,
+                search_mode="visual",
+            )
+            merged = self._merge_hybrid_results(
+                text_results, visual_results, hybrid_text_weight, top_k
+            )
+            formatted_sql = (
+                f"-- Hybrid search (text weight={hybrid_text_weight:.2f})\n"
+                f"-- Text branch\n{sql_text}\n\n-- Visual branch\n{sql_visual}"
+            )
+            return merged, text_ms + visual_ms, max(text_perm, visual_perm), formatted_sql
+
+        if mode == "visual":
+            if query_visual_embedding is not None:
+                query_embedding = query_visual_embedding
+            elif not query_embedding:
+                raise ValueError("query_embedding is required for visual search")
+            vector_column = "vectors_visual"
+        else:
+            vector_column = "vectors"
         
         try:
             # Build SQL query with vector similarity
@@ -193,13 +265,14 @@ class VastDBService:
                     filename,
                     source,
                     reasoning_content,
-                    video_url,
                     allowed_users,
                     is_public,
                     upload_timestamp,
                     duration,
                     segment_number,
                     total_segments,
+                    segment_start_sec,
+                    segment_end_sec,
                     original_video,
                     tags,
                     cosmos_model,
@@ -208,7 +281,12 @@ class VastDBService:
                     camera_id,
                     capture_type,
                     location,
-                    array_cosine_distance(vectors::FLOAT[{dimension}], ARRAY{query_embedding}::FLOAT[{dimension}]) as distance
+                    perception_json,
+                    object_classes,
+                    object_counts,
+                    max_detection_conf,
+                    perception_ok,
+                    array_cosine_distance({vector_column}::FLOAT[{dimension}], ARRAY{query_embedding}::FLOAT[{dimension}]) as distance
                 FROM {table_path}
             """
             
@@ -274,6 +352,9 @@ class VastDBService:
                             where_conditions.append(f"{safe_field_name} = {str(field_value).upper()}")
                         elif isinstance(field_value, (int, float)):
                             where_conditions.append(f"{safe_field_name} = {field_value}")
+                        elif safe_field_name == "object_classes":
+                            safe_value = str(field_value).replace("'", "''").lower()
+                            where_conditions.append(f"LOWER(object_classes) LIKE '%{safe_value}%'")
                         else:
                             # String value - escape single quotes
                             safe_value = str(field_value).replace("'", "''")
@@ -297,7 +378,10 @@ class VastDBService:
             
             sql_query += f" ORDER BY distance LIMIT {fetch_count}"
             
-            logger.info(f"[SQL] Using array_cosine_distance for semantic similarity search (dimension={dimension})")
+            logger.info(
+                f"[SQL] Using array_cosine_distance on {vector_column} "
+                f"(mode={mode}, dimension={dimension})"
+            )
             logger.debug(f"[SQL] Executing ADBC similarity search (fetching {fetch_count} for top_k={top_k})")
             # Log query structure (without embedding vector for readability)
             query_log = sql_query.replace(f'ARRAY{query_embedding}', 'ARRAY[...embedding_vector...]')
@@ -413,12 +497,13 @@ class VastDBService:
                                 filename=str(row['filename']) if pd.notna(row.get('filename')) else '',
                                 source=str(row['source']) if pd.notna(row.get('source')) else '',
                                 reasoning_content=str(row['reasoning_content']) if pd.notna(row.get('reasoning_content')) else '',
-                                video_url=str(row['video_url']) if pd.notna(row.get('video_url')) else '',
                                 is_public=is_public_bool,
                                 upload_timestamp=row['upload_timestamp'],
                                 duration=row.get('duration'),
-                                segment_number=int(row['segment_number']) if pd.notna(row.get('segment_number')) else None,
-                                total_segments=int(row['total_segments']) if pd.notna(row.get('total_segments')) else None,
+                                segment_number=int(row['segment_number']) if pd.notna(row.get('segment_number')) else 0,
+                                total_segments=int(row['total_segments']) if pd.notna(row.get('total_segments')) else 0,
+                                segment_start_sec=float(row['segment_start_sec']) if pd.notna(row.get('segment_start_sec')) else 0.0,
+                                segment_end_sec=float(row['segment_end_sec']) if pd.notna(row.get('segment_end_sec')) else 0.0,
                                 original_video=str(row['original_video']) if pd.notna(row.get('original_video')) else '',
                                 tags=tags_list,
                                 similarity_score=similarity_score,
@@ -432,7 +517,13 @@ class VastDBService:
                                 ),
                                 camera_id=str(row.get('camera_id')) if pd.notna(row.get('camera_id')) else None,
                                 capture_type=str(row.get('capture_type')) if pd.notna(row.get('capture_type')) else None,
-                                location=str(row.get('location')) if pd.notna(row.get('location')) else None
+                                location=str(row.get('location')) if pd.notna(row.get('location')) else None,
+                                perception_json=str(row.get('perception_json')) if pd.notna(row.get('perception_json')) else None,
+                                object_classes=str(row.get('object_classes')) if pd.notna(row.get('object_classes')) else None,
+                                object_counts=str(row.get('object_counts')) if pd.notna(row.get('object_counts')) else None,
+                                max_detection_conf=float(row.get('max_detection_conf')) if pd.notna(row.get('max_detection_conf')) else None,
+                                perception_ok=bool(row.get('perception_ok')) if pd.notna(row.get('perception_ok')) else None,
+                                extra_metadata=str(row.get('extra_metadata')) if pd.notna(row.get('extra_metadata')) else None,
                             )
                             filtered_results.append(result)
                             logger.debug(f"[ROW {row_index}] Successfully created VideoSearchResult")
@@ -482,6 +573,212 @@ class VastDBService:
             return [f"allowed_users && {user_array}"]
         return [f"(is_public = TRUE OR allowed_users && {user_array})"]
     
+    def _merge_hybrid_results(
+        self,
+        text_results: List[VideoSearchResult],
+        visual_results: List[VideoSearchResult],
+        text_weight: float,
+        top_k: int,
+    ) -> List[VideoSearchResult]:
+        """Combine text and visual search scores by segment source."""
+        combined: dict[str, dict] = {}
+
+        for result in text_results:
+            combined[result.source] = {
+                "text": result.similarity_score,
+                "visual": 0.0,
+                "result": result,
+            }
+
+        for result in visual_results:
+            if result.source in combined:
+                combined[result.source]["visual"] = result.similarity_score
+            else:
+                combined[result.source] = {
+                    "text": 0.0,
+                    "visual": result.similarity_score,
+                    "result": result,
+                }
+
+        text_weight = max(0.0, min(1.0, text_weight))
+        visual_weight = 1.0 - text_weight
+        merged: List[VideoSearchResult] = []
+        for entry in combined.values():
+            score = (text_weight * entry["text"]) + (visual_weight * entry["visual"])
+            item = entry["result"]
+            item.similarity_score = score
+            merged.append(item)
+
+        merged.sort(key=lambda item: item.similarity_score, reverse=True)
+        return merged[:top_k]
+
+    @staticmethod
+    def _extract_query_terms(query_text: str) -> List[str]:
+        from src.utils.query_highlight import extract_highlight_terms
+        return extract_highlight_terms(query_text)
+
+    def _segment_query_highlight(self, segment: dict, query_terms: List[str]) -> bool:
+        from src.utils.query_highlight import segment_query_highlight
+        return segment_query_highlight(segment, query_terms)
+
+    def group_results_by_chunk(
+        self,
+        segment_results: List[VideoSearchResult],
+        user: User,
+        query_text: str,
+        top_k: int,
+    ) -> List[ChunkSearchResult]:
+        """Collapse segment hits into one card per original upload with full timeline."""
+        from src.models.video import ChunkSearchResult, TimelineSegment
+
+        if not segment_results:
+            return []
+
+        query_terms = self._extract_query_terms(query_text)
+        by_video: dict[str, List[VideoSearchResult]] = {}
+        for result in segment_results:
+            key = (result.original_video or result.source).strip()
+            if not key:
+                key = result.source
+            by_video.setdefault(key, []).append(result)
+
+        ranked_groups = sorted(
+            by_video.items(),
+            key=lambda item: max(r.similarity_score for r in item[1]),
+            reverse=True,
+        )[:top_k]
+
+        chunks: List[ChunkSearchResult] = []
+        for original_video, matches in ranked_groups:
+            matches_deduped = dedupe_by_segment_number(
+                matches,
+                segment_number=lambda r: int(r.segment_number or 0),
+                rank_key=lambda r: float(r.similarity_score or 0),
+            )
+            matches_sorted = sorted(matches_deduped, key=lambda r: r.similarity_score, reverse=True)
+            best = matches_sorted[0]
+            match_by_number = {m.segment_number: m for m in matches_sorted if m.segment_number > 0}
+
+            all_segments = self.list_segments_for_video(original_video, user)
+            if not all_segments:
+                all_segments = [
+                    {
+                        "segment_number": best.segment_number,
+                        "segment_start_sec": best.segment_start_sec,
+                        "segment_end_sec": best.segment_end_sec,
+                        "source": best.source,
+                        "reasoning_content": best.reasoning_content,
+                        "object_classes": best.object_classes or "",
+                        "object_counts": best.object_counts or "",
+                    }
+                ]
+
+            timeline: List[TimelineSegment] = []
+            for seg in all_segments:
+                sn = int(seg.get("segment_number") or 0)
+                matched = match_by_number.get(sn)
+                score = matched.similarity_score if matched else 0.0
+                highlight = self._segment_query_highlight(seg, query_terms)
+                counts = seg.get("object_counts")
+                timeline.append(
+                    TimelineSegment(
+                        segment_number=sn,
+                        segment_start_sec=float(seg.get("segment_start_sec") or 0),
+                        segment_end_sec=float(seg.get("segment_end_sec") or 0),
+                        source=str(seg.get("source") or ""),
+                        reasoning_content=str(seg.get("reasoning_content") or "") or None,
+                        object_classes=str(seg.get("object_classes") or "") or None,
+                        object_counts=str(counts) if counts not in (None, "") else None,
+                        perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
+                        similarity_score=score,
+                        is_search_match=matched is not None,
+                        query_highlight=highlight,
+                        is_best_match=False,
+                    )
+                )
+
+            from src.utils.query_highlight import timeline_query_term_score
+
+            query_hits = [t for t in timeline if t.query_highlight]
+            if query_hits:
+                display_seg = max(
+                    query_hits,
+                    key=lambda seg: (
+                        timeline_query_term_score(seg, query_terms),
+                        seg.similarity_score,
+                        -seg.segment_number,
+                    ),
+                )
+            else:
+                display_seg = next(
+                    (t for t in timeline if t.segment_number == best.segment_number),
+                    timeline[0] if timeline else None,
+                )
+
+            if display_seg:
+                display_sn = display_seg.segment_number
+                timeline = [
+                    seg.model_copy(update={"is_best_match": seg.segment_number == display_sn})
+                    for seg in timeline
+                ]
+            else:
+                display_seg = None
+                display_sn = best.segment_number
+
+            chunk_duration = max(
+                (t.segment_end_sec for t in timeline),
+                default=float(best.segment_end_sec or best.duration or 0),
+            )
+            filename = original_video.rsplit("/", 1)[-1] if "/" in original_video else original_video
+
+            chunks.append(
+                ChunkSearchResult(
+                    original_video=original_video,
+                    filename=filename,
+                    chunk_duration_sec=chunk_duration,
+                    total_segments=int(best.total_segments or len(timeline)),
+                    similarity_score=best.similarity_score,
+                    best_segment_number=int(display_seg.segment_number if display_seg else best.segment_number),
+                    best_match_start_sec=float(display_seg.segment_start_sec if display_seg else best.segment_start_sec),
+                    best_match_end_sec=float(display_seg.segment_end_sec if display_seg else best.segment_end_sec),
+                    preview_source=display_seg.source if display_seg else best.source,
+                    reasoning_content=(display_seg.reasoning_content or "") if display_seg else best.reasoning_content,
+                    is_public=best.is_public,
+                    upload_timestamp=best.upload_timestamp,
+                    tags=best.tags,
+                    matched_segment_count=len(matches_sorted),
+                    query=query_text,
+                    timeline=timeline,
+                    camera_id=best.camera_id,
+                    capture_type=best.capture_type,
+                    location=best.location,
+                    cosmos_model=best.cosmos_model,
+                    tokens_used=best.tokens_used,
+                    cached_prompt_tokens=best.cached_prompt_tokens,
+                )
+            )
+
+        return chunks
+
+    def _build_acl_sql_conditions(
+        self,
+        user: User,
+        include_public: bool,
+        public_only: bool,
+    ) -> list[str]:
+        """
+        Push search-scope ACL into SQL so LIMIT applies to accessible rows only.
+        Uses the same array overlap syntax as tag filters (allowed_users && ARRAY[...]).
+        """
+        safe_username = user.username.replace("'", "''")
+        user_array = f"ARRAY['{safe_username}']"
+
+        if public_only:
+            return ["is_public = TRUE"]
+        if not include_public:
+            return [f"allowed_users && {user_array}"]
+        return [f"(is_public = TRUE OR allowed_users && {user_array})"]
+
     def _calculate_time_threshold(self, time_filter: str) -> Optional[datetime]:
         """
         Calculate timestamp threshold based on time filter
@@ -772,13 +1069,14 @@ class VastDBService:
                     filename,
                     source,
                     reasoning_content,
-                    video_url,
                     allowed_users,
                     is_public,
                     upload_timestamp,
                     duration,
                     segment_number,
                     total_segments,
+                    segment_start_sec,
+                    segment_end_sec,
                     original_video,
                     tags,
                     cosmos_model,
@@ -786,7 +1084,17 @@ class VastDBService:
                     cached_prompt_tokens,
                     camera_id,
                     capture_type,
-                    location
+                    location,
+                    perception_json,
+                    object_classes,
+                    object_counts,
+                    max_detection_conf,
+                    perception_ok,
+                    perception_source,
+                    detection_sidecar_uri,
+                    detection_frame_count,
+                    detection_count,
+                    extra_metadata
                 FROM {table_path}
                 WHERE source = '{source}'
                 LIMIT 1
@@ -831,12 +1139,13 @@ class VastDBService:
                 filename=row['filename'],
                 source=row['source'],
                 reasoning_content=row['reasoning_content'],
-                video_url=row['video_url'],
                 is_public=is_public_bool,
                 upload_timestamp=row['upload_timestamp'],
                 duration=row['duration'],
                 segment_number=row['segment_number'],
                 total_segments=row['total_segments'],
+                segment_start_sec=float(row['segment_start_sec']) if pd.notna(row.get('segment_start_sec')) else 0.0,
+                segment_end_sec=float(row['segment_end_sec']) if pd.notna(row.get('segment_end_sec')) else 0.0,
                 original_video=row['original_video'],
                 tags=tags_list,
                 similarity_score=1.0,  # Not applicable for direct lookup
@@ -850,13 +1159,465 @@ class VastDBService:
                 ),
                 camera_id=row.get('camera_id'),
                 capture_type=row.get('capture_type'),
-                location=row.get('location')
+                location=row.get('location'),
+                perception_json=str(row.get('perception_json')) if pd.notna(row.get('perception_json')) else None,
+                object_classes=str(row.get('object_classes')) if pd.notna(row.get('object_classes')) else None,
+                object_counts=str(row.get('object_counts')) if pd.notna(row.get('object_counts')) else None,
+                max_detection_conf=float(row.get('max_detection_conf')) if pd.notna(row.get('max_detection_conf')) else None,
+                perception_ok=bool(row.get('perception_ok')) if pd.notna(row.get('perception_ok')) else None,
+                perception_source=str(row.get('perception_source')) if pd.notna(row.get('perception_source')) else None,
+                detection_sidecar_uri=str(row.get('detection_sidecar_uri')) if pd.notna(row.get('detection_sidecar_uri')) else None,
+                detection_frame_count=int(row.get('detection_frame_count')) if pd.notna(row.get('detection_frame_count')) else None,
+                detection_count=int(row.get('detection_count')) if pd.notna(row.get('detection_count')) else None,
+                extra_metadata=str(row.get('extra_metadata')) if pd.notna(row.get('extra_metadata')) else None,
             )
                 
         except Exception as e:
             logger.error(f"Error fetching video by source: {str(e)}")
             return None
-    
+
+    def _execute_adbc_query(self, sql_query: str):
+        if not self._adbc_connection:
+            raise RuntimeError("ADBC not configured")
+        with adbc_driver_manager.dbapi.connect(
+            driver=self._adbc_connection["driver_path"],
+            db_kwargs={
+                "vast.db.endpoint": self._adbc_connection["endpoint"],
+                "vast.db.access_key": self._adbc_connection["access_key"],
+                "vast.db.secret_key": self._adbc_connection["secret_key"],
+            },
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql_query)
+                return cursor.fetch_arrow_table().to_pandas()
+
+    def get_dashboard_stats(self, user: User, scope: str = "all") -> dict:
+        """Scan accessible VastDB rows and aggregate dashboard statistics."""
+        import time
+        from datetime import datetime, timezone
+
+        from src.utils.dashboard_stats import (
+            attach_s3_inventory,
+            build_dashboard_stats,
+            empty_dashboard_stats,
+            segmenter_output_bucket,
+        )
+        from src.services.s3_service import get_s3_service
+        from src.utils.row_cache import S3_COUNT_CACHE_TTL_SEC, cached_s3_mp4_count
+
+        start = time.time()
+        include_public = scope in ("all", "public")
+        public_only = scope == "public"
+        table_ref = (
+            f"{self.settings.vdb_bucket}/{self.settings.vdb_schema}/{self.settings.vdb_collection}"
+        )
+
+        table_available = True
+        table_message: Optional[str] = None
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[DASHBOARD] VastDB scan failed for %s: %s", table_ref, exc)
+            raw_rows = []
+            table_available = False
+            table_message = (
+                f"Could not read VastDB table {table_ref}. "
+                "Verify vdb_bucket, vdb_schema, and vdb_collection in backend config."
+            )
+
+        accessible_rows: List[dict] = []
+        for row in raw_rows:
+            if not self._user_has_access(row, user, include_public, public_only):
+                continue
+            accessible_rows.append(row)
+
+        payload = (
+            build_dashboard_stats(accessible_rows)
+            if table_available
+            else empty_dashboard_stats()
+        )
+        if table_available and not accessible_rows and not raw_rows:
+            table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
+        elif table_available and not accessible_rows and raw_rows:
+            table_message = "Rows exist in VastDB but none are visible for the selected scope."
+
+        bucket_counts: dict[str, int] = {}
+        bucket_errors: dict[str, str] = {}
+        buckets_to_scan = {
+            self.settings.s3_upload_bucket,
+            self.settings.s3_segments_bucket,
+        }
+        segmenter_bucket = segmenter_output_bucket(self.settings.s3_upload_bucket)
+        if segmenter_bucket not in buckets_to_scan:
+            buckets_to_scan.add(segmenter_bucket)
+
+        s3 = get_s3_service()
+        for bucket in sorted(buckets_to_scan):
+            try:
+                bucket_counts[bucket] = cached_s3_mp4_count(
+                    bucket,
+                    S3_COUNT_CACHE_TTL_SEC,
+                    lambda b=bucket: s3.count_mp4_objects(b),
+                )
+            except Exception as exc:
+                logger.warning("[DASHBOARD] S3 MP4 count failed for %s: %s", bucket, exc)
+                bucket_errors[bucket] = str(exc)
+
+        attach_s3_inventory(
+            payload,
+            upload_bucket=self.settings.s3_upload_bucket,
+            segments_bucket=self.settings.s3_segments_bucket,
+            bucket_counts=bucket_counts,
+            bucket_errors=bucket_errors,
+        )
+
+        payload["table"] = table_ref
+        payload["table_available"] = table_available
+        payload["table_message"] = table_message
+        payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+        payload["query_time_ms"] = round((time.time() - start) * 1000, 2)
+        payload["scope"] = scope
+        return payload
+
+    def map_upload_timestamps_by_video(
+        self,
+        original_videos: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Latest upload_timestamp per parent video from indexed segments."""
+        wanted = {v.strip() for v in (original_videos or set()) if v and str(v).strip()}
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[VASTDB] upload timestamp lookup failed: %s", exc)
+            return {}
+
+        out: Dict[str, Any] = {}
+        for row in raw_rows:
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if not ov or (wanted and ov not in wanted):
+                continue
+            ts = row.get("upload_timestamp")
+            if ts is None:
+                continue
+            prev = out.get(ov)
+            if prev is None or str(ts) > str(prev):
+                out[ov] = ts
+        return out
+
+    def accessible_original_videos(
+        self,
+        user: User,
+        *,
+        include_public: bool = True,
+        public_only: bool = False,
+    ) -> Set[str]:
+        """Parent video URIs visible to the user (from cached table scan)."""
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[VASTDB] accessible video lookup failed: %s", exc)
+            return set()
+        out: Set[str] = set()
+        for row in raw_rows:
+            if not self._user_has_access(row, user, include_public, public_only):
+                continue
+            ov = str(row.get("original_video") or row.get("source") or "").strip()
+            if ov:
+                out.add(ov)
+        return out
+
+    def _fetch_dashboard_rows_sdk(self) -> List[dict]:
+        """Read non-vector columns via the VastDB Python SDK (cached)."""
+        from src.utils.row_cache import ROW_CACHE_TTL_SEC, cached_table_rows
+
+        cache_key = (
+            f"vdb-rows:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:"
+            f"{self.settings.vdb_collection}"
+        )
+        return cached_table_rows(cache_key, ROW_CACHE_TTL_SEC, self._load_dashboard_rows_sdk)
+
+    def _load_dashboard_rows_sdk(self) -> List[dict]:
+        with self.client.transaction() as tx:
+            bucket = tx.bucket(self.settings.vdb_bucket)
+            db_schema = bucket.schema(self.settings.vdb_schema)
+            table = db_schema.table(self.settings.vdb_collection)
+            full_schema = table.columns()
+
+            columns_to_select: List[str] = []
+            for field in full_schema:
+                field_type_str = str(field.type)
+                if "fixed_size_list" in field_type_str:
+                    continue
+                if "list<" in field_type_str and "float" in field_type_str:
+                    continue
+                if field.name in DASHBOARD_SCAN_COLUMNS:
+                    columns_to_select.append(field.name)
+
+            if not columns_to_select:
+                logger.warning("[DASHBOARD] No dashboard columns found in table schema")
+                return []
+
+            result = table.select(columns=columns_to_select, internal_row_id=False)
+            arrow_table = result.read_all()
+            if arrow_table.num_rows == 0:
+                return []
+
+            return self._arrow_rows_to_dicts(arrow_table)
+
+    @staticmethod
+    def _arrow_rows_to_dicts(arrow_table) -> List[dict]:
+        try:
+            return arrow_table.to_pylist()
+        except Exception:
+            df = arrow_table.to_pandas()
+            return [row.to_dict() for _, row in df.iterrows()]
+
+    def list_segments_for_video(self, original_video: str, user: User) -> List[dict]:
+        """Return accessible segment rows for a parent video, ordered by segment_number."""
+        safe_video = original_video.replace("'", "''")
+        table_path = (
+            f'"{self._adbc_connection["bucket"]}/{self._adbc_connection["schema"]}"."{self.settings.vdb_collection}"'
+        )
+        sql_query = f"""
+            SELECT
+                filename, source, reasoning_content, allowed_users, is_public, upload_timestamp,
+                duration, segment_number, total_segments, segment_start_sec, segment_end_sec,
+                original_video, tags, cosmos_model, tokens_used, cached_prompt_tokens,
+                camera_id, capture_type, location,
+                perception_json, object_classes, object_counts, max_detection_conf, perception_ok,
+                perception_source, detection_sidecar_uri, detection_frame_count, detection_count
+            FROM {table_path}
+            WHERE original_video = '{safe_video}'
+        """
+        df = self._execute_adbc_query(sql_query)
+        segments = []
+        for _, row in df.iterrows():
+            if not self._user_has_access(row, user):
+                continue
+            segments.append({
+                "filename": str(row.get("filename", "")),
+                "source": str(row.get("source", "")),
+                "reasoning_content": str(row.get("reasoning_content", "")),
+                "segment_number": int(row.get("segment_number") or 0),
+                "total_segments": int(row.get("total_segments") or 0),
+                "segment_start_sec": float(row.get("segment_start_sec") or 0),
+                "segment_end_sec": float(row.get("segment_end_sec") or 0),
+                "original_video": str(row.get("original_video", "")),
+                "object_classes": str(row.get("object_classes", "")),
+                "object_counts": str(row.get("object_counts")) if pd.notna(row.get("object_counts")) and row.get("object_counts") not in ("", None) else "",
+                "perception_ok": bool(row.get("perception_ok")) if pd.notna(row.get("perception_ok")) else None,
+                "perception_source": str(row.get("perception_source") or ""),
+                "detection_sidecar_uri": str(row.get("detection_sidecar_uri") or ""),
+                "detection_frame_count": int(row.get("detection_frame_count") or 0),
+                "detection_count": int(row.get("detection_count") or 0),
+                "is_public": bool(row.get("is_public", False)),
+                "upload_timestamp": row.get("upload_timestamp"),
+                "tags": self._safe_array_to_list(row.get("tags", [])),
+                "camera_id": str(row.get("camera_id") or ""),
+                "capture_type": str(row.get("capture_type") or ""),
+                "location": str(row.get("location") or ""),
+                "cosmos_model": str(row.get("cosmos_model") or ""),
+                "tokens_used": int(row.get("tokens_used") or 0) or None,
+                "cached_prompt_tokens": int(row.get("cached_prompt_tokens") or 0) or None,
+                "duration": float(row.get("duration") or 0),
+            })
+        segments.sort(key=lambda s: s["segment_number"])
+        return dedupe_segment_dicts(segments)
+
+    def build_browse_chunk_from_rows(
+        self,
+        original_video: str,
+        rows: List[dict],
+        stream_meta: Optional[dict] = None,
+    ) -> Optional[ChunkSearchResult]:
+        """Build explore chunk from in-memory segment rows (no extra VastDB query)."""
+        segments = prepare_browse_segments(rows, original_video)
+        if not segments:
+            return None
+        chunk = self._build_browse_chunk_from_segments(original_video, segments)
+        if chunk and stream_meta:
+            chunk = chunk.model_copy(update=stream_meta)
+        return chunk
+
+    def _build_browse_chunk_from_segments(self, original_video: str, segments: List[dict]):
+        """Shared chunk-card builder for explore/browse."""
+        from src.models.video import ChunkSearchResult, TimelineSegment
+
+        first = segments[0]
+        timeline: List[TimelineSegment] = []
+        best_sn = int(first.get("segment_number") or 1)
+        for seg in segments:
+            sn = int(seg.get("segment_number") or 0)
+            counts = seg.get("object_counts")
+            timeline.append(
+                TimelineSegment(
+                    segment_number=sn,
+                    segment_start_sec=float(seg.get("segment_start_sec") or 0),
+                    segment_end_sec=float(seg.get("segment_end_sec") or 0),
+                    source=str(seg.get("source") or ""),
+                    reasoning_content=str(seg.get("reasoning_content") or "") or None,
+                    object_classes=str(seg.get("object_classes") or "") or None,
+                    object_counts=str(counts) if counts not in (None, "") else None,
+                    perception_ok=bool(seg.get("perception_ok")) if seg.get("perception_ok") is not None else None,
+                    similarity_score=0.0,
+                    is_search_match=False,
+                    query_highlight=False,
+                    is_best_match=False,
+                )
+            )
+
+        chunk_duration = max((t.segment_end_sec for t in timeline), default=0.0)
+        filename = original_video.rsplit("/", 1)[-1] if "/" in original_video else original_video
+        upload_ts = first.get("upload_timestamp")
+        for seg in segments:
+            ts = seg.get("upload_timestamp")
+            if ts is not None and (upload_ts is None or str(ts) > str(upload_ts)):
+                upload_ts = ts
+
+        tags = first.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        for seg in segments:
+            seg_tags = seg.get("tags") or []
+            if isinstance(seg_tags, list):
+                for tag in seg_tags:
+                    t = str(tag).strip()
+                    if t and t not in tags:
+                        tags.append(t)
+
+        def _meta(key: str) -> Optional[str]:
+            for seg in segments:
+                val = str(seg.get(key) or "").strip()
+                if val:
+                    return val
+            return None
+
+        if upload_ts is not None and not hasattr(upload_ts, "isoformat"):
+            try:
+                from datetime import datetime
+                upload_ts = datetime.fromisoformat(str(upload_ts).replace("Z", "+00:00"))
+            except Exception:
+                upload_ts = datetime.utcnow()
+
+        return ChunkSearchResult(
+            original_video=original_video,
+            filename=filename,
+            chunk_duration_sec=chunk_duration,
+            total_segments=int(first.get("total_segments") or len(timeline)),
+            similarity_score=1.0,
+            best_segment_number=best_sn,
+            best_match_start_sec=float(first.get("segment_start_sec") or 0),
+            best_match_end_sec=float(first.get("segment_end_sec") or 0),
+            preview_source=str(first.get("source") or ""),
+            reasoning_content=str(first.get("reasoning_content") or ""),
+            is_public=bool(first.get("is_public", True)),
+            upload_timestamp=upload_ts,
+            tags=tags,
+            matched_segment_count=0,
+            query="",
+            timeline=timeline,
+            camera_id=_meta("camera_id"),
+            capture_type=_meta("capture_type"),
+            location=_meta("location"),
+            cosmos_model=_meta("cosmos_model"),
+            tokens_used=next(
+                (int(seg.get("tokens_used") or 0) for seg in segments if int(seg.get("tokens_used") or 0)),
+                None,
+            ),
+            cached_prompt_tokens=next(
+                (
+                    int(seg.get("cached_prompt_tokens") or 0)
+                    for seg in segments
+                    if int(seg.get("cached_prompt_tokens") or 0)
+                ),
+                None,
+            ),
+        )
+
+    def list_explore_chunks(
+        self,
+        user: User,
+        scope: str = "all",
+        date: Optional[str] = None,
+        location: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Browse indexed parent videos by upload date and location (no vector search)."""
+        include_public = scope in ("all", "public")
+        public_only = scope == "public"
+
+        table_available = True
+        table_message: Optional[str] = None
+        try:
+            raw_rows = self._fetch_dashboard_rows_sdk()
+        except Exception as exc:
+            logger.warning("[EXPLORE] VastDB scan failed: %s", exc)
+            raw_rows = []
+            table_available = False
+            table_message = (
+                "Could not read VastDB collection. "
+                "Verify vdb_bucket, vdb_schema, and vdb_collection in backend config."
+            )
+
+        if table_available and not raw_rows:
+            table_message = "Table exists but contains no rows yet. Upload a video to populate the index."
+
+        rows_by_video, by_video = group_accessible_rows(
+            raw_rows,
+            lambda row: self._user_has_access(row, user, include_public, public_only),
+        )
+        stream_meta_by_video, by_video, accessible_flat = build_explore_catalog(
+            rows_by_video, by_video
+        )
+
+        if table_available and raw_rows and not by_video:
+            table_message = "Rows exist in VastDB but none are visible for the selected scope."
+
+        uploads_by_day = uploads_by_day_counts(by_video)
+        locations = location_filter_options(accessible_flat, bool(by_video))
+
+        videos = sorted(
+            by_video.values(),
+            key=lambda item: str(item.get("upload_timestamp") or ""),
+            reverse=True,
+        )
+        if date:
+            videos = [v for v in videos if v.get("upload_day") == date]
+        if location:
+            videos = [v for v in videos if v.get("location_label") == location]
+
+        total = len(videos)
+        page = videos[offset : offset + limit]
+
+        chunks = []
+        for item in page:
+            ov = item["original_video"]
+            chunk = self.build_browse_chunk_from_rows(
+                ov,
+                rows_by_video.get(ov, []),
+                stream_meta=stream_meta_by_video.get(ov),
+            )
+            if chunk:
+                chunks.append(chunk)
+
+        if table_available and location and by_video and not videos:
+            table_message = f"No videos match location filter: {location}"
+
+        return {
+            "chunks": chunks,
+            "total": total,
+            "uploads_by_day": uploads_by_day,
+            "locations": locations,
+            "scope": scope,
+            "selected_date": date,
+            "selected_location": location,
+            "limit": limit,
+            "offset": offset,
+            "table_available": table_available,
+            "table_message": table_message,
+        }
+
     def get_table_schema(self):
         """
         Get the PyArrow schema of the VastDB table
@@ -880,106 +1641,61 @@ class VastDBService:
             logger.error(f"Error getting table schema: {str(e)}")
             raise
     
+    def get_distinct_values_map(
+        self,
+        column_names: List[str],
+        limit_per_column: int = 100,
+    ) -> Dict[str, List[str]]:
+        """Distinct values for multiple metadata columns from one cached table scan."""
+        from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
+        from src.utils.dashboard_stats import _metadata_label, _split_object_classes
+        from src.utils.row_cache import DISTINCT_VALUES_CACHE_TTL_SEC, cached_distinct_values
+
+        wanted = [c for c in column_names if c in FILTERABLE_METADATA_COLUMNS]
+        if not wanted:
+            return {}
+
+        cache_key = (
+            f"distinct:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:"
+            f"{self.settings.vdb_collection}:{','.join(sorted(wanted))}:split-object-classes"
+        )
+
+        def _load() -> Dict[str, List[str]]:
+            try:
+                rows = self._fetch_dashboard_rows_sdk()
+            except Exception as exc:
+                logger.warning("[DISTINCT] Cached scan failed: %s", exc)
+                return {col: [] for col in wanted}
+            out: Dict[str, set[str]] = {col: set() for col in wanted}
+            for row in rows:
+                for col in wanted:
+                    if col == "object_classes":
+                        # Store is comma-joined per segment; expose distinct class tokens.
+                        out[col].update(_split_object_classes(row.get(col)))
+                        continue
+                    label = _metadata_label(row.get(col))
+                    if label != "(empty)":
+                        out[col].add(label)
+            return {
+                col: sorted(values)[:limit_per_column]
+                for col, values in out.items()
+            }
+
+        return cached_distinct_values(cache_key, DISTINCT_VALUES_CACHE_TTL_SEC, _load)
+
     def get_distinct_values(self, column_name: str, prefix: str = "", limit: int = 100) -> List[str]:
         """
-        Get REAL distinct values for a column from VastDB (for dropdown options)
-        
-        Uses VastDB Python SDK with PyArrow.
-        Excludes vector columns from the query to work around SDK limitations.
-        
-        Args:
-            column_name: Column to get distinct values from
-            prefix: Optional prefix filter for autocomplete
-            limit: Maximum number of values to return
-        
-        Returns:
-            List of distinct string values from the actual database
+        Get distinct values for a column from the cached VastDB table scan.
         """
         try:
-            logger.info(f"[DISTINCT] Getting REAL distinct values for column: {column_name}")
-            
-            with self.client.transaction() as tx:
-                bucket = tx.bucket(self.settings.vdb_bucket)
-                db_schema = bucket.schema(self.settings.vdb_schema)
-                table = db_schema.table(self.settings.vdb_collection)
-                
-                # Get full schema
-                full_schema = table.columns()
-                logger.info(f"[DISTINCT] Full schema has {len(full_schema)} columns")
-                
-                # Check if column exists
-                if column_name not in full_schema.names:
-                    logger.warning(f"[DISTINCT] Column {column_name} not found in table")
-                    return []
-                
-                # Build a list of columns EXCLUDING vector types
-                # VastDB SDK can't handle fixed_size_list (vector) columns in queries
-                columns_to_select = []
-                for field in full_schema:
-                    field_type_str = str(field.type)
-                    # Skip vector columns
-                    if 'fixed_size_list' in field_type_str:
-                        logger.debug(f"[DISTINCT] Skipping vector column: {field.name}")
-                        continue
-                    if 'list<' in field_type_str and 'float' in field_type_str:
-                        logger.debug(f"[DISTINCT] Skipping float list column: {field.name}")
-                        continue
-                    columns_to_select.append(field.name)
-                
-                logger.info(f"[DISTINCT] Will select {len(columns_to_select)} non-vector columns")
-                
-                # Make sure our target column is queryable
-                if column_name not in columns_to_select:
-                    logger.warning(f"[DISTINCT] Column {column_name} is a vector type, cannot query")
-                    return []
-                
-                # Select all non-vector columns (SDK validates full schema)
-                result = table.select(
-                    columns=columns_to_select,
-                    internal_row_id=False
-                )
-                
-                # Read data as PyArrow table
-                arrow_table = result.read_all()
-                logger.info(f"[DISTINCT] Read {arrow_table.num_rows} rows from VastDB")
-                
-                # Convert to pandas
-                df = arrow_table.to_pandas()
-                
-                if df.empty:
-                    logger.info(f"[DISTINCT] No data found in table")
-                    return []
-                
-                # Get distinct values for the specific column
-                if column_name not in df.columns:
-                    logger.warning(f"[DISTINCT] Column {column_name} not in query result")
-                    return []
-                
-                # Extract unique values, filter nulls/empty
-                values = df[column_name].dropna().unique().tolist()
-                values = [str(v).strip() for v in values if v is not None and str(v).strip()]
-                
-                # Apply prefix filter if specified (for autocomplete)
-                if prefix:
-                    values = [v for v in values if v.lower().startswith(prefix.lower())]
-                
-                # Sort and limit
-                values = sorted(set(values))[:limit]
-                
-                logger.info(f"[DISTINCT] Found {len(values)} distinct values for {column_name}: {values[:10]}")
-                return values
-            
-        except ValueError as ve:
-            error_msg = str(ve)
-            if 'unsupported predicate for type=' in error_msg or 'fixed_size_list' in error_msg:
-                logger.error(f"[DISTINCT] VastDB SDK limitation with vector columns: {ve}")
-            else:
-                logger.error(f"[DISTINCT] ValueError for {column_name}: {ve}")
-            return []
+            values = self.get_distinct_values_map([column_name], limit_per_column=limit).get(
+                column_name, []
+            )
+            if prefix:
+                values = [v for v in values if v.lower().startswith(prefix.lower())]
+            return values[:limit]
         except Exception as e:
-            logger.error(f"[DISTINCT] Error getting distinct values for {column_name}: {str(e)}")
-            import traceback
-            logger.error(f"[DISTINCT] Traceback: {traceback.format_exc()}")
+            logger.error(f"[DISTINCT] Error getting distinct values for {column_name}: {e}")
             return []
 
 

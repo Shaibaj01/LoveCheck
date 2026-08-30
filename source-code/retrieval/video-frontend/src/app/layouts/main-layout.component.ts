@@ -18,6 +18,8 @@ import { AdvancedLLMSettingsDialogComponent } from '../features/settings/advance
 import { BatchSyncService } from '../shared/services/batch-sync.service';
 import { StreamingService } from '../shared/services/streaming.service';
 import { ThemeService } from '../shared/services/theme.service';
+import { PageRefreshService } from '../shared/services/page-refresh.service';
+import { IngestMetadataService } from '../shared/services/ingest-metadata.service';
 import { interval } from 'rxjs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
@@ -33,6 +35,41 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         <span class="subtitle">Video Search & Summarization Powered By DataEngine</span>
       </div>
       <span class="spacer"></span>
+      <nav class="main-nav">
+        <div class="nav-pills">
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/search')"
+                  (click)="onNavClick('/search')">
+            <mat-icon>search</mat-icon>
+            <span>Search</span>
+          </button>
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/explore')"
+                  (click)="onNavClick('/explore')">
+            <mat-icon>explore</mat-icon>
+            <span>Explore</span>
+          </button>
+          <button type="button"
+                  class="nav-pill"
+                  [class.active]="isNavActive('/dashboard')"
+                  (click)="onNavClick('/dashboard')">
+            <mat-icon>dashboard</mat-icon>
+            <span>Dashboard</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          class="nav-refresh-btn"
+          matTooltip="Refresh current view"
+          aria-label="Refresh current view"
+          (click)="refreshCurrentView()">
+          <mat-icon>refresh</mat-icon>
+          <span>Refresh</span>
+        </button>
+      </nav>
+      <span class="spacer nav-spacer"></span>
       <div class="user-info">
         <mat-icon class="user-icon">account_circle</mat-icon>
         <span>{{ authService.user() || 'User' }}</span>
@@ -88,7 +125,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         </button>
         <button mat-menu-item (click)="openAdvancedLLMSettings()">
           <mat-icon>tune</mat-icon>
-          <span>Advanced LLM Settings</span>
+          <span>Advanced Search &amp; AI Settings</span>
         </button>
       </mat-menu>
       <button mat-raised-button class="logout-button" (click)="logout()">
@@ -134,9 +171,13 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         -ms-user-select: none !important;
       }
       
-      // Override for logout button only
+      // Override for interactive toolbar controls
       .logout-button,
-      .logout-button * {
+      .logout-button *,
+      .nav-pill,
+      .nav-pill *,
+      .nav-refresh-btn,
+      .nav-refresh-btn * {
         cursor: pointer !important;
         user-select: none !important;
       }
@@ -196,6 +237,121 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 
     .spacer {
       flex: 1;
+    }
+
+    .nav-spacer {
+      flex: 0 0 0.5rem;
+    }
+
+    .main-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .nav-pills {
+      display: flex;
+      gap: 0.5rem;
+      background: var(--bg-secondary);
+      padding: 0.25rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .nav-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.55rem 1.15rem;
+      background: transparent;
+      border: none;
+      border-radius: 10px;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      font-family: 'Roboto', sans-serif;
+      cursor: pointer !important;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+      mat-icon,
+      span {
+        font-size: 1.2rem;
+        width: 1.2rem;
+        height: 1.2rem;
+        cursor: pointer !important;
+        pointer-events: none;
+      }
+
+      span {
+        width: auto;
+        height: auto;
+        font-size: 0.9rem;
+      }
+
+      &:hover:not(.active) {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+      }
+
+      &.active {
+        background: var(--color-lightblue-400);
+        color: var(--color-blue-1000);
+        box-shadow: var(--shadow);
+
+        mat-icon {
+          color: var(--color-blue-1000);
+        }
+      }
+    }
+
+    .nav-refresh-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      height: 40px;
+      padding: 0 0.9rem 0 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+      font-family: 'Roboto', sans-serif;
+      cursor: pointer !important;
+      transition: all 0.25s ease;
+      flex-shrink: 0;
+
+      mat-icon {
+        font-size: 1.25rem;
+        width: 1.25rem;
+        height: 1.25rem;
+        cursor: pointer !important;
+        pointer-events: none;
+        transition: transform 0.35s ease;
+      }
+
+      span {
+        cursor: pointer !important;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      &:hover {
+        background: var(--bg-card-hover);
+        color: var(--text-primary);
+        border-color: var(--border-hover);
+        transform: translateY(-1px);
+
+        mat-icon {
+          transform: rotate(180deg);
+        }
+      }
+
+      &:active mat-icon {
+        transform: rotate(360deg);
+      }
     }
 
     .user-info {
@@ -420,6 +576,8 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   streamingService = inject(StreamingService);
   themeService = inject(ThemeService);
   router = inject(Router);
+  pageRefresh = inject(PageRefreshService);
+  private ingestMetadata = inject(IngestMetadataService);
   
   @ViewChild('configPopover') configPopover!: ConfigPopoverComponent;
 
@@ -434,6 +592,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   private statusCheckInterval: any;
 
   ngOnInit() {
+    void this.ingestMetadata.ensureLoaded();
     // Check for active batch sync and streaming every 2 seconds
     this.statusCheckInterval = interval(2000).subscribe(() => {
       this.checkBatchSyncStatus();
@@ -577,6 +736,23 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
     // Switch to dark mode before logout to ensure login screen displays correctly
     this.themeService.setTheme('dark');
     this.authService.logout();
+  }
+
+  isNavActive(path: string): boolean {
+    const current = this.router.url.split('?')[0].replace(/\/$/, '') || '/';
+    const target = path.replace(/\/$/, '') || '/';
+    return current === target;
+  }
+
+  onNavClick(path: string): void {
+    if (this.isNavActive(path)) {
+      return;
+    }
+    void this.router.navigateByUrl(path);
+  }
+
+  refreshCurrentView(): void {
+    this.pageRefresh.requestRefresh();
   }
 }
 

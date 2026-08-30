@@ -29,9 +29,6 @@ spec:
         - name: secret-volume
           mountPath: /etc/secrets
           readOnly: true
-        - name: frontend-config-volume
-          mountPath: /app/frontend-config
-          readOnly: true
         resources:
           requests:
             memory: "512Mi"
@@ -55,9 +52,6 @@ spec:
       - name: secret-volume
         secret:
           secretName: video-backend-secret
-      - name: frontend-config-volume
-        configMap:
-          name: video-frontend-config
 ---
 apiVersion: v1
 kind: Service

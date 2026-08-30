@@ -12,6 +12,7 @@ from typing import Optional
 from src.services.auth_service import get_current_user
 from src.models.user import User
 from src.config import get_settings
+from src.ingest_metadata import truncate_custom_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,7 +38,7 @@ class StreamingStartRequest(BaseModel):
     s3_endpoint: str = Field(..., description="S3 endpoint URL")
     name: str = Field(default="capture", description="Custom prefix for video files")
     bucket_name: str = Field(..., description="S3 bucket name for storing captures")
-    capture_interval: int = Field(default=10, ge=1, le=300, description="Capture interval in seconds")
+    capture_interval: int = Field(default=30, ge=1, le=300, description="Capture interval in seconds (chunk size)")
     # Stream capture metadata (optional) - passed to streaming service for S3 tagging
     camera_id: Optional[str] = Field(default="", description="Camera identifier")
     capture_type: Optional[str] = Field(default="", description="Capture type: traffic, streets, crowds, malls")
@@ -174,7 +175,7 @@ async def start_streaming(
             "capture_type": request.capture_type or "",
             "location": request.location or "",
             "scenario": request.scenario or "",
-            "custom_prompt": (request.custom_prompt or "")[:800]
+            "custom_prompt": truncate_custom_prompt(request.custom_prompt) or ""
         }
         
         logger.info(f"[STREAMING] Metadata: camera_id={request.camera_id}, capture_type={request.capture_type}, location={request.location}, scenario={request.scenario}, custom_prompt={'set' if request.custom_prompt else 'none'}")

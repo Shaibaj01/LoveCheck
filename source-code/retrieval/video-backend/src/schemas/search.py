@@ -4,7 +4,7 @@ Search schemas for semantic video search
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from src.models.video import VideoSearchResult
+from src.models.video import VideoSearchResult, ChunkSearchResult
 
 
 class VideoSearchRequest(BaseModel):
@@ -14,7 +14,6 @@ class VideoSearchRequest(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Filter by tags")
     include_public: bool = Field(default=True, description="Include public videos")
     public_only: bool = Field(default=False, description="If true, return only public videos (exclude private even if user has access)")
-    use_llm: bool = Field(default=False, description="Enable AI-powered synthesis of results")
     system_prompt: Optional[str] = Field(default=None, description="Custom LLM system prompt (overrides backend default)")
     time_filter: str = Field(default="all", description="Time filter: 'all', '5m', '15m', '1h', '24h', '7d', 'custom'")
     custom_start_date: Optional[str] = Field(default=None, description="Custom start date (ISO 8601 format)")
@@ -22,6 +21,10 @@ class VideoSearchRequest(BaseModel):
     metadata_filters: Dict[str, Any] = Field(default_factory=dict, description="Dynamic metadata filters (e.g., {'camera_id': 'CAM-001', 'location': 'Midtown'})")
     min_similarity: float = Field(default=0.1, ge=0.0, le=1.0, description="Minimum similarity score threshold (0.3-0.8 recommended)")
     llm_top_n: int = Field(default=3, ge=1, le=100, description="Number of top results to send to LLM for analysis (same max as top_k)")
+    hybrid_text_weight: Optional[float] = Field(
+        default=None,
+        description="Caption vs video blend weight (0-1, default from backend). Search is always hybrid.",
+    )
 
 
 class LLMSynthesisResponse(BaseModel):
@@ -38,7 +41,12 @@ class LLMSynthesisResponse(BaseModel):
 class VideoSearchResponse(BaseModel):
     """Semantic video search response"""
     results: List[VideoSearchResult]
+    chunk_results: List[ChunkSearchResult] = Field(
+        default_factory=list,
+        description="Results grouped by original upload (jump-to-moment UX)",
+    )
     total: int
+    chunk_total: int = Field(default=0, description="Number of grouped chunk results")
     query: str
     embedding_time_ms: float
     search_time_ms: float

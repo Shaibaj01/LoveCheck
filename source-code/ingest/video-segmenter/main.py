@@ -4,11 +4,13 @@ from vast_runtime.vast_event import VastEvent  # type: ignore
 from common.models import Settings, S3ObjectMetadataModel
 from common.video_processor import VideoProcessor
 from common.handler_utils import (
-    parse_s3_event, 
-    should_process_event, 
-    get_output_bucket_name, 
-    get_segment_key, 
-    prepare_metadata
+    parse_s3_event,
+    should_process_event,
+    get_output_bucket_name,
+    get_segment_key,
+    get_segment_list_prefix,
+    segments_already_complete,
+    prepare_metadata,
 )
 from common.clients import S3Client
 
@@ -63,10 +65,12 @@ def handler(ctx, event: VastEvent):
             filename = key.split('/')[-1] if '/' in key else key
             output_bucket = get_output_bucket_name(bucket, ctx.processor.settings.output_bucket_suffix)
 
-            # NOTE: Do not skip based on "any segment object exists" under this video's prefix.
-            # A crash/OOM after uploading only segment_001 made re-invocations skip forever,
-            # so segments 002+ were never created. Duplicate S3 notifications may re-segment
-            # the same source (same keys overwritten); that is acceptable.
+            segment_prefix = get_segment_list_prefix(filename)
+            existing_segment_keys = ctx.s3_client.list_all_objects_prefix(output_bucket, segment_prefix)
+            complete, complete_reason = segments_already_complete(existing_segment_keys, filename)
+            if complete:
+                ctx.logger.info(f"[SKIP] {key} | reason={complete_reason}")
+                return {"status": "skipped", "reason": complete_reason}
 
             with ctx.tracer.start_as_current_span("S3 Download") as download_span:
                 video_content = ctx.s3_client.download_file(bucket, key)
@@ -87,6 +91,20 @@ def handler(ctx, event: VastEvent):
                 is_public = s3_metadata.get_is_public_bool() if s3_metadata.is_public else True
                 allowed_users = s3_metadata.get_allowed_users_list() if s3_metadata.allowed_users else []
                 tags = s3_metadata.get_tags_list()
+
+                chunk_duration_sec = None
+                chunk_duration_raw = raw_metadata.get("chunk_duration_sec")
+                capture_interval_raw = raw_metadata.get("capture_interval")
+                if chunk_duration_raw not in (None, ""):
+                    try:
+                        chunk_duration_sec = float(chunk_duration_raw)
+                    except (TypeError, ValueError):
+                        chunk_duration_sec = None
+                if chunk_duration_sec is None and capture_interval_raw not in (None, ""):
+                    try:
+                        chunk_duration_sec = float(capture_interval_raw)
+                    except (TypeError, ValueError):
+                        chunk_duration_sec = None
                 
                 # CLI/tool uploads default to public
                 if not s3_metadata.is_public and not s3_metadata.allowed_users:
@@ -118,7 +136,14 @@ def handler(ctx, event: VastEvent):
                 
                 segment_key = get_segment_key(original_filename, segment_number, total_segments)
                 segment_metadata = prepare_metadata(
-                    original_metadata, segment_number, total_segments, duration, original_filename
+                    original_metadata,
+                    segment_number,
+                    total_segments,
+                    duration,
+                    source,
+                    start_time,
+                    end_time,
+                    float(ctx.processor.segment_duration),
                 )
                 
                 if is_public and not allowed_users:
@@ -136,7 +161,12 @@ def handler(ctx, event: VastEvent):
                     ctx.logger.error(f"Failed to upload segment {segment_number}/{total_segments}")
 
             with ctx.tracer.start_as_current_span("Video Segmentation and Upload") as video_span:
-                ctx.processor.process_video_segments(video_content, filename, upload_segment_callback)
+                ctx.processor.process_video_segments(
+                    video_content,
+                    filename,
+                    upload_segment_callback,
+                    max_duration_sec=chunk_duration_sec,
+                )
                 total_segments = successful_uploads + failed_uploads
                 
                 video_span.set_attributes({
@@ -149,7 +179,7 @@ def handler(ctx, event: VastEvent):
 
             result = {
                 "source": source,
-                "original_video": filename,
+                "original_video": source,
                 "file_type": file_extension,
                 "segments_created": total_segments,
                 "successful_uploads": successful_uploads,

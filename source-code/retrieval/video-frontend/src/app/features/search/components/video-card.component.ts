@@ -4,28 +4,36 @@ import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { VideoSearchResult } from '../../../shared/models/video.model';
 import { VideoService } from '../../../shared/services/video.service';
+import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPreview } from '../../../shared/utils/video-hover-preview.util';
 
 @Component({
   selector: 'app-video-card',
   standalone: true,
-  imports: [CommonModule, MatCardModule, MatIconModule, MatChipsModule, MatTooltipModule],
+  imports: [CommonModule, MatCardModule, MatIconModule, MatChipsModule, MatTooltipModule, MatProgressSpinnerModule],
   template: `
-    <mat-card class="video-card" (click)="onPlay()" 
+    <mat-card class="video-card"
               (mouseenter)="onHoverStart()" 
               (mouseleave)="onHoverEnd()">
-      <div class="video-preview-container">
+      <div class="video-preview-container" (click)="onPlay()">
         <video #videoElement
-               [src]="videoUrl"
+               [src]="videoUrl || null"
                class="video-preview"
-               [muted]="true"
+               muted
                [loop]="true"
                playsinline
-               preload="auto"
+               preload="metadata"
+               (loadedmetadata)="onPreviewFrameReady()"
                (loadeddata)="onVideoLoaded()">
         </video>
-        <div class="play-overlay" [class.hidden]="isPlaying">
+        @if (previewLoading) {
+          <div class="preview-loading">
+            <mat-spinner diameter="32"></mat-spinner>
+          </div>
+        }
+        <div class="play-overlay" [class.hidden]="isPlaying || previewFrameReady">
           <mat-icon>play_circle_filled</mat-icon>
         </div>
       </div>
@@ -49,9 +57,13 @@ import { VideoService } from '../../../shared/services/video.service';
             <mat-icon>movie</mat-icon>
             Segment {{ video.segment_number }}/{{ video.total_segments }}
           </span>
-          <span class="metadata-item">
+          <span class="metadata-item" [matTooltip]="video.original_video">
             <mat-icon>schedule</mat-icon>
-            {{ video.duration }}s
+            @if (video.segment_start_sec != null && video.segment_end_sec != null) {
+              {{ formatVideoTime(video.segment_start_sec) }}–{{ formatVideoTime(video.segment_end_sec) }}
+            } @else {
+              {{ video.duration }}s
+            }
           </span>
           @if (video.is_public) {
             <span class="metadata-item public">
@@ -120,7 +132,7 @@ import { VideoService } from '../../../shared/services/video.service';
       background: var(--bg-card);
       border: 1px solid var(--border-color);
       border-radius: 16px;
-      cursor: pointer;
+      cursor: default;
       transition: all 0.3s ease;
       overflow: hidden;
       position: relative;
@@ -139,6 +151,22 @@ import { VideoService } from '../../../shared/services/video.service';
       height: 200px;
       background: #000;
       overflow: hidden;
+      cursor: pointer !important;
+    }
+
+    .video-preview-container * {
+      cursor: pointer !important;
+    }
+
+    .preview-loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      z-index: 2;
     }
 
     .video-preview {
@@ -198,6 +226,9 @@ import { VideoService } from '../../../shared/services/video.service';
       border-radius: 12px;
       padding: 0.75rem;
       margin-bottom: 0.5rem;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
       
       .reasoning-icon {
         color: rgba(6, 255, 165, 0.8);
@@ -350,16 +381,15 @@ export class VideoCardComponent implements OnInit {
   isPlaying = false;
   isVideoLoaded = false;
   isExpanded = false;
+  previewLoading = false;
+  previewFrameReady = false;
   videoUrl: string = '';
+  private hoverAbort?: AbortController;
 
   ngOnInit() {
-    // Get authentication token and generate proper stream URL
     const token = localStorage.getItem('video_lab_token');
-    if (token) {
+    if (token && this.video.source?.trim()) {
       this.videoUrl = this.videoService.getStreamUrl(this.video.source, token);
-      console.log('[VIDEO CARD] Stream URL generated for hover preview:', this.videoUrl);
-    } else {
-      console.error('[VIDEO CARD] No token found for video preview');
     }
   }
 
@@ -372,55 +402,63 @@ export class VideoCardComponent implements OnInit {
     this.isExpanded = !this.isExpanded;
   }
 
+  formatVideoTime(seconds: number): string {
+    if (seconds == null || Number.isNaN(seconds)) {
+      return '?';
+    }
+    const total = Math.floor(seconds);
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    const hours = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    if (hours > 0) {
+      return `${hours}:${remMins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  onPreviewFrameReady() {
+    this.previewFrameReady = true;
+  }
+
   onVideoLoaded() {
     this.isVideoLoaded = true;
-    console.log('[VIDEO CARD] Video loaded and ready for hover preview');
+    if (this.previewLoading) {
+      this.previewLoading = false;
+    }
   }
 
   async onHoverStart() {
-    if (!this.videoElement?.nativeElement) {
-      console.log('[VIDEO CARD] Video element not available yet');
-      return;
-    }
+    const video = this.videoElement?.nativeElement;
+    if (!video || !this.videoUrl) return;
 
-    const video = this.videoElement.nativeElement;
-    console.log('[VIDEO CARD] Hover start - readyState:', video.readyState, 'isVideoLoaded:', this.isVideoLoaded);
-    
-    try {
-      if (video.readyState >= 2) { 
-        // Video has enough data to start playing
-        console.log('[VIDEO CARD] Video ready, attempting play...');
-        await video.play();
-        this.isPlaying = true;
-        console.log('[VIDEO CARD] Video playing on hover');
-      } else {
-        // Wait for video to be ready
-        console.log('[VIDEO CARD] Video not ready, waiting for canplay event...');
-        const playWhenReady = async () => {
-          try {
-            console.log('[VIDEO CARD] canplay event fired, attempting play...');
-            await video.play();
-            this.isPlaying = true;
-            console.log('[VIDEO CARD] Video playing after canplay');
-          } catch (err) {
-            console.error('[VIDEO CARD] Play failed after canplay:', err);
-          }
-        };
-        video.addEventListener('canplay', playWhenReady, { once: true });
+    claimHoverPreview(video);
+
+    this.hoverAbort?.abort();
+    this.hoverAbort = new AbortController();
+    const signal = this.hoverAbort.signal;
+
+    this.previewLoading = true;
+    const played = await playHoverPreview(video, this.videoUrl, { signal });
+    if (!signal.aborted) {
+      this.previewLoading = false;
+      this.isPlaying = played;
+      if (played) {
+        claimHoverPreview(video);
       }
-    } catch (err) {
-      console.error('[VIDEO CARD] Play failed on hover:', err);
     }
   }
 
   onHoverEnd() {
-    if (this.videoElement?.nativeElement) {
-      const video = this.videoElement.nativeElement;
-      console.log('[VIDEO CARD] Hover end - pausing and resetting video');
-      video.pause();
-      video.currentTime = 0;
-      this.isPlaying = false;
-    }
+    this.hoverAbort?.abort();
+    this.hoverAbort = undefined;
+    this.previewLoading = false;
+
+    const video = this.videoElement?.nativeElement;
+    if (!video) return;
+    stopHoverPreview(video);
+    releaseHoverPreview(video);
+    this.isPlaying = false;
   }
 }
 

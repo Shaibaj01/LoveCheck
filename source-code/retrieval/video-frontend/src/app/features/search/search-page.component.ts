@@ -1,19 +1,28 @@
-import { Component, ViewChild, inject, signal, OnInit, effect } from '@angular/core';
+import { Component, ViewChild, inject, signal, OnInit, OnDestroy, AfterViewInit, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatTooltipModule } from '@angular/material/tooltip';
+import { Subscription, interval } from 'rxjs';
 import { SearchBarComponent } from './components/search-bar.component';
-import { VideoCardComponent } from './components/video-card.component';
+import { ChunkCardComponent } from './components/chunk-card.component';
 import { SearchAnimationComponent } from './components/search-animation.component';
 import { LLMSynthesisComponent } from './components/llm-synthesis.component';
 import { SearchService } from './services/search.service';
-import { SearchRequest, VideoSearchResult } from '../../shared/models/video.model';
+import { PageRefreshService } from '../../shared/services/page-refresh.service';
+import { SearchRequest, ChunkSearchResult } from '../../shared/models/video.model';
 import { VideoPlayerComponent } from '../player/video-player.component';
 import { UploadDialogComponent } from '../upload/upload-dialog.component';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { AuthService } from '../auth/services/auth.service';
-import { environment } from '../../../environments/environment';
+import { SuggestionsService } from '../../shared/services/suggestions.service';
+import { BackendModelsService } from '../../shared/services/backend-models.service';
+import { formatAbsoluteTime, formatRelativeTime } from '../../shared/utils/time.util';
+import {
+  friendlyVastDbAccessMessage,
+  resolveApiAccessWarning,
+} from '../../shared/utils/api-access.util';
 
 @Component({
   selector: 'app-search-page',
@@ -22,8 +31,10 @@ import { environment } from '../../../environments/environment';
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
+    MatTooltipModule,
     SearchBarComponent,
-    VideoCardComponent,
+    ChunkCardComponent,
     SearchAnimationComponent,
     LLMSynthesisComponent
   ],
@@ -38,37 +49,64 @@ import { environment } from '../../../environments/environment';
         </div>
       }
 
-      @if (!hasSearched() && !searchService.state().loading) {
+      @if (showSuggestions()) {
         <div class="empty-state">
           <img src="assets/vast_logo.svg" alt="VAST" class="vast-logo-glow">
           <h2>What are you looking for?</h2>
           <p>Type what you want to see in plain words to find the right clips</p>
           <div class="examples">
-            <h3>Try something like:</h3>
-            <ul class="example-list">
-              @for (example of exampleQueries(); track $index) {
-                <li>
-                  <button
-                    type="button"
-                    class="example-query-button"
-                    (click)="onExampleQueryClick(example)">
-                    <mat-icon>search</mat-icon>
-                    <span class="example-query-text">"{{ example }}"</span>
-                  </button>
-                </li>
+            <div class="examples-header">
+              <h3>Try something like:</h3>
+              @if (suggestionsUpdatedAt()) {
+                <span
+                  class="examples-updated"
+                  [matTooltip]="formatSuggestionsUpdated(suggestionsUpdatedAt())">
+                  Updated {{ suggestionsUpdatedRelative() }}
+                </span>
               }
-            </ul>
+            </div>
+            @if (suggestionsLoading()) {
+              <div class="examples-status">
+                <mat-spinner diameter="28"></mat-spinner>
+                <span>Loading search suggestions…</span>
+              </div>
+            } @else if (suggestionsAccessWarning()) {
+              <p class="examples-hint examples-hint-warn">
+                <mat-icon>warning_amber</mat-icon>
+                {{ suggestionsAccessWarning() }}
+              </p>
+            } @else if (!exampleQueries().length) {
+              <p class="examples-hint">
+                No suggestions yet. Run the <strong>prompt-suggester</strong> DataEngine function
+                after segments are in <code>vss-collection</code> (writes to
+                <code>vss-prompts-events</code>).
+              </p>
+            } @else {
+              <ul class="example-list">
+                @for (example of exampleQueries(); track example) {
+                  <li>
+                    <button
+                      type="button"
+                      class="example-query-button"
+                      (click)="onExampleQueryClick(example)">
+                      <mat-icon>search</mat-icon>
+                      <span class="example-query-text">"{{ example }}"</span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
           </div>
         </div>
       }
 
-      @if (searchService.state().results.length > 0) {
+      @if (displayResults().length > 0) {
         <div class="results-header">
           <h2>Search Results</h2>
           <div class="results-info">
-            <span>Found {{ searchService.state().results.length }} videos</span>
+            <span>Found {{ displayResults().length }} clip{{ displayResults().length === 1 ? '' : 's' }}</span>
             <span>
-              Showing {{ pageStartIndex() }}-{{ pageEndIndex() }} / {{ searchService.state().results.length }}
+              Showing {{ pageStartIndex() }}-{{ pageEndIndex() }} / {{ displayResults().length }}
             </span>
             @if (searchService.state().permissionFiltered > 0) {
               <span class="filtered-info">
@@ -88,8 +126,12 @@ import { environment } from '../../../environments/environment';
         }
 
         <div class="results-grid">
-          @for (video of visibleResults(); track video.source) {
-            <app-video-card [video]="video" (play)="playVideo($event)"></app-video-card>
+          @for (chunk of visibleChunks(); track trackChunk($index, chunk)) {
+            <app-chunk-card
+              [chunk]="chunk"
+              (open)="openChunk($event)"
+              (jumpTo)="openChunkAt($event.chunk, $event.seekSec)">
+            </app-chunk-card>
           }
         </div>
         @if (hasMultiplePages()) {
@@ -117,7 +159,7 @@ import { environment } from '../../../environments/environment';
         }
       }
 
-      @if (hasSearched() && searchService.state().results.length === 0 && !searchService.state().loading) {
+      @if (hasSearched() && displayResults().length === 0 && !searchService.state().loading) {
         <div class="no-results">
           <img src="assets/vast_logo.svg" alt="VAST" class="vast-logo-glow">
           <h2>No videos found</h2>
@@ -131,8 +173,10 @@ import { environment } from '../../../environments/environment';
       [embeddingTime]="searchService.state().embeddingTimeMs"
       [searchTime]="searchService.state().searchTimeMs"
       [llmTime]="searchService.state().llmTimeMs"
-      [resultsCount]="searchService.state().results.length"
-      [showLlmPhase]="searchService.state().llmSynthesis !== null"
+      [resultsCount]="displayResults().length"
+      [showLlmPhase]="searchService.state().expectSynthesis"
+      [embeddingModelDetail]="modelsService.embeddingDetail()"
+      [synthesisModel]="modelsService.synthesisLabel()"
       (close)="closeAnimation()">
     </app-search-animation>
   `,
@@ -205,8 +249,56 @@ import { environment } from '../../../environments/environment';
         
         h3 {
           color: var(--accent-primary);
-          margin-bottom: 0.75rem;
+          margin: 0;
           font-size: 1rem;
+        }
+
+        .examples-header {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-bottom: 0.75rem;
+        }
+
+        .examples-updated {
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          white-space: nowrap;
+        }
+
+        .examples-status {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          color: var(--text-secondary);
+          padding: 0.5rem 0;
+        }
+
+        .examples-hint {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 0.9rem;
+          line-height: 1.5;
+
+          code {
+            font-size: 0.82rem;
+            color: var(--accent-primary);
+          }
+        }
+
+        .examples-hint-warn {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.5rem;
+          color: var(--accent-warning, #e8af6f);
+
+          mat-icon {
+            font-size: 1.1rem;
+            width: 1.1rem;
+            height: 1.1rem;
+            flex-shrink: 0;
+          }
         }
         
         ul.example-list {
@@ -404,42 +496,105 @@ import { environment } from '../../../environments/environment';
     }
   `]
 })
-export class SearchPageComponent implements OnInit {
+export class SearchPageComponent implements OnInit, OnDestroy, AfterViewInit {
   private static readonly PAGE_SIZE = 20;
+  private static readonly SUGGESTIONS_POLL_MS = 300_000;
 
   @ViewChild(SearchBarComponent) private searchBar?: SearchBarComponent;
 
   searchService = inject(SearchService);
   dialog = inject(MatDialog);
   authService = inject(AuthService);
-  http = inject(HttpClient);
+  suggestionsService = inject(SuggestionsService);
+  modelsService = inject(BackendModelsService);
+  private pageRefresh = inject(PageRefreshService);
   
   hasSearched = signal(false);
   exampleQueries = signal<string[]>([]);
+  suggestionsLoading = signal(true);
+  suggestionsAccessWarning = signal<string | null>(null);
+  suggestionsUpdatedAt = signal<string | null>(null);
+  private suggestionsSub?: Subscription;
+  private pageRefreshSub?: Subscription;
   isOpeningDialog = signal(false);
   currentPage = signal(1);
   private uploadDialogRef: MatDialogRef<UploadDialogComponent> | null = null;
 
   ngOnInit() {
-    this.loadExampleQueries();
-  }
-
-  loadExampleQueries() {
-    this.http.get<any>(`${environment.apiUrl}/frontend/search-suggestions`).subscribe({
-      next: (config) => {
-        if (config.placeholder_examples && config.placeholder_examples.length > 0) {
-          this.exampleQueries.set(config.placeholder_examples);
+    void this.modelsService.ensureLoaded();
+    this.restoreSearchSession();
+    if (this.showSuggestions()) {
+      this.loadExampleQueries();
+    }
+    this.suggestionsSub = interval(SearchPageComponent.SUGGESTIONS_POLL_MS).subscribe(
+      () => {
+        if (this.showSuggestions()) {
+          this.loadExampleQueries(true);
         }
       },
+    );
+    this.pageRefreshSub = this.pageRefresh.refresh$.subscribe(() => this.resetSearchView());
+  }
+
+  ngAfterViewInit() {
+    const query = this.searchService.state().query?.trim();
+    if (query) {
+      this.searchBar?.setQuery(query);
+    }
+  }
+
+  ngOnDestroy() {
+    this.suggestionsSub?.unsubscribe();
+    this.pageRefreshSub?.unsubscribe();
+  }
+
+  loadExampleQueries(silent = false) {
+    if (!silent) {
+      this.suggestionsLoading.set(true);
+    }
+    this.suggestionsService.getSuggestions().subscribe({
+      next: (data) => {
+        this.suggestionsLoading.set(false);
+        if (data.prompts_table_available === false) {
+          this.suggestionsAccessWarning.set(
+            data.table_message?.trim() || friendlyVastDbAccessMessage('suggestions'),
+          );
+          if (!silent || !this.exampleQueries().length) {
+            this.exampleQueries.set([]);
+            this.suggestionsUpdatedAt.set(null);
+          }
+          return;
+        }
+        this.suggestionsAccessWarning.set(null);
+        const prompts = (data.search_prompts ?? []).slice(0, 10);
+        const genAt = data.generated_at ?? null;
+        if (!prompts.length) {
+          if (!silent || !this.exampleQueries().length) {
+            this.exampleQueries.set([]);
+            this.suggestionsUpdatedAt.set(null);
+          }
+          return;
+        }
+        if (
+          silent &&
+          genAt === this.suggestionsUpdatedAt() &&
+          JSON.stringify(prompts) === JSON.stringify(this.exampleQueries())
+        ) {
+          return;
+        }
+        this.suggestionsUpdatedAt.set(genAt);
+        this.exampleQueries.set(prompts);
+      },
       error: (err) => {
-        console.error('Failed to load example queries, using defaults', err);
-        // Set default fallback examples (friendly & varied)
-        this.exampleQueries.set([
-          'person waving at the camera',
-          'someone dropping a bag',
-          'car stopping at a red light'
-        ]);
-      }
+        this.suggestionsLoading.set(false);
+        this.suggestionsAccessWarning.set(resolveApiAccessWarning(err, 'suggestions'));
+        if (!silent) {
+          console.error('Failed to load search suggestions', err);
+        }
+        if (!silent || !this.exampleQueries().length) {
+          this.exampleQueries.set([]);
+        }
+      },
     });
   }
   
@@ -474,24 +629,67 @@ export class SearchPageComponent implements OnInit {
     this.searchBar?.setQuery(example.trim());
   }
 
-  visibleResults(): VideoSearchResult[] {
+  showSuggestions(): boolean {
+    const state = this.searchService.state();
+    return (
+      !this.hasSearched() &&
+      !state.loading &&
+      this.displayResults().length === 0
+    );
+  }
+
+  private restoreSearchSession() {
+    const state = this.searchService.state();
+    if (state.chunkResults.length > 0 || state.results.length > 0 || state.query?.trim()) {
+      this.hasSearched.set(true);
+    }
+  }
+
+  private resetSearchView() {
+    this.searchService.clearResults();
+    this.searchService.closeAnimation();
+    this.hasSearched.set(false);
+    this.currentPage.set(1);
+    this.suggestionsAccessWarning.set(null);
+    this.searchBar?.clearSearch();
+    this.loadExampleQueries();
+  }
+
+  formatSuggestionsUpdated(iso: string | null): string {
+    return formatAbsoluteTime(iso);
+  }
+
+  suggestionsUpdatedRelative(): string {
+    return formatRelativeTime(this.suggestionsUpdatedAt());
+  }
+
+  displayResults(): ChunkSearchResult[] {
+    const chunks = this.searchService.state().chunkResults;
+    if (chunks.length > 0) return chunks;
+    return [];
+  }
+
+  visibleChunks(): ChunkSearchResult[] {
     const start = (this.currentPage() - 1) * SearchPageComponent.PAGE_SIZE;
-    const end = start + SearchPageComponent.PAGE_SIZE;
-    return this.searchService.state().results.slice(start, end);
+    return this.displayResults().slice(start, start + SearchPageComponent.PAGE_SIZE);
+  }
+
+  trackChunk(_index: number, chunk: ChunkSearchResult): string {
+    return `${chunk.original_video}|${chunk.query}|${chunk.best_segment_number}`;
   }
 
   pageStartIndex(): number {
-    const total = this.searchService.state().results.length;
+    const total = this.displayResults().length;
     if (total === 0) return 0;
     return (this.currentPage() - 1) * SearchPageComponent.PAGE_SIZE + 1;
   }
 
   pageEndIndex(): number {
-    return Math.min(this.currentPage() * SearchPageComponent.PAGE_SIZE, this.searchService.state().results.length);
+    return Math.min(this.currentPage() * SearchPageComponent.PAGE_SIZE, this.displayResults().length);
   }
 
   totalPages(): number {
-    const total = this.searchService.state().results.length;
+    const total = this.displayResults().length;
     return Math.max(1, Math.ceil(total / SearchPageComponent.PAGE_SIZE));
   }
 
@@ -530,14 +728,22 @@ export class SearchPageComponent implements OnInit {
     this.searchService.closeAnimation();
   }
 
-  playVideo(video: VideoSearchResult) {
+  openChunk(chunk: ChunkSearchResult, seekSec?: number) {
     this.dialog.open(VideoPlayerComponent, {
-      data: { video },
-      width: '90vw',
-      maxWidth: '1200px',
-      height: '90vh',
-      panelClass: 'video-player-dialog'
+      data: {
+        chunk,
+        query: chunk.query,
+        initialSeekSec: seekSec ?? chunk.best_match_start_sec,
+      },
+      width: '92vw',
+      maxWidth: '1100px',
+      height: '92vh',
+      panelClass: 'video-player-dialog',
     });
+  }
+
+  openChunkAt(chunk: ChunkSearchResult, seekSec: number) {
+    this.openChunk(chunk, seekSec);
   }
 
   openUpload() {

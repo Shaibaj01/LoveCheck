@@ -2,21 +2,63 @@
 
 The system supports customizable metadata fields that flow through the entire pipeline, enabling powerful filtering and organization of video content.
 
+## VSS roadmap (implementation status)
+
+| Step | Capability | Status |
+|------|------------|--------|
+| 1 | Timeline + `original_video` grouping | Done |
+| 2 | Plain `reasoning_content` text embed + hybrid visual | Done |
+| 3 | `vectors_visual` + hybrid search (text/visual/hybrid) | Done |
+| 4 | YOLO11 detector → sidecar + `object_classes` / peak `object_counts` | Done |
+| 5 | Agent tools (`/api/v1/tools/*`) + ask (`/api/v1/agent/ask`) | Done |
+| 6 | Grounded prompt-suggester (rephrase-only chips / key events) | Done |
+
+Recreate the VastDB collection after schema changes (new columns: `perception_source`, `detection_sidecar_uri`, `detection_frame_count`, `detection_count`, `object_counts`). YOLO11 runs in **video-detector** before Cosmos reasoning; bbox sidecars live at `detections/{segment}.json.gz` on the segments bucket. There is **no** structured VLM / `dense_caption` path — search text is `reasoning_content` only.
+
 ## Current Metadata Fields
 
 The system currently supports four metadata fields:
 
 - **`camera_id`** - Camera identifier (e.g., "cam-01", "intersection-5th-ave")
-- **`capture_type`** - Type of capture (e.g., "traffic", "streets", "crowds", "malls")
+- **`capture_type`** - Type of capture — allowed values defined in [`source-code/shared/ingest_metadata.py`](../shared/ingest_metadata.py) (`CAPTURE_TYPES`)
 - **`location`** - Location/area (e.g., "manhattan", "downtown", "warehouse-a")
-- **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "egocentric", "general")
+- **`scenario`** - Analysis prompt scenario (e.g., "surveillance", "traffic", "live_driving") — flows through S3 metadata only (not stored in VastDB). UI labels in `ingest_metadata.py`; prompt text in [`video-reasoner/common/prompts.py`](video-reasoner/common/prompts.py)
+
+### Centralized configuration
+
+Upload / streaming / batch-sync dropdowns (capture types, scenario labels, field labels, custom-prompt limit) are defined once in [`source-code/shared/ingest_metadata.py`](../shared/ingest_metadata.py):
+
+| Layer | How it consumes the config |
+|-------|----------------------------|
+| **GUI** | `GET /api/v1/metadata/ingest-config` → shared `IngestMetadataFieldsComponent` |
+| **video-backend** | S3 upload + API validation |
+| **video-streaming / video-batch-sync** | `build_s3_ingest_metadata()` when writing S3 metadata |
+
+See [`source-code/shared/README.md`](../shared/README.md) for Docker build context and optional local symlink script.
+
+**Search embeddings (stored in VastDB per segment):**
+
+- **`vectors`** — Text embedding of `reasoning_content` only (Cosmos-Embed1: **256-dim**, `nvidia/cosmos-embed1`)
+- **`vectors_visual`** — Video embedding of segment MP4 (same Cosmos-Embed1 NIM, **256-dim**)
+- **`object_classes`** — YOLO detector class names (filter + reasoner prompt context)
+- **`object_counts`** — YOLO peak concurrent count per class (max boxes in any frame); player chips + dashboard heatmap
+
+**Reasoning text (stored in VastDB per segment):**
+
+- **`reasoning_content`** — Plain prose (≤1024 chars) with searchable atoms when visible (color, brand, vehicle type, sign text, clear counts, action, next move). Embedded for search and shown in UI.
+
+**Timeline and grouping (stored in VastDB per segment):**
+
+- **`segment_start_sec`** / **`segment_end_sec`** - Position within the parent video (seconds from start)
+- **`original_video`** - Canonical parent video S3 URI (`s3://bucket/key` of the source upload), used to group all segments from one ingest
+- **`source`** - Segment clip S3 URI (unique per row)
 
 ## How It Works
 
 The metadata flows through the entire system:
 
 1. **Ingest**: Metadata is set when uploading videos (via GUI upload or streaming service)
-2. **Pipeline**: Metadata propagates through all functions (segmenter → reasoner → embedder → writer)
+2. **Pipeline**: Metadata propagates through all functions (segmenter → detector → reasoner → embedder → writer)
 3. **VastDB**: Stored as columns alongside vectors and reasoning content
 4. **Backend**: Auto-discovers available metadata columns dynamically from VastDB schema
 5. **Frontend**: Displays discovered filters as dropdowns with actual values from the database
@@ -65,24 +107,31 @@ schema = {
 }
 ```
 
-### Step 4: Restart Backend
+### Step 4: Expose in GUI filters (optional)
 
-The backend automatically discovers metadata columns from the VastDB schema on startup. After adding a new field:
+If the field should appear in Search filters or the Dashboard metadata panel:
+
+1. Add to `FILTERABLE_METADATA_COLUMNS` and `METADATA_FIELD_LABELS` in [`source-code/shared/ingest_metadata.py`](../shared/ingest_metadata.py)
+2. Rebuild **video-backend** and **video-frontend** (UI loads options from `/api/v1/metadata/ingest-config`)
+
+### Step 5: Restart Backend
+
+The backend discovers filterable columns from VastDB schema (`GET /api/v1/metadata/schema`). After adding a new **stored** field:
 
 1. Ensure the field is in the VastDB schema (Step 3)
 2. Restart the backend service
-3. The new field will appear as a filter in the frontend automatically
+3. If listed in `ingest_metadata.py`, upload/streaming/batch-sync dialogs pick it up automatically; Search filters appear once rows exist in VastDB
 
 ## Using Metadata in the Frontend
 
 Once metadata fields are configured:
 
-1. **Upload with Metadata**: When uploading videos via GUI or [streaming service](../../video-streaming/README.md), set the metadata values
-2. **Automatic Discovery**: The frontend automatically discovers available metadata fields from the database
-3. **Filter Dropdowns**: Each metadata field appears as a filter dropdown in the search interface
-4. **Dynamic Values**: Dropdown values are populated from actual data in the database
+1. **Upload with Metadata**: Upload, streaming, and batch-sync use the shared metadata form (options from `GET /api/v1/metadata/ingest-config`)
+2. **Automatic Discovery**: Search advanced filters discover columns from `GET /api/v1/metadata/schema`
+3. **Filter Dropdowns**: Filterable fields (`camera_id`, `capture_type`, `location`) appear in Search; Dashboard upload-metadata panel uses the same field list from ingest-config
+4. **Dynamic Values**: Search filter dropdown values come from VastDB distinct values
 
-**Note:** The backend service automatically discovers metadata columns from the VastDB schema on startup. No manual configuration is needed in the frontend.
+**Note:** To change capture-type options or scenario **labels**, edit [`source-code/shared/ingest_metadata.py`](../shared/ingest_metadata.py) only — no frontend code changes. Scenario **prompt text** is still edited in `prompts.py`.
 
 ## Example Use Cases
 

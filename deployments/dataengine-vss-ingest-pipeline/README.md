@@ -1,51 +1,70 @@
-# Deploy Ingest Pipeline (VAST DataEngine)
+# Deploy DataEngine Pipelines (VAST)
 
-Deploy the serverless video processing pipeline using **DataEngine UI** or **vastde CLI**.
+Deploy VSS serverless pipelines using **DataEngine UI** or **vastde CLI**:
+
+1. **Ingest** — S3-triggered video processing (`video-realtime-processing-pipeline`)
+2. **Enrichment** — scheduled prompt-suggester (`vss-enrichment-pipeline`)
+
+Both pipelines share secret name **`vss2-secret`** (table/bucket values use `vss-*` — see templates).
 
 ## Prerequisites
 
 - A running VAST DataEngine cluster
 - User with permissions to setup DataEngine Pipelines (including Vector QueryEngine Identity-Policy)
 - Pre-created Topic in VAST Event Broker (e.g., `video-topic`)
-- A container registry added to your DataEngine tenant in VMS, with images you built and pushed (see [Build ingest function images](#build-ingest-function-images) below)
+- A container registry added to your DataEngine tenant in VMS, with images you built and pushed (jump to **Build DataEngine function images** later in this file)
+- GPU services (Reason2, Embed1, YOLO) reachable from DataEngine workers — see [vss-blueprint-models](../../scripts/vss-blueprint-models/README.md)
 
 ## Pipeline Overview
 
-**Pipeline Name:** `video-realtime-processing-pipeline`
+**Ingest — `video-realtime-processing-pipeline`**
 
 ```
-video-chunks bucket → video-segmenter
+vss-chunks bucket → video-segmenter
                             ↓
-video-chunks-segments bucket → video-reasoner → video-embedder → video-vastdb-writer
+vss-chunks-segments bucket → video-detector → video-reasoner → video-embedder → video-vastdb-writer
+```
+
+**Enrichment — `vss-enrichment-pipeline` (optional, after ingest is producing rows)**
+
+```
+Schedule trigger → prompt-suggester → vss-prompts-events (search chips + key events)
 ```
 
 ## Files in This Directory
 
 | File | Used By | Description |
 |------|---------|-------------|
-| `vss-gui-secret-file-template.yaml` | GUI | Secret template for DataEngine UI deployment |
-| `vss-cli-secret-file-template.yaml` | CLI | Secret template for vastde CLI deployment |
-| `vss-ingest-pipeline-file.yaml` | CLI | Pipeline manifest for `vastde pipelines create` |
+| `vss-gui-secret-file-template.yaml` | GUI | Shared secret template (`vss2-secret`) for ingest + enrichment |
+| `vss-cli-secret-file-template.yaml` | CLI | Shared secret template (`vss2-secret`) for ingest + enrichment |
+| `vss-ingest-pipeline-file.yaml` | CLI | Ingest pipeline manifest for `vastde pipelines create` |
+| `vss-enrichment-pipeline-file.yaml` | CLI | Enrichment pipeline manifest (scheduled prompt-suggester) |
 
 ---
 
 # Option 1: Deploy with DataEngine UI
 
+Ingest (steps 1–4) is required. Enrichment (step 5) is optional.
+
 ## Step 1: Configure Secret
 
-Edit `vss-gui-secret-file-template.yaml`:
+Copy `vss-gui-secret-file-template.yaml` to a local file, fill credentials, and upload in DataEngine UI — **do not commit** files with real keys (templates with empty values are safe in git).
 
 ```bash
 vim vss-gui-secret-file-template.yaml
 ```
 
+Secret **name** in DataEngine must be `vss2-secret`. Bucket/table **values** use the `vss-*` namespace (`vss-chunks`, `vss-collection`, etc.). Same secret is reused for enrichment.
+
 | Section | Key Settings |
 |---------|--------------|
 | **S3** | `s3accesskey`, `s3secretkey`, `s3endpoint` |
-| **Reasoning** | `reasoning_provider` (cosmos/nemotron), endpoint settings |
-| **Embedding** | `embedding_local_nim`, `embeddinghost`/`embeddingport`, `nvidia_api_key` |
+| **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port: 8001`, `cosmos_model: nvidia/cosmos-reason2-8b`) |
+| **Embedding** | Text + visual NIM (`embeddinghost` / `embeddingport: 8002`, `embeddingmodel: nvidia/cosmos-embed1`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
-| **Processing** | `segment_duration`, `scenario` |
+| **YOLO** | `yolo_infer_host`, `yolo_infer_port` (`8003` with [vss-blueprint-models](../../scripts/vss-blueprint-models/README.md); templates may still show `8022`), `detection_sidecar_prefix` |
+| **Enrichment** | `vdbpromptscollection` (`vss-prompts-events`), `suggestions_*` (used by prompt-suggester) |
+| **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
 
@@ -53,19 +72,20 @@ Navigate to **DataEngine UI → Triggers** and create:
 
 | Trigger Name | Type | Bucket |
 |--------------|------|--------|
-| `video-chunk-land-trigger` | S3 Bucket | `video-chunks` |
-| `video-segment-land-trigger` | S3 Bucket | `video-chunks-segments` |
+| `video-chunk-land-trigger` | S3 Bucket | `vss-chunks` |
+| `video-segment-land-trigger` | S3 Bucket | `vss-chunks-segments` |
 
 ## Step 3: Create Functions
 
 Navigate to **DataEngine UI → Functions** and create:
 
-| Function | Image (placeholder — use the image you built and pushed) |
+| Function | Image (names from `build-vastde-functions.sh`) |
 |----------|-------|
 | `video-segmenter` | `your.registry/vss-video-segmenter:v1` |
+| `video-detector` | `your.registry/vss-video-detector:v1` |
 | `video-reasoner` | `your.registry/vss-video-reasoner:v1` |
 | `video-embedder` | `your.registry/vss-video-embedder:v1` |
-| `video-vastdb-writer` | `your.registry/vss-vastdb-writer:v1` |
+| `video-vastdb-writer` | `your.registry/vss-video-vastdb:v1` |
 
 ## Step 4: Create Pipeline
 
@@ -77,7 +97,7 @@ Navigate to **DataEngine UI → Pipelines → Create New Pipeline**
 
 3. **Create connections:**
    - `video-chunk-land-trigger` → `video-segmenter`
-   - `video-segment-land-trigger` → `video-reasoner` → `video-embedder` → `video-vastdb-writer`
+   - `video-segment-land-trigger` → `video-detector` → `video-reasoner` → `video-embedder` → `video-vastdb-writer`
 
 4. **Set resources (all functions):**
    - CPU: `1000m - 5000m`
@@ -85,9 +105,20 @@ Navigate to **DataEngine UI → Pipelines → Create New Pipeline**
 
 5. **Save and activate the pipeline**
 
+## Step 5: Enrichment pipeline (optional)
+
+Skip unless you want search suggestion chips and dashboard key events. Deploy after ingest is writing rows to `vss-collection`. Reuse **`vss2-secret`** — do not create a second secret. Details: [prompt-suggester](../../source-code/enrichment/prompt-suggester/README.md).
+
+1. **Trigger:** DataEngine UI → Triggers → create `vss-prompt-suggester-scheduled-trigger` (type **Schedule**, e.g. every 5–15 minutes).
+2. **Function:** create `prompt-suggester` with image `your.registry/vss-video-events:v1` (name used by `build-vastde-functions.sh`).
+3. **Pipeline:** name `vss-enrichment-pipeline`; attach existing `vss2-secret`; connect `vss-prompt-suggester-scheduled-trigger` → `prompt-suggester`.
+4. **Resources:** CPU `200m - 1000m`, memory `256Mi - 512Mi`. Activate.
+
 ---
 
 # Option 2: Deploy with vastde CLI
+
+Ingest (steps 1–5) is required. Enrichment (step 6) is optional.
 
 ## Step 1: Configure Secret
 
@@ -100,10 +131,12 @@ vim vss-cli-secret-file-template.yaml
 | Section | Key Settings |
 |---------|--------------|
 | **S3** | `s3accesskey`, `s3secretkey`, `s3endpoint` |
-| **Reasoning** | `reasoning_provider` (cosmos/nemotron), endpoint settings |
-| **Embedding** | `embedding_local_nim`, `embeddinghost`/`embeddingport`, `nvidia_api_key` |
+| **Reasoning** | Cosmos-Reason2 (`cosmos_host`, `cosmos_port: 8001`, `cosmos_model: nvidia/cosmos-reason2-8b`) |
+| **Embedding** | Text + visual NIM (`embeddinghost` / `embeddingport: 8002`, `embeddingmodel: nvidia/cosmos-embed1`); recreate VastDB collection after schema changes |
 | **VastDB** | `vdbendpoint`, `vdbaccesskey`, `vdbsecretkey`, `vdbbucket`, `vdbschema`, `vdbcollection` |
-| **Processing** | `segment_duration`, `scenario` |
+| **YOLO** | `yolo_infer_host`, `yolo_infer_port` (`8003` with [vss-blueprint-models](../../scripts/vss-blueprint-models/README.md); templates may still show `8022`), `detection_sidecar_prefix` |
+| **Enrichment** | `vdbpromptscollection` (`vss-prompts-events`), `suggestions_*` (used by prompt-suggester) |
+| **Processing** | `segment_duration`, `scenario` (default prompt key; see [video-reasoner README](../../source-code/ingest/video-reasoner/README.md). GUI scenario labels: [shared/ingest_metadata.py](../../source-code/shared/ingest_metadata.py)) |
 
 ## Step 2: Create Triggers
 
@@ -111,7 +144,7 @@ vim vss-cli-secret-file-template.yaml
 vastde triggers create \
   --name video-chunk-land-trigger \
   --type Element \
-  --source-bucket video-chunks \
+  --source-bucket vss-chunks \
   --events "ObjectCreated:*" \
   --broker-name <your-broker-name> \
   --broker-type Internal \
@@ -120,7 +153,7 @@ vastde triggers create \
 vastde triggers create \
   --name video-segment-land-trigger \
   --type Element \
-  --source-bucket video-chunks-segments \
+  --source-bucket vss-chunks-segments \
   --events "ObjectCreated:*" \
   --broker-name <your-broker-name> \
   --broker-type Internal \
@@ -136,6 +169,13 @@ vastde functions create \
   --name video-segmenter \
   --container-registry dockerio \
   --artifact-source YOUR_ORG/vss-video-segmenter \
+  --artifact-type image \
+  --image-tag v1
+
+vastde functions create \
+  --name video-detector \
+  --container-registry dockerio \
+  --artifact-source YOUR_ORG/vss-video-detector \
   --artifact-type image \
   --image-tag v1
 
@@ -156,7 +196,7 @@ vastde functions create \
 vastde functions create \
   --name video-vastdb-writer \
   --container-registry dockerio \
-  --artifact-source YOUR_ORG/vss-vastdb-writer \
+  --artifact-source YOUR_ORG/vss-video-vastdb \
   --artifact-type image \
   --image-tag v1
 ```
@@ -178,6 +218,31 @@ vastde pipelines create \
   --deploy
 ```
 
+## Step 6: Enrichment pipeline (optional)
+
+Skip unless you want search suggestion chips and dashboard key events. Deploy after ingest is writing rows to `vss-collection`. Reuse **`vss2-secret`** — do not create a second secret. Details: [prompt-suggester](../../source-code/enrichment/prompt-suggester/README.md).
+
+Create the schedule trigger in DataEngine (name must match the YAML VRN: `vss-prompt-suggester-scheduled-trigger`). Then:
+
+```bash
+vastde functions create \
+  --name prompt-suggester \
+  --container-registry dockerio \
+  --artifact-source YOUR_ORG/vss-video-events \
+  --artifact-type image \
+  --image-tag v1
+```
+
+Edit `vss-enrichment-pipeline-file.yaml` (`kubernetes_cluster_vrn`, `namespace`, `topic`), then:
+
+```bash
+vastde pipelines create \
+  --name vss-enrichment-pipeline \
+  --config @vss-enrichment-pipeline-file.yaml \
+  --secret-file vss-cli-secret-file-template.yaml \
+  --deploy
+```
+
 ---
 
 ## Function Documentation
@@ -185,36 +250,64 @@ vastde pipelines create \
 | Function | Description | Details |
 |----------|-------------|---------|
 | video-segmenter | Splits videos into segments | [README](../../source-code/ingest/video-segmenter/README.md) |
-| video-reasoner | AI video analysis | [README](../../source-code/ingest/video-reasoner/README.md) |
+| video-detector | YOLO11 object detection + sidecar | [README](../../source-code/ingest/video-detector/README.md) |
+| video-reasoner | AI video analysis (Cosmos-Reason2) | [README](../../source-code/ingest/video-reasoner/README.md) |
 | video-embedder | Vector embeddings | [README](../../source-code/ingest/video-embedder/README.md) |
 | video-vastdb-writer | Stores vectors in VastDB | [README](../../source-code/ingest/vastdb-writer/README.md) |
+| prompt-suggester | Scheduled enrichment → search chips + key events | [README](../../source-code/enrichment/prompt-suggester/README.md) |
 
-## Build ingest function images
+## Build DataEngine function images
 
-Build each DataEngine function image with the [VAST DataEngine CLI](https://github.com/vast-data/dataengine-cli) (`vastde`) from the blueprint source directories, then push to your registry. DataEngine workloads typically target `linux/amd64`.
+Build all pipeline function images with the helper script (recommended):
+
+```bash
+REGISTRY=your.registry/vss TAG=v1 source-code/scripts/build-vastde-functions.sh
+```
+
+This runs `vastde functions build` for segmenter, detector, reasoner, embedder, vastdb-writer (`vss-video-vastdb`), and prompt-suggester (`vss-video-events`), then tags and pushes to your registry. DataEngine workloads typically target `linux/amd64`.
+
+Manual builds with the [VAST DataEngine CLI](https://github.com/vast-data/dataengine-cli) (`vastde`):
 
 From `vss-blueprint/`:
 
 ```bash
 # video-segmenter
 cd source-code/ingest/video-segmenter
-vastde build -t your.registry/vss-video-segmenter:v1 . --platform linux/amd64
+vastde functions build vss-video-segmenter
+docker tag vss-video-segmenter your.registry/vss-video-segmenter:v1
 docker push your.registry/vss-video-segmenter:v1
+
+# video-detector
+cd ../video-detector
+vastde functions build vss-video-detector
+docker tag vss-video-detector your.registry/vss-video-detector:v1
+docker push your.registry/vss-video-detector:v1
 
 # video-reasoner
 cd ../video-reasoner
-vastde build -t your.registry/vss-video-reasoner:v1 . --platform linux/amd64
+vastde functions build vss-video-reasoner
+docker tag vss-video-reasoner your.registry/vss-video-reasoner:v1
 docker push your.registry/vss-video-reasoner:v1
 
 # video-embedder
 cd ../video-embedder
-vastde build -t your.registry/vss-video-embedder:v1 . --platform linux/amd64
+vastde functions build vss-video-embedder
+docker tag vss-video-embedder your.registry/vss-video-embedder:v1
 docker push your.registry/vss-video-embedder:v1
 
-# vastdb-writer (image name vss-vastdb-writer)
+# vastdb-writer (pushed image name vss-video-vastdb)
 cd ../vastdb-writer
-vastde build -t your.registry/vss-vastdb-writer:v1 . --platform linux/amd64
-docker push your.registry/vss-vastdb-writer:v1
+vastde functions build vss-video-vastdb
+docker tag vss-video-vastdb your.registry/vss-video-vastdb:v1
+docker push your.registry/vss-video-vastdb:v1
+
+# prompt-suggester (pushed image name vss-video-events)
+cd ../../enrichment/prompt-suggester
+vastde functions build vss-video-events
+docker tag vss-video-events your.registry/vss-video-events:v1
+docker push your.registry/vss-video-events:v1
 ```
 
 Replace `your.registry` with your real registry. Use the same names and tags in the DataEngine UI, in `vastde functions create` (see Step 3), and in your VMS registry configuration.
+
+See [scripts README](../../source-code/scripts/README.md) for `REGISTRY` / `TAG` overrides.

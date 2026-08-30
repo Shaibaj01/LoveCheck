@@ -12,6 +12,8 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { StreamingService, StreamingStartRequest, StreamingPrefillConfig } from '../../shared/services/streaming.service';
+import { IngestMetadataFieldsComponent } from '../../shared/components/ingest-metadata-fields.component';
+import { pickIngestMetadataPayload } from '../../shared/utils/ingest-metadata.util';
 
 @Component({
   selector: 'app-streaming-config',
@@ -26,7 +28,8 @@ import { StreamingService, StreamingStartRequest, StreamingPrefillConfig } from 
     MatInputModule,
     MatSelectModule,
     MatTabsModule,
-    MatProgressSpinnerModule
+    MatProgressSpinnerModule,
+    IngestMetadataFieldsComponent,
   ],
   template: `
     <div class="streaming-dialog">
@@ -117,82 +120,14 @@ import { StreamingService, StreamingStartRequest, StreamingPrefillConfig } from 
 
               <mat-form-field appearance="outline">
                 <mat-label>Capture Interval (seconds)</mat-label>
-                <input matInput type="number" formControlName="capture_interval" placeholder="10">
+                <input matInput type="number" formControlName="capture_interval" placeholder="30">
                 <mat-icon matSuffix>schedule</mat-icon>
               </mat-form-field>
 
               <!-- Metadata Section -->
               <div class="metadata-section">
-                <h3 class="section-title">
-                  <mat-icon>info</mat-icon>
-                  <span>Stream Metadata (Optional)</span>
-                </h3>
-                <p class="section-description">These fields will be stored with each video segment for filtering and search</p>
-
-                <mat-form-field appearance="outline">
-                  <mat-label>Camera ID</mat-label>
-                  <input matInput formControlName="camera_id" placeholder="e.g., CAM-001, manhattan-cam-1">
-                  <mat-icon matSuffix>videocam</mat-icon>
-                </mat-form-field>
-
-                <mat-form-field appearance="outline">
-                  <mat-label>Capture Type</mat-label>
-                  <mat-select formControlName="capture_type">
-                    <mat-option [value]="">-- Select Type --</mat-option>
-                    <mat-option value="traffic">Traffic</mat-option>
-                    <mat-option value="streets">Streets</mat-option>
-                    <mat-option value="crowds">Crowds</mat-option>
-                    <mat-option value="malls">Malls</mat-option>
-                    <mat-option value="general">General</mat-option>
-                    <mat-option value="sports">Sports</mat-option>
-                    <mat-option value="robotics">Robotics</mat-option>
-                    <mat-option value="warehouse">Warehouse</mat-option>
-                    <mat-option value="retail">Retail</mat-option>
-                  </mat-select>
-                  <mat-icon matSuffix>category</mat-icon>
-                </mat-form-field>
-
-                <mat-form-field appearance="outline">
-                  <mat-label>Location</mat-label>
-                  <input matInput formControlName="location" placeholder="e.g., Midtown, Downtown, Times Square">
-                  <mat-icon matSuffix>location_on</mat-icon>
-                </mat-form-field>
-
-                <mat-form-field appearance="outline">
-                  <mat-label>Analysis Scenario</mat-label>
-                  <mat-select formControlName="scenario">
-                    <mat-option [value]="">-- Use Default (from settings) --</mat-option>
-                    <mat-option value="surveillance">Incident & Safety Detection</mat-option>
-                    <mat-option value="traffic">Vehicle & Pedestrian Monitoring</mat-option>
-                    <mat-option value="nhl">Hockey Game Analysis</mat-option>
-                    <mat-option value="sports">General Sports Analysis</mat-option>
-                    <mat-option value="retail">Retail Store Monitoring</mat-option>
-                    <mat-option value="warehouse">Warehouse Safety & Operations</mat-option>
-                    <mat-option value="nyc_control">NYC Traffic & Public Safety</mat-option>
-                    <mat-option value="egocentric">First-Person Activity Analysis</mat-option>
-                    <mat-option value="general">General Video Analysis</mat-option>
-                  </mat-select>
-                  <mat-icon matSuffix>psychology</mat-icon>
-                </mat-form-field>
-
-                <div class="custom-prompt-toggle">
-                  <label class="toggle-wrapper">
-                    <input type="checkbox" formControlName="useCustomPrompt" class="toggle-checkbox">
-                    <span class="toggle-label">Use custom prompt (overrides scenario)</span>
-                  </label>
-                </div>
-
-                @if (useCustomPrompt()) {
-                  <mat-form-field appearance="outline" class="custom-prompt-field">
-                    <mat-label>Custom Prompt</mat-label>
-                    <textarea matInput formControlName="custom_prompt" 
-                              placeholder="Enter your custom reasoning prompt for the AI model..."
-                              rows="4"
-                              maxlength="800"></textarea>
-                    <mat-icon matSuffix>edit_note</mat-icon>
-                    <mat-hint align="end">{{ customPromptLength() }}/800</mat-hint>
-                  </mat-form-field>
-                }
+                <app-ingest-metadata-fields [form]="startForm" fields="all" variant="material">
+                </app-ingest-metadata-fields>
               </div>
 
               <button mat-raised-button class="action-btn" (click)="startCapture()" 
@@ -698,7 +633,7 @@ export class StreamingConfigComponent {
       s3_endpoint: ['', [Validators.required]],
       bucket_name: ['', [Validators.required]],
       name: ['capture', [Validators.required]],
-      capture_interval: [10, [Validators.required, Validators.min(1), Validators.max(300)]],
+      capture_interval: [30, [Validators.required, Validators.min(1), Validators.max(300)]],
       // Stream capture metadata (optional)
       camera_id: [''],
       capture_type: [''],
@@ -706,15 +641,6 @@ export class StreamingConfigComponent {
       scenario: [''],
       useCustomPrompt: [false],
       custom_prompt: ['']
-    });
-
-    // Disable/enable scenario based on custom prompt toggle
-    this.startForm.get('useCustomPrompt')?.valueChanges.subscribe((useCustom: boolean | null) => {
-      if (useCustom) {
-        this.startForm.get('scenario')?.disable();
-      } else {
-        this.startForm.get('scenario')?.enable();
-      }
     });
 
     // Load streaming prefill config from backend (includes actual credentials)
@@ -765,14 +691,6 @@ export class StreamingConfigComponent {
     });
   }
 
-  useCustomPrompt(): boolean {
-    return this.startForm.get('useCustomPrompt')?.value || false;
-  }
-
-  customPromptLength(): number {
-    return this.startForm.get('custom_prompt')?.value?.length || 0;
-  }
-
   startCapture() {
     if (!this.startForm.valid) return;
 
@@ -780,6 +698,7 @@ export class StreamingConfigComponent {
     this.startResult.set(null);
 
     const formValue = this.startForm.getRawValue();
+    const meta = pickIngestMetadataPayload(formValue);
     const request: StreamingStartRequest = {
       youtube_url: formValue.youtube_url,
       access_key: formValue.access_key,
@@ -788,11 +707,11 @@ export class StreamingConfigComponent {
       bucket_name: formValue.bucket_name,
       name: formValue.name,
       capture_interval: formValue.capture_interval,
-      camera_id: formValue.camera_id,
-      capture_type: formValue.capture_type,
-      location: formValue.location,
-      scenario: formValue.useCustomPrompt ? '' : formValue.scenario,
-      custom_prompt: formValue.useCustomPrompt ? formValue.custom_prompt : undefined
+      camera_id: meta.camera_id || '',
+      capture_type: meta.capture_type || '',
+      location: meta.location || '',
+      scenario: meta.scenario || '',
+      custom_prompt: meta.custom_prompt,
     };
 
     this.streamingService.start(request).subscribe({

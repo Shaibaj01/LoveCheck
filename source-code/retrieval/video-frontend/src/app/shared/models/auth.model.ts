@@ -21,4 +21,3 @@ export interface LoginState {
   token: string | null;
   user: string | null;
 }
-

@@ -13,46 +13,66 @@ import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 // Storage keys for localStorage
 export const LLM_SETTINGS_STORAGE_KEY = 'video_lab_llm_settings';
 
-/** Max value for search top_k (must match backend VideoSearchRequest.top_k le=100) */
+/** Max clip cards (backend VideoSearchRequest.top_k le=100). */
 export const MAX_SEARCH_RESULTS = 100;
 
-/** Max segments sent to LLM synthesis (must match backend VideoSearchRequest.llm_top_n le=100) */
+/** Max clips sent to LLM synthesis (backend llm_top_n le=100). */
 export const MAX_LLM_ANALYSIS_COUNT = 100;
 
-/** Discrete choices for LLM Analysis Count (must be ≤ MAX_LLM_ANALYSIS_COUNT) */
-export const LLM_ANALYSIS_COUNT_OPTIONS = [
-  3, 5, 10, 15, 20, 30, 50, 100
-] as const;
+export const LLM_CLIP_COUNT_OPTIONS = [1, 2, 3, 5, 10, 15, 20, 30, 50, 100] as const;
+
+export const CLIP_CARD_COUNT_OPTIONS = [3, 5, 10, 15, 20, 30, 50, 100] as const;
 
 export interface LLMSettings {
-  llmTopNSummaries: number;    // How many results sent to LLM (see LLM_ANALYSIS_COUNT_OPTIONS, max MAX_LLM_ANALYSIS_COUNT)
-  searchTopK: number;          // Max search results from VastDB (1, 3, 5, 10, 15, or MAX_SEARCH_RESULTS)
-  minSimilarityScore: number;  // Minimum similarity threshold (0.1 - 0.8)
+  /** Top grouped clip cards shown in results (top_k). */
+  searchTopK: number;
+  /** Top clip cards sent to LLM with full timeline reasoning text + object_classes. */
+  llmTopNSummaries: number;
+  /** Hybrid search: caption text weight (remainder = video embedding). */
+  hybridTextWeight: number;
+  minSimilarityScore: number;
 }
 
 export const DEFAULT_LLM_SETTINGS: LLMSettings = {
-  llmTopNSummaries: 3,
   searchTopK: 15,
-  minSimilarityScore: 0.1
+  llmTopNSummaries: 3,
+  hybridTextWeight: 0.6,
+  minSimilarityScore: 0.1,
 };
 
-/** Snap stored value to an allowed option so mat-select never shows blank after upgrades. */
-function normalizeLlmTopNSummaries(n: unknown): number {
+function normalizeOption(n: unknown, fallback: number, options: readonly number[], max: number): number {
   let raw: number;
   if (typeof n === 'number' && !Number.isNaN(n)) {
     raw = n;
   } else if (typeof n === 'string' && n.trim() !== '' && !Number.isNaN(Number(n))) {
     raw = Number(n);
   } else {
-    raw = DEFAULT_LLM_SETTINGS.llmTopNSummaries;
+    raw = fallback;
   }
-  const clamped = Math.min(Math.max(1, raw), MAX_LLM_ANALYSIS_COUNT);
-  const opts = LLM_ANALYSIS_COUNT_OPTIONS as readonly number[];
-  if (opts.includes(clamped)) {
+  const clamped = Math.min(Math.max(1, raw), max);
+  if (options.includes(clamped)) {
     return clamped;
   }
-  const nextUp = opts.find((o) => o >= clamped);
-  return nextUp ?? opts[opts.length - 1];
+  const nextUp = options.find((o) => o >= clamped);
+  return nextUp ?? options[options.length - 1];
+}
+
+function normalizeLlmTopNSummaries(n: unknown): number {
+  return normalizeOption(n, DEFAULT_LLM_SETTINGS.llmTopNSummaries, LLM_CLIP_COUNT_OPTIONS, MAX_LLM_ANALYSIS_COUNT);
+}
+
+function normalizeSearchTopK(n: unknown): number {
+  return normalizeOption(n, DEFAULT_LLM_SETTINGS.searchTopK, CLIP_CARD_COUNT_OPTIONS, MAX_SEARCH_RESULTS);
+}
+
+function normalizeHybridTextWeight(n: unknown): number {
+  let raw = DEFAULT_LLM_SETTINGS.hybridTextWeight;
+  if (typeof n === 'number' && !Number.isNaN(n)) {
+    raw = n;
+  } else if (typeof n === 'string' && n.trim() !== '' && !Number.isNaN(Number(n))) {
+    raw = Number(n);
+  }
+  return Math.min(1, Math.max(0, Math.round(raw * 100) / 100));
 }
 
 // Helper function to get settings (can be used by other components)
@@ -61,7 +81,12 @@ export function getLLMSettings(): LLMSettings {
   if (stored) {
     try {
       const merged = { ...DEFAULT_LLM_SETTINGS, ...JSON.parse(stored) } as LLMSettings;
+      merged.searchTopK = normalizeSearchTopK(merged.searchTopK);
       merged.llmTopNSummaries = normalizeLlmTopNSummaries(merged.llmTopNSummaries);
+      merged.hybridTextWeight = normalizeHybridTextWeight(merged.hybridTextWeight);
+      if (merged.llmTopNSummaries > merged.searchTopK) {
+        merged.llmTopNSummaries = merged.searchTopK;
+      }
       return merged;
     } catch {
       return DEFAULT_LLM_SETTINGS;
@@ -90,7 +115,7 @@ export function getLLMSettings(): LLMSettings {
       <div class="dialog-header">
         <div class="header-title">
           <mat-icon>tune</mat-icon>
-          <h2>Advanced LLM Settings</h2>
+          <h2>Advanced Search &amp; AI Settings</h2>
         </div>
         <button mat-icon-button class="close-btn" (click)="close()">
           <mat-icon>close</mat-icon>
@@ -99,49 +124,68 @@ export function getLLMSettings(): LLMSettings {
 
       <div class="dialog-content">
         <p class="description">
-          Fine-tune the search and AI analysis parameters to optimize results for your use case.
-          These settings are stored in your browser and persist across sessions.
+          Tune hybrid clip search and AI synthesis. Search always blends caption + video embeddings;
+          AI summary runs automatically on every search using timeline reasoning text and object_classes from each clip.
         </p>
 
-        <!-- LLM Analysis Count -->
+        <!-- Max clip cards -->
         <div class="setting-row">
           <div class="setting-label">
-            <span class="label-text">LLM Analysis Count</span>
+            <span class="label-text">Max Clip Cards</span>
             <button mat-icon-button class="info-btn"
-                    matTooltip="Number of top search results sent to the LLM for analysis and response synthesis. Only applies when 'Enable LLM Response' toggle is enabled. Higher values provide more context but increase payload size, latency, and token usage (max {{ maxLlmAnalysisCount }})."
-                    matTooltipPosition="right">
-              <mat-icon>info_outline</mat-icon>
-            </button>
-          </div>
-          <mat-form-field appearance="outline" class="setting-field">
-            <mat-select [(ngModel)]="settings.llmTopNSummaries">
-              @for (n of llmAnalysisCountOptions; track n) {
-                <mat-option [value]="n">{{ n }} results</mat-option>
-              }
-            </mat-select>
-          </mat-form-field>
-        </div>
-
-        <!-- Max Search Results -->
-        <div class="setting-row">
-          <div class="setting-label">
-            <span class="label-text">Max Search Results</span>
-            <button mat-icon-button class="info-btn"
-                    matTooltip="Maximum number of video segments to retrieve from the database. Higher values may include more relevant results but increase response time and display more cards."
+                    matTooltip="Maximum upload clips shown as grouped cards (one card per video). Backend fetches extra segment hits internally to build each timeline."
                     matTooltipPosition="right">
               <mat-icon>info_outline</mat-icon>
             </button>
           </div>
           <mat-form-field appearance="outline" class="setting-field">
             <mat-select [(ngModel)]="settings.searchTopK">
-              <mat-option [value]="1">1</mat-option>
-              <mat-option [value]="3">3</mat-option>
-              <mat-option [value]="5">5</mat-option>
-              <mat-option [value]="10">10</mat-option>
-              <mat-option [value]="15">15</mat-option>
-              <mat-option [value]="maxSearchResults">Max ({{ maxSearchResults }})</mat-option>
+              @for (n of clipCardCountOptions; track n) {
+                <mat-option [value]="n">{{ clipLabel(n) }}</mat-option>
+              }
             </mat-select>
           </mat-form-field>
+        </div>
+
+        <!-- LLM clips analyzed -->
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="label-text">LLM Clips Analyzed</span>
+            <button mat-icon-button class="info-btn"
+                    matTooltip="Number of top clip cards sent to the LLM, each with full segment timeline (reasoning text, object_classes). More clips = richer answers but higher latency and token cost."
+                    matTooltipPosition="right">
+              <mat-icon>info_outline</mat-icon>
+            </button>
+          </div>
+          <mat-form-field appearance="outline" class="setting-field">
+            <mat-select [(ngModel)]="settings.llmTopNSummaries">
+              @for (n of llmClipCountOptions; track n) {
+                <mat-option [value]="n" [disabled]="n > settings.searchTopK">{{ clipLabel(n) }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        </div>
+
+        <!-- Hybrid text vs video weight -->
+        <div class="setting-row slider-row">
+          <div class="setting-label">
+            <span class="label-text">Caption vs Video Weight</span>
+            <button mat-icon-button class="info-btn"
+                    matTooltip="Hybrid search blend: left = caption/text embeddings, right = segment video embeddings. Default 60% caption / 40% video."
+                    matTooltipPosition="right">
+              <mat-icon>info_outline</mat-icon>
+            </button>
+          </div>
+          <div class="slider-container">
+            <div class="slider-labels">
+              <span class="slider-label">Video ({{ videoWeightLabel }})</span>
+              <span class="slider-value">{{ settings.hybridTextWeight.toFixed(2) }} caption</span>
+              <span class="slider-label">Caption (1.0)</span>
+            </div>
+            <mat-slider min="0" max="1" step="0.05" class="similarity-slider">
+              <input matSliderThumb [(ngModel)]="settings.hybridTextWeight">
+            </mat-slider>
+          </div>
         </div>
 
         <!-- Minimum Similarity Score -->
@@ -149,7 +193,7 @@ export function getLLMSettings(): LLMSettings {
           <div class="setting-label">
             <span class="label-text">Minimum Similarity</span>
             <button mat-icon-button class="info-btn"
-                    matTooltip="Threshold for matching relevance. Lower values (0.1) return more results but may include less relevant matches. Higher values (0.8) are stricter and return only highly relevant matches. Recommended: 0.4-0.6"
+                    matTooltip="Minimum hybrid score for a clip card to appear. Lower = more clips (may include weaker matches); higher = stricter. Recommended: 0.4–0.6"
                     matTooltipPosition="right">
               <mat-icon>info_outline</mat-icon>
             </button>
@@ -172,9 +216,10 @@ export function getLLMSettings(): LLMSettings {
           <div class="info-content">
             <strong>Tips:</strong>
             <ul>
-              <li>For broad exploration, use lower similarity (0.3-0.4) and more results</li>
-              <li>For precise queries, use higher similarity (0.6-0.8) and fewer results</li>
-              <li>LLM Analysis Count should not exceed Max Search Results</li>
+              <li>Object/brand queries: try higher caption weight; visual appearance queries: lower caption weight</li>
+              <li>LLM clips analyzed must be ≤ max clip cards shown</li>
+              <li>Lower similarity (0.2–0.4) for exploration; higher (0.5–0.7) for precision</li>
+              <li>Custom system prompt (menu) shapes AI answer style; evidence comes from reasoning text and object_classes</li>
             </ul>
           </div>
         </div>
@@ -470,15 +515,20 @@ export class AdvancedLLMSettingsDialogComponent implements OnInit {
   private dialogRef = inject(MatDialogRef<AdvancedLLMSettingsDialogComponent>);
   private snackBar = inject(MatSnackBar);
 
-  /** Max search results value (matches backend limit); used in template for "Max" option */
   maxSearchResults = MAX_SEARCH_RESULTS;
-
-  /** Max segments for LLM synthesis (matches backend llm_top_n cap) */
   maxLlmAnalysisCount = MAX_LLM_ANALYSIS_COUNT;
-
-  llmAnalysisCountOptions = [...LLM_ANALYSIS_COUNT_OPTIONS];
+  llmClipCountOptions = [...LLM_CLIP_COUNT_OPTIONS];
+  clipCardCountOptions = [...CLIP_CARD_COUNT_OPTIONS];
 
   settings: LLMSettings = { ...DEFAULT_LLM_SETTINGS };
+
+  get videoWeightLabel(): string {
+    return (1 - this.settings.hybridTextWeight).toFixed(2);
+  }
+
+  clipLabel(n: number): string {
+    return `${n} clip${n === 1 ? '' : 's'}`;
+  }
 
   ngOnInit() {
     this.loadSettings();
@@ -497,16 +547,17 @@ export class AdvancedLLMSettingsDialogComponent implements OnInit {
   }
 
   save() {
-    // Validate: llmTopNSummaries should not exceed searchTopK
+    this.settings.searchTopK = normalizeSearchTopK(this.settings.searchTopK);
+    this.settings.llmTopNSummaries = normalizeLlmTopNSummaries(this.settings.llmTopNSummaries);
+    this.settings.hybridTextWeight = normalizeHybridTextWeight(this.settings.hybridTextWeight);
+
     if (this.settings.llmTopNSummaries > this.settings.searchTopK) {
-      this.snackBar.open('LLM Analysis Count cannot exceed Max Search Results. Adjusting...', 'OK', {
+      this.snackBar.open('LLM clips analyzed cannot exceed max clip cards. Adjusting…', 'OK', {
         duration: 3000,
         panelClass: 'warning-snackbar'
       });
-      this.settings.llmTopNSummaries = Math.min(this.settings.llmTopNSummaries, this.settings.searchTopK);
+      this.settings.llmTopNSummaries = this.settings.searchTopK;
     }
-
-    this.settings.llmTopNSummaries = normalizeLlmTopNSummaries(this.settings.llmTopNSummaries);
 
     localStorage.setItem(LLM_SETTINGS_STORAGE_KEY, JSON.stringify(this.settings));
     this.snackBar.open('Settings saved!', 'OK', {

@@ -16,12 +16,6 @@ async def login(request: VastLoginRequest):
     """
     Login with VAST user credentials (username + password).
     VMS and tenant are taken from backend config (not from request).
-
-    Args:
-        request: Login request with username and password
-
-    Returns:
-        JWT token and user information
     """
     settings = get_settings()
     logger.info(
@@ -47,15 +41,7 @@ async def login(request: VastLoginRequest):
 
 @router.get("/me", response_model=UserInfo)
 async def get_current_user_info(current_user: CurrentUser):
-    """
-    Get current authenticated user information
-
-    Args:
-        current_user: Current authenticated user (from dependency)
-
-    Returns:
-        User information
-    """
+    """Get current authenticated user information."""
     logger.info("User info request for: %s", current_user.username)
 
     return UserInfo(

@@ -4,7 +4,7 @@ manifest:
   config:
     environment_variables: []
     secrets:
-      - videoreasonsecret
+      - vss2-secret
   function_deployments:
     - function_vrn: vast:dataengine:functions:video-segmenter
       name: video-segmenter-2
@@ -18,7 +18,20 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 10
-        timeout: 120
+        timeout: 600
+    - function_vrn: vast:dataengine:functions:video-detector
+      name: video-detector-7
+      revision: 1
+      config:
+        log_level: INFO
+      resources:
+        min_cpu: 1000m
+        max_cpu: 5000m
+        min_memory: 1280Mi
+        max_memory: 2560Mi
+        min_concurrency: 1
+        max_concurrency: 5
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-reasoner
       name: video-reasoner-3
       revision: 1
@@ -31,7 +44,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 5
-        timeout: 120
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-embedder
       name: video-embedder-4
       revision: 1
@@ -44,7 +57,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 5
-        timeout: 120
+        timeout: 600
     - function_vrn: vast:dataengine:functions:video-vastdb-writer
       name: video-vastdb-writer-5
       revision: 1
@@ -57,7 +70,7 @@ manifest:
         max_memory: 2560Mi
         min_concurrency: 1
         max_concurrency: 10
-        timeout: 120
+        timeout: 600
   links:
     - source:
         - video-chunk-land-trigger-1
@@ -70,8 +83,15 @@ manifest:
     - source:
         - video-segment-land-trigger-6
       destination:
-        - video-reasoner-3
+        - video-detector-7
       topic: vast:dataengine:topics:<your-broker-name>/<your-topic>
+      config:
+        events_order: unordered
+        retries: 3
+    - source:
+        - video-detector-7
+      destination:
+        - video-reasoner-3
       config:
         events_order: unordered
         retries: 3

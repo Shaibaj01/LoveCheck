@@ -1,44 +1,33 @@
 # Video Reasoner
 
-DataEngine function that analyzes video segments using NVIDIA VLM (Cosmos or Nemotron) to generate text descriptions.
+DataEngine function that analyzes video segments using **Cosmos-Reason2** to generate plain-text descriptions.
 
 ## What It Does
 
 - Triggered when segments land in `video-chunks-segments` bucket
-- Analyzes video content and generates text descriptions
-- Extracts metadata from S3 object metadata
-- Passes results to the next function in pipeline
+- Sends segment MP4 (base64) to Cosmos-Reason2
+- Produces normalized `reasoning_content` (plain prose, max 1024 chars)
+- Shared instruction asks for searchable atoms (color, brand/logo, vehicle type, sign text, clear counts, action, likely next move) when clearly visible — still plain prose, no inventing
+- YOLO object classes from upstream detector are injected into the prompt
+- Passes results to `video-embedder`
 
 ## Configuration
 
-Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-template.yaml.yaml` (GUI) or `vss-cli-secret-file-template.yaml` (CLI):
+Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-template.yaml` (GUI) or `vss-cli-secret-file-template.yaml` (CLI):
 
-### Provider Selection
-
-```yaml
-reasoning_provider: "nemotron"  # or "cosmos"
-```
-
-| Provider | Description |
-|----------|-------------|
-| `cosmos` | Hosted Reason API (sends base64-encoded video) |
-| `nemotron` | NVIDIA Cloud API (extracts frames, sends as images) |
-
-### Cosmos Settings
+### Cosmos-Reason2 Settings
 
 | Setting | Default |
 |---------|---------|
-| `cosmos_host` | (required) |
-| `cosmos_port` | (required) |
-| `cosmos_model` | ./Cosmos-Reason2-8B |
+| `cosmos_host` | (required) — hostname or `hostname/path/prefix` for routed APIs |
+| `cosmos_port` | 8001 |
+| `cosmoshttpscheme` | `http` (set `https` for TLS-terminated endpoints) |
+| `cosmos_authorization` | (optional) Bearer token sent as `Authorization` when set |
+| `cosmos_model` | nvidia/cosmos-reason2-8b |
+| `cosmos_max_tokens` | 4000 |
+| `cosmos_temperature` | 0.2 |
 
-### Nemotron Settings
-
-| Setting | Default |
-|---------|---------|
-| `nvidia_api_key` | (required) |
-| `nemotron_model` | nvidia/nemotron-nano-12b-v2-vl |
-| `nemotron_num_frames` | 5 |
+Local stack guide: `docs/COSMOS_LOCAL_STACK.md`
 
 ---
 
@@ -50,12 +39,17 @@ Set `scenario` in ingest secret or per-video via S3 metadata:
 |----------|----------|
 | `surveillance` | Security cameras, safety monitoring |
 | `traffic` | Traffic cameras, vehicle detection |
+| `live_driving` | Dashcam / patrol — violations, hazards, pedestrians, trucks, signals |
 | `nhl` | Hockey game analysis |
 | `sports` | General sports footage |
 | `retail` | Store cameras, customer behavior |
 | `warehouse` | Industrial safety, PPE compliance |
+| `nyc_control` | NYC command-and-control / public-safety monitoring |
+| `nyc_safety_surveillance` | NYC street surveillance — pedestrians, vehicles, signage, safety |
 | `egocentric` | First-person perspective |
 | `general` | Generic video description (default) |
+
+GUI dropdown labels for all scenarios live in [`source-code/shared/ingest_metadata.py`](../../shared/ingest_metadata.py) (`ANALYSIS_SCENARIO_LABELS`).
 
 ### Per-Video Override
 
@@ -81,18 +75,20 @@ Metadata={"custom-prompt": "Analyze safety violations..."}
 Or use the GUI:
 - **Manual Upload / Streaming / Batch Sync**: Check "Use custom prompt"
 
-Max 800 characters. URL-encoded automatically.
+Max 800 characters (`CUSTOM_PROMPT_MAX_LENGTH` in [`ingest_metadata.py`](../../shared/ingest_metadata.py)). URL-encoded automatically.
 
 ### Adding New Scenarios
 
-1. Edit `source-code/ingest/video-reasoner/common/prompts.py`
-2. Add to `SCENARIO_PROMPTS` dictionary
-3. Update ingest secret with new scenario name
-4. Redeploy in DataEngine UI
+1. Edit `source-code/ingest/video-reasoner/common/prompts.py` — add prompt to `SCENARIO_PROMPTS`
+2. Edit `source-code/shared/ingest_metadata.py` — add UI label to `ANALYSIS_SCENARIO_LABELS`
+3. Rebuild **video-reasoner** (prompt), **video-backend**, **video-streaming**, **video-batch-sync**, **video-frontend**
+4. Redeploy DataEngine + retrieval stack
+
+Local Python dev: run [`link-ingest-metadata.sh`](../../scripts/link-ingest-metadata.sh) once to symlink `shared/ingest_metadata.py` into service `src/` directories.
 
 ---
 
 ## Runtime
 
-- **Image**: `your.registry/vss-video-reasoner:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-ingest-function-images))
+- **Image**: `your.registry/vss-video-reasoner:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-dataengine-function-images))
 - **Trigger**: S3 bucket event on `video-chunks-segments`

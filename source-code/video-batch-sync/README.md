@@ -1,41 +1,56 @@
 # Video Batch Sync Service
 
-REST API service for batch copying MP4 video files from a source S3 bucket to a destination S3 bucket. Files are automatically processed by the ingest pipeline after copying.
+REST API service for batch ingesting MP4 video files from a source S3 bucket into the
+destination ingest bucket (`vss-chunks`). Each source video can be split into fixed-duration
+chunks (default **30 seconds**) before upload, matching the former live-streaming ingest path.
 
 ## Features
 
-- Copies MP4 files from source S3 to destination S3 using server-side operations
-- Supports rate limiting (delay between files)
-- Applies metadata (tags, privacy, streaming metadata) to all copied files
-- Supports custom prompts for AI reasoning (overrides default scenario)
-- Tracks progress in real-time
-- Handles errors gracefully (continues with remaining files on failure)
+- Lists MP4 files in a source S3 bucket/prefix and uploads to the ingest bucket
+- **Configurable chunk duration** (`chunk_duration_sec`, default 30; set `0` to copy whole files)
+- Splits videos with ffmpeg and attaches stream-style S3 metadata (`stream_id`, `chunk_index`, `capture_interval`, …)
+- Rate limiting via UI delay slider (`batch_size`): pause between **chunk** uploads and between **source** videos
+- Applies ingest metadata (tags, privacy, camera/location/scenario, custom prompt)
+- Real-time progress (chunks uploaded + source videos processed)
 
-## Usage
+## API
 
-Access via **Settings → S3 Batch Video Sync** in the web UI:
+`POST /start` accepts `chunk_duration_sec` (float, default 30). Example:
+
+```json
+{
+  "username": "demo",
+  "chunk_duration_sec": 30,
+  "source_bucket": "my-bucket",
+  ...
+}
+```
+
+## Usage (UI)
+
+Access via **S3 Batch Video Sync** in the toolbar:
 
 1. Configure source S3 credentials and bucket/path
-2. Optionally use default backend S3 credentials
-3. Click "Check Videos" to verify MP4 files are found
-4. Configure batch settings (delay between files) and metadata
-5. Click "Start Batch Sync" to begin
-6. Monitor progress via the sync icon in the toolbar
+2. Click **Check Videos**
+3. Set **Chunk duration** (seconds) and upload delay (same slider — applies between chunks and source videos)
+4. Fill metadata and click **Start Batch Sync**
+5. Monitor progress via the sync icon
 
 ## How It Works
 
-1. Lists all MP4 files in the source bucket/prefix
-2. Copies files to destination bucket using server-side copy (same endpoint) or streaming copy (different endpoints)
-3. Applies metadata to all copied files
-4. Files are automatically processed by the ingest pipeline after copying
+1. Lists MP4 files in the source bucket/prefix
+2. For each source file (when `chunk_duration_sec > 0`):
+   - Downloads to a temp file
+   - Splits with ffmpeg into `{duration}s` chunks
+   - Uploads each chunk to `vss-chunks` with ingest metadata, waiting `batch_size` seconds between chunks (mirrors live-stream pacing)
+3. When `chunk_duration_sec` is `0`, performs a server-side copy of the whole file instead
+4. The DataEngine ingest pipeline processes each uploaded chunk object
 
 ## Technical Notes
 
-- Only MP4 files are copied
-- Destination files: `{username}/{timestamp}_{original_name}.mp4`
-- Uses streaming copy (8MB chunks) for memory efficiency
-- No temporary files on disk
-- Supports cross-endpoint copying
+- Destination keys: `{username}/{timestamp}_{name}_chunk_NNNN.mp4` (chunked) or `{username}/{timestamp}_{name}.mp4` (whole file)
+- Chunk duration clamped to 5–600 seconds when splitting
+- Requires **ffmpeg/ffprobe** in the container image
 
 ## Deployment
 
@@ -43,4 +58,4 @@ Deployed as a Kubernetes pod accessible at:
 - **Internal**: `video-batch-sync-service:5000`
 - **External**: `http://video-batch-sync.<cluster_name>.vastdata.com`
 
-Docker image: `your.registry/vss-video-batch-sync:v1` (placeholder — build and push from this directory; see [K8s deployment guide](../../deployments/vss-k8s-application/README.md#step-2-docker-images))
+Docker image: `your.registry/vss-video-batch-sync:v1` — build from `source-code/` (see [shared README](../shared/README.md#docker-builds)) and [K8s deployment guide](../../deployments/vss-k8s-application/README.md#step-2-docker-images).

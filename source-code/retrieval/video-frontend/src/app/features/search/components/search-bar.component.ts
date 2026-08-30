@@ -51,16 +51,6 @@ import { SqlQueryDialogComponent } from './sql-query-dialog.component';
   template: `
     <div class="search-bar-container">
       <form [formGroup]="searchForm" (ngSubmit)="onSearch()" class="search-form">
-        <!-- LLM synthesis toggle — full pill is clickable -->
-        <button
-          type="button"
-          class="llm-pill-button"
-          [class.active]="searchForm.get('useLlm')?.value"
-          (click)="searchForm.patchValue({ useLlm: !searchForm.get('useLlm')?.value })"
-          [matTooltip]="searchForm.get('useLlm')?.value ? 'Disable' : 'Enable'">
-          <mat-icon>{{ searchForm.get('useLlm')?.value ? 'auto_awesome' : 'psychology' }}</mat-icon>
-          <span class="pill-label">LLM Synthesys</span>
-        </button>
         <!-- Main Search Field - Native HTML -->
         <div class="custom-search-field">
           <div class="search-icon">
@@ -281,7 +271,7 @@ import { SqlQueryDialogComponent } from './sql-query-dialog.component';
       @if (showAdvancedFilters() && metadataFields().length > 0) {
         <div class="advanced-filters-panel">
           <div class="filters-header">
-            <span>Filter by metadata:</span>
+            <span>Filter by upload metadata:</span>
             <button 
               type="button"
               class="clear-filters-btn"
@@ -372,62 +362,6 @@ import { SqlQueryDialogComponent } from './sql-query-dialog.component';
       gap: 1rem;
       align-items: stretch;
       margin-bottom: 1.5rem;
-
-      .llm-pill-button {
-        flex-shrink: 0;
-        align-self: center;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0.24rem;
-        min-width: 6.6rem;
-        padding: 0.54rem 0.78rem;
-        margin: 0;
-        border: 1px solid var(--border-color);
-        border-radius: 14px;
-        background: var(--bg-secondary);
-        cursor: pointer;
-        font-family: inherit;
-        transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-
-        mat-icon {
-          font-size: 1.62rem;
-          width: 1.62rem;
-          height: 1.62rem;
-          color: var(--text-secondary);
-          transition: color 0.2s ease;
-        }
-        .pill-label {
-          font-size: 0.78rem;
-          font-weight: 600;
-          letter-spacing: 0.02em;
-          color: var(--text-secondary);
-          line-height: 1.1;
-          text-align: center;
-          max-width: 7.2rem;
-        }
-        &:hover {
-          background: var(--bg-card-hover);
-          border-color: var(--border-hover);
-          mat-icon {
-            color: var(--text-primary);
-          }
-          .pill-label {
-            color: var(--text-primary);
-          }
-        }
-        &.active {
-          border-color: var(--color-lightblue-400);
-          background: rgba(115, 200, 253, 0.08);
-          mat-icon {
-            color: var(--color-lightblue-400);
-          }
-          .pill-label {
-            color: var(--color-lightblue-400);
-          }
-        }
-      }
     }
 
     /* ============================================
@@ -1129,7 +1063,6 @@ export class SearchBarComponent {
   searchForm = this.fb.group({
     query: [''],
     scope: ['all'], // 'all', 'mine', 'public'
-    useLlm: [false], // AI enhancement toggle
     timeFilter: ['all'], // 'all', '5m', '15m', '1h', '24h', '7d', 'custom'
     customStartDate: [null as Date | null],
     customStartTime: ['00:00'],  // Default to start of day
@@ -1186,17 +1119,15 @@ export class SearchBarComponent {
       tags: [], // Removed for now
       include_public: includePublic,
       public_only: publicOnly,
-      use_llm: formValue.useLlm || false,
       time_filter: formValue.timeFilter || 'all',
       min_similarity: llmSettings.minSimilarityScore,
-      llm_top_n: llmSettings.llmTopNSummaries
+      llm_top_n: llmSettings.llmTopNSummaries,
+      hybrid_text_weight: llmSettings.hybridTextWeight,
     };
 
-    if (request.use_llm) {
-      const storedPrompt = localStorage.getItem(SYSTEM_PROMPT_STORAGE_KEY);
-      if (storedPrompt && storedPrompt.trim()) {
-        request.system_prompt = storedPrompt.trim();
-      }
+    const storedPrompt = localStorage.getItem(SYSTEM_PROMPT_STORAGE_KEY);
+    if (storedPrompt?.trim()) {
+      request.system_prompt = storedPrompt.trim();
     }
 
     // Custom date range (sent as local time to match VastDB timestamps)
@@ -1229,7 +1160,7 @@ export class SearchBarComponent {
     this.search.emit(request);
   }
 
-  /** Put text in the search field and focus it (e.g. empty-state example clicks). Does not run search. */
+  /** Put text in the search field and focus it (e.g. suggestion chips). */
   setQuery(query: string) {
     this.searchForm.patchValue({ query });
     this.cdr.markForCheck();

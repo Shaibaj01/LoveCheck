@@ -428,9 +428,18 @@
                 <div class="arrow"></div>
 
                 <div class="component" style="animation-delay: 0.5s;">
+                    <div class="component-icon"><span class="material-icons">center_focus_strong</span></div>
+                    <div class="component-title">Video Detector</div>
+                    <div class="component-desc">YOLO11 classes + peak<br/>concurrent object_counts</div>
+                    <div class="component-badge">YOLO11</div>
+                </div>
+
+                <div class="arrow"></div>
+
+                <div class="component" style="animation-delay: 0.55s;">
                     <div class="component-icon"><span class="material-icons">psychology</span></div>
-                    <div class="component-title">AI Reasoning</div>
-                    <div class="component-desc">NVIDIA Cosmos VLM<br/>generates descriptions</div>
+                    <div class="component-title">Video Reasoner</div>
+                    <div class="component-desc">Plain searchable prose<br/>≤1024 chars (Reason2)</div>
                     <div class="component-badge">NVIDIA</div>
                 </div>
 
@@ -438,8 +447,8 @@
 
                 <div class="component" style="animation-delay: 0.6s;">
                     <div class="component-icon"><span class="material-icons">functions</span></div>
-                    <div class="component-title">Text Embedding</div>
-                    <div class="component-desc">Convert to 1024-dim<br/>vector embeddings</div>
+                    <div class="component-title">Dual Embedding</div>
+                    <div class="component-desc">reasoning_content + video<br/>256-dim Cosmos-Embed1</div>
                     <div class="component-badge">NIM</div>
                 </div>
 
@@ -448,7 +457,7 @@
                 <div class="component" style="animation-delay: 0.7s;">
                     <div class="component-icon"><span class="material-icons">storage</span></div>
                     <div class="component-title">VastDB Storage</div>
-                    <div class="component-desc">Vector + metadata<br/>in single table</div>
+                    <div class="component-desc">Segment rows · vectors ·<br/>YOLO counts · metadata</div>
                     <div class="component-badge">VastDB</div>
                 </div>
             </div>
@@ -469,35 +478,35 @@
                 <div class="component" style="animation-delay: 1.0s;">
                     <div class="component-icon"><span class="material-icons">functions</span></div>
                     <div class="component-title">Query Embedding</div>
-                    <div class="component-desc">Convert query to<br/>1024-dim vector</div>
+                    <div class="component-desc">Text + video query<br/>256-dim vectors</div>
                     <div class="component-badge">NIM</div>
                 </div>
 
                 <div class="arrow"></div>
 
                 <div class="component" style="animation-delay: 1.1s;">
-                    <div class="component-icon"><span class="material-icons">architecture</span></div>
-                    <div class="component-title">Cosine Similarity</div>
-                    <div class="component-desc">ADBC native<br/>vector search</div>
+                    <div class="component-icon"><span class="material-icons">merge_type</span></div>
+                    <div class="component-title">Hybrid Search</div>
+                    <div class="component-desc">Reasoning + video blend<br/>group by upload</div>
                     <div class="component-badge">VastDB</div>
                 </div>
 
                 <div class="arrow"></div>
 
                 <div class="component" style="animation-delay: 1.2s;">
-                    <div class="component-icon"><span class="material-icons">lock</span></div>
-                    <div class="component-title">Permission Filter</div>
-                    <div class="component-desc">Filter by user<br/>access rights</div>
-                    <div class="component-badge">FastAPI</div>
+                    <div class="component-icon"><span class="material-icons">auto_awesome</span></div>
+                    <div class="component-title">LLM Synthesis</div>
+                    <div class="component-desc">Always on; timeline<br/>reasoning evidence</div>
+                    <div class="component-badge">NIM</div>
                 </div>
 
                 <div class="arrow"></div>
 
                 <div class="component active" style="animation-delay: 1.3s;">
-                    <div class="component-icon"><span class="material-icons">play_arrow</span></div>
-                    <div class="component-title">Video Playback</div>
-                    <div class="component-desc">Stream segments<br/>with metadata</div>
-                    <div class="component-badge">HTML5</div>
+                    <div class="component-icon"><span class="material-icons">movie_filter</span></div>
+                    <div class="component-title">Clip Playback</div>
+                    <div class="component-desc">Chunk cards + jump-to-moment<br/>timeline player</div>
+                    <div class="component-badge">Angular UI</div>
                 </div>
             </div>
         </div>
@@ -604,7 +613,7 @@
             component.addEventListener('mouseleave', () => {
                 if (!demoRunning) {
                     const isFirst = component.querySelector('.component-title').textContent === 'Video Upload';
-                    const isLast = component.querySelector('.component-title').textContent === 'Video Playback';
+                    const isLast = component.querySelector('.component-title').textContent === 'Clip Playback';
                     if (!isFirst && !isLast) {
                         component.classList.remove('active');
                     }

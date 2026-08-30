@@ -8,10 +8,10 @@ botocore==1.34.0
 # HTTP requests
 requests==2.31.0
 
-# Video frame extraction (for Nemotron)
-# Using headless version to avoid GUI dependencies (libGL, libX11, etc.)
-opencv-python-headless==4.10.0.84
-numpy==1.26.4
+# VastDB Python SDK (idempotency / is_indexed dedup check)
+vastdb==1.3.2
+ibis-framework[duckdb]==9.0.0
+pyarrow
 
 # Data validation
 pydantic==2.5.2
@@ -20,3 +20,4 @@ pydantic-settings==2.1.0
 opentelemetry-api==1.38
 opentelemetry-sdk==1.38
 opentelemetry-exporter-otlp==1.38
+opentelemetry-processor-baggage==0.59b0

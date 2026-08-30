@@ -56,13 +56,14 @@ async def get_configuration(current_user: User = Depends(get_current_user)):
             "nvidia_api_key": _mask_sensitive(settings.nvidia_api_key),
             "embedding_local_nim": settings.embedding_local_nim,
         },
-        "llm": {
-            "llm_model_name": settings.llm_model_name,
-            "llm_host": settings.llm_host,
-            "llm_port": settings.llm_port,
-            "llm_http_scheme": settings.llm_http_scheme,
-            "llm_timeout_seconds": settings.llm_timeout_seconds,
-            "llm_local_nim": settings.llm_local_nim,
+        "synthesis": {
+            "cosmos_host": settings.cosmos_host,
+            "cosmos_port": settings.cosmos_port,
+            "cosmoshttpscheme": settings.cosmoshttpscheme,
+            "cosmos_model": settings.cosmos_model,
+            "cosmos_temperature": settings.cosmos_temperature,
+            "synthesis_max_tokens": settings.synthesis_max_tokens,
+            "synthesis_timeout_seconds": settings.synthesis_timeout_seconds,
             "default_system_prompt": DEFAULT_SYSTEM_PROMPT,
         },
         "app": {
@@ -70,6 +71,7 @@ async def get_configuration(current_user: User = Depends(get_current_user)):
             "max_upload_size_mb": settings.max_upload_size_mb,
             "allowed_video_extensions": settings.allowed_video_extensions,
             "cors_origins": settings.cors_origins,
+            "display_timezone": settings.display_timezone,
         }
     }
     
