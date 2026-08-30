@@ -207,7 +207,7 @@ export function highlightQueryTerms(text: string, terms: string[]): string {
   return escaped;
 }
 
-export interface PreviewSegmentLike {
+export interface PreviewSegmentLike extends SegmentObjectSource {
   segment_number: number;
   segment_start_sec: number;
   segment_end_sec: number;
@@ -245,4 +245,11 @@ export function previewCaption(chunk: PreviewChunkLike): string {
     return segmentDisplayCaption(seg) || (chunk.reasoning_content || '').trim();
   }
   return (chunk.reasoning_content || '').trim();
+}
+
+/** Object chips for the same matched/preview segment as the card caption. */
+export function previewObjectTags(chunk: PreviewChunkLike, max = 8): string[] {
+  const seg = pickPreviewSegment(chunk.timeline);
+  if (!seg) return [];
+  return parseStructuredObjects(seg).slice(0, max);
 }

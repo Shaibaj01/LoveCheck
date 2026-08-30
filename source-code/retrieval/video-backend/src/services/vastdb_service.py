@@ -1629,7 +1629,7 @@ class VastDBService:
     ) -> Dict[str, List[str]]:
         """Distinct values for multiple metadata columns from one cached table scan."""
         from src.ingest_metadata import FILTERABLE_METADATA_COLUMNS
-        from src.utils.dashboard_stats import _metadata_label
+        from src.utils.dashboard_stats import _metadata_label, _split_object_classes
         from src.utils.row_cache import DISTINCT_VALUES_CACHE_TTL_SEC, cached_distinct_values
 
         wanted = [c for c in column_names if c in FILTERABLE_METADATA_COLUMNS]
@@ -1638,7 +1638,7 @@ class VastDBService:
 
         cache_key = (
             f"distinct:{self.settings.vdb_bucket}:{self.settings.vdb_schema}:"
-            f"{self.settings.vdb_collection}:{','.join(sorted(wanted))}"
+            f"{self.settings.vdb_collection}:{','.join(sorted(wanted))}:split-object-classes"
         )
 
         def _load() -> Dict[str, List[str]]:
@@ -1650,6 +1650,10 @@ class VastDBService:
             out: Dict[str, set[str]] = {col: set() for col in wanted}
             for row in rows:
                 for col in wanted:
+                    if col == "object_classes":
+                        # Store is comma-joined per segment; expose distinct class tokens.
+                        out[col].update(_split_object_classes(row.get(col)))
+                        continue
                     label = _metadata_label(row.get(col))
                     if label != "(empty)":
                         out[col].add(label)
