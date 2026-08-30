@@ -49,7 +49,7 @@ docker buildx build -f video-batch-sync/Dockerfile -t your.registry/vss-video-ba
 
 Frontend still uses `retrieval/video-frontend/` as context (no shared Python module).
 
-See [scripts README](../scripts/README.md) for `ECR` / `TAG` overrides.
+See [scripts README](../scripts/README.md) for `REGISTRY` / `TAG` overrides.
 
 ---
 

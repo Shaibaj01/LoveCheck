@@ -23,7 +23,7 @@ Configure in `deployments/dataengine-vss-ingest-pipeline/vss-gui-secret-file-tem
 | `cosmos_port` | 8001 |
 | `cosmoshttpscheme` | `http` (set `https` for TLS-terminated endpoints) |
 | `cosmos_authorization` | (optional) Bearer token sent as `Authorization` when set |
-| `cosmos_model` | ./Cosmos-Reason2-8B |
+| `cosmos_model` | nvidia/cosmos-reason2-8b |
 | `cosmos_max_tokens` | 4000 |
 | `cosmos_temperature` | 0.2 |
 
@@ -90,5 +90,5 @@ Local Python dev: run [`link-ingest-metadata.sh`](../../scripts/link-ingest-meta
 
 ## Runtime
 
-- **Image**: `your.registry/vss-video-reasoner:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-ingest-function-images))
+- **Image**: `your.registry/vss-video-reasoner:v1` (placeholder — build with `vastde build` and push; see [Ingest pipeline guide](../../../deployments/dataengine-vss-ingest-pipeline/README.md#build-dataengine-function-images))
 - **Trigger**: S3 bucket event on `video-chunks-segments`

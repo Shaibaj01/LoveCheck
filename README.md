@@ -10,9 +10,10 @@ including Agentic & Serverless Event-based Compute Framework and VastDB Vector-S
 
 ## Overview
 
-The system has two main parts:
+The system has three main parts:
 1. **K8s Application** - Web UI and REST API (Kubernetes)
 2. **Ingest Pipeline** - Serverless video processing (VAST DataEngine)
+3. **Enrichment Pipeline** - Scheduled prompt-suggester (search chips + key events)
 
 ![VSS Blueprint Architecture](source-code/video-demo-diagram.png) — see also the interactive diagram in the app (**Show Blueprint Diagram**) or [`blueprint.html`](source-code/retrieval/video-frontend/src/assets/blueprint.html)
 
@@ -23,24 +24,38 @@ The system has two main parts:
 | Component | Guide |
 |-----------|-------|
 | **VSS - Retrieval Web UI; K8s Application** (Backend, Frontend, Streaming, Batch Sync) | [vss-k8s-application](deployments/vss-k8s-application/README.md) |
-| **VSS - DataEngine; Ingest Pipeline** (Segmenter, Reasoner, Embedder, Writer) | [dataengine-vss-ingest-pipeline](deployments/dataengine-vss-ingest-pipeline/README.md) |
+| **VSS - DataEngine; Ingest Pipeline** (Segmenter, Detector, Reasoner, Embedder, Writer) | [dataengine-vss-ingest-pipeline](deployments/dataengine-vss-ingest-pipeline/README.md) |
+| **VSS - DataEngine; Enrichment Pipeline** (prompt-suggester, optional) | [dataengine-vss-ingest-pipeline](deployments/dataengine-vss-ingest-pipeline/README.md) |
+| **GPU models** (Cosmos-Reason2, Cosmos-Embed1, YOLO11 on Docker) | [vss-blueprint-models](scripts/vss-blueprint-models/README.md) |
 
 ### Quick Start
 
-1. **Deploy K8s Application:**
+1. **GPU models** (Reason2, Embed1, YOLO on a GPU host): [vss-blueprint-models](scripts/vss-blueprint-models/README.md)
+
+2. **Build and push images** (`REGISTRY` is required; `TAG` defaults to `v1`):
+   ```bash
+   # K8s app (backend, frontend, streaming, batch-sync)
+   REGISTRY=your.registry/vss source-code/scripts/build-retrieval-images.sh
+
+   # DataEngine functions (ingest + prompt-suggester)
+   REGISTRY=your.registry/vss source-code/scripts/build-vastde-functions.sh
+   ```
+   Details: [K8s Step 2](deployments/vss-k8s-application/README.md#step-2-docker-images) · [DataEngine build](deployments/dataengine-vss-ingest-pipeline/README.md#build-dataengine-function-images) · [scripts](source-code/scripts/README.md)
+
+3. **Deploy K8s Application:**
    ```bash
    cd deployments/vss-k8s-application
    vim backend-secret.yaml  # Configure credentials
    ./QUICK_DEPLOY.sh <namespace> <cluster_name>
    ```
 
-2. **Deploy Ingest Pipeline** (choose one):
+4. **Deploy Ingest Pipeline** (choose one):
    - **Using GUI:** Configure `vss-gui-secret-file-template.yaml`, then use DataEngine UI
    - **Using CLI:** Configure `vss-cli-secret-file-template.yaml`, then run vastde commands
    
-   See [Ingest Pipeline Guide](deployments/dataengine-vss-ingest-pipeline/README.md) for full instructions.
+   See [Ingest Pipeline Guide](deployments/dataengine-vss-ingest-pipeline/README.md) for full instructions (optional enrichment is the last step of the same GUI or CLI path).
 
-3. **Test:** Upload a video and search at `http://video-lab.<cluster_name>.vastdata.com`
+5. **Test:** Upload a video and search at `http://video-lab.<cluster_name>.vastdata.com`
 
 ---
 
@@ -123,5 +138,5 @@ Interactive diagram: open **Show Blueprint Diagram** in the app, or `source-code
 ## Need Help?
 
 - **K8s Deployment**: See [K8s Application Guide](deployments/vss-k8s-application/README.md#troubleshooting)
-- **Ingest Pipeline**: See [Ingest Pipeline Guide](deployments/dataengine-vss-ingest-pipeline/README.md)
+- **Ingest / Enrichment Pipeline**: See [DataEngine Pipeline Guide](deployments/dataengine-vss-ingest-pipeline/README.md)
 - **Community**: [VAST Community Forums](https://community.vastdata.com/)
