@@ -23,7 +23,7 @@ const DEFAULT_MODELS: BackendModelsConfig = {
     embedding_local_nim: true,
   },
   synthesis: {
-    cosmos_model: './Cosmos-Reason2-8B',
+    cosmos_model: 'nvidia/cosmos-reason2-8b',
   },
   display_timezone: 'UTC',
 };

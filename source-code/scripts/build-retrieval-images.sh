@@ -6,8 +6,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ECR="${ECR:-110450271409.dkr.ecr.eu-west-1.amazonaws.com/dev/solutions}"
-TAG="${TAG:-v2}"
+if [[ -z "${REGISTRY:-}" ]]; then
+  echo "error: set REGISTRY to your registry prefix (e.g. REGISTRY=your.registry/vss)" >&2
+  echo "  example: REGISTRY=your.registry/vss TAG=v1 $0" >&2
+  exit 1
+fi
+TAG="${TAG:-v1}"
 
 build_from_source_code() {
   local dockerfile="$1"
@@ -15,7 +19,7 @@ build_from_source_code() {
   echo "==> $image ($dockerfile)"
   docker buildx build \
     -f "$ROOT/$dockerfile" \
-    -t "$ECR/$image:$TAG" \
+    -t "$REGISTRY/$image:$TAG" \
     --push \
     "$ROOT"
 }
@@ -25,7 +29,7 @@ build_from_service_dir() {
   local image="$2"
   echo "==> $image ($dir)"
   docker buildx build \
-    -t "$ECR/$image:$TAG" \
+    -t "$REGISTRY/$image:$TAG" \
     --push \
     "$ROOT/$dir"
 }
@@ -35,4 +39,4 @@ build_from_source_code video-streaming/Dockerfile        vss-video-streaming
 build_from_source_code video-batch-sync/Dockerfile       vss-video-batch-sync
 build_from_service_dir retrieval/video-frontend            vss-video-frontend
 
-echo "Done. Pushed retrieval images (tag=$TAG) to $ECR"
+echo "Done. Pushed retrieval images (tag=$TAG) to $REGISTRY"

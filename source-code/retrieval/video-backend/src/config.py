@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     cosmos_port: int = Field(default=8001, description="Cosmos-Reason2 port")
     cosmoshttpscheme: str = Field(default="http", description="http or https for Cosmos-Reason2")
     cosmos_authorization: str = Field(default="", description="Optional Bearer token for hosted/routed Cosmos-Reason2 API (sent as Authorization when set)")
-    cosmos_model: str = Field(default="./Cosmos-Reason2-8B", description="Cosmos-Reason2 model id")
+    cosmos_model: str = Field(default="nvidia/cosmos-reason2-8b", description="Cosmos-Reason2 model id")
     cosmos_temperature: float = Field(default=0.2, description="Sampling temperature for synthesis")
     synthesis_max_tokens: int = Field(default=2000, description="Max tokens per synthesis completion chunk")
     synthesis_timeout_seconds: int = Field(default=120, description="Cosmos synthesis API timeout in seconds")

@@ -19,7 +19,9 @@ Deploy the VSS Blueprint web application to Kubernetes.
 - **AI/ML services:**
   - Cosmos-Embed1 NIM (hybrid search embeddings)
   - Cosmos-Reason2 NIM (search/explore synthesis; same host as ingest reasoner)
+  - YOLO11 infer service (ingest `video-detector`)
   - Optional NVIDIA Cloud API key when `embedding_local_nim: false`
+  - GPU host deploy: [vss-blueprint-models](../../scripts/vss-blueprint-models/README.md)
 
 - **Network access:**
   - Ability to modify `/etc/hosts` on your local machine
@@ -51,11 +53,11 @@ vim backend-secret.yaml
 Build images with the helper script (recommended) or manually. Replace registry paths in each `*-deployment.yaml`.
 
 ```bash
-# Recommended — sets ECR/TAG; builds backend, frontend, streaming, batch-sync
-ECR=your.registry/vss TAG=v2 source-code/scripts/build-retrieval-images.sh
+# Recommended — sets REGISTRY/TAG; builds backend, frontend, streaming, batch-sync
+REGISTRY=your.registry/vss TAG=v1 source-code/scripts/build-retrieval-images.sh
 ```
 
-Manual builds from `source-code/` as context (see [shared README](../source-code/shared/README.md#docker-builds)):
+Manual builds from `source-code/` as context (see [shared README](../../source-code/shared/README.md#docker-builds)):
 
 ```bash
 cd source-code
@@ -130,7 +132,7 @@ http://video-lab.<cluster_name>.vastdata.com
 
 ### Authentication fails
 - Verify `s3_endpoint` matches tenant
-- See [Auth Troubleshooting](../../source-code/retrieval/video-backend/README.md#troubleshooting)
+- See [User Authentication](../../source-code/retrieval/video-backend/README.md#user-authentication)
 
 ### View Logs
 

@@ -1,19 +1,21 @@
-# Local Cosmos stack (Reason2 + Embed1)
+# Local Cosmos stack (Reason2 + Embed1 + YOLO)
 
-This blueprint can run against two local services (your docker commands).
+Deploy the GPU services with Docker from **[scripts/vss-blueprint-models](../scripts/vss-blueprint-models/README.md)** (`./deploy.sh` on a host with NVIDIA GPUs).
 
 ## Services
 
 | Service | Container / image | Host port | Used for |
 |---------|-------------------|-----------|----------|
-| **Cosmos-Reason2** | `vllm/vllm-openai` + `/model` | **8001** | `video-reasoner` (plain `reasoning_content`) + `prompt-suggester` |
-| **Cosmos-Embed1** | `nvcr.io/nim/nvidia/cosmos-embed1:1.1.0` | **8002** (maps NIM :8000) | `video-embedder` + search backend |
+| **Cosmos-Reason2** | `cosmos-reason2-8b` (`nvcr.io/nim/nvidia/cosmos-reason2-8b:1.7.0`) | **8001** | `video-reasoner` (plain `reasoning_content`) + `prompt-suggester` |
+| **Cosmos-Embed1** | `cosmos-embed1` (`nvcr.io/nim/nvidia/cosmos-embed1:1.1.0`) | **8002** | `video-embedder` + search backend |
+| **YOLO11** | `yolo-infer` (built from `yolo-infer/`) | **8003** | `video-detector` |
 
-## Secret alignment (`vss-gui-secret-file-template.yaml`)
+## Secret alignment (`vss-gui-secret-file-template.yaml` / CLI / `backend-secret.yaml`)
 
-- `cosmos_host` / `cosmos_port: 8001` / `cosmos_model: "./Cosmos-Reason2-8B"`
+- `cosmos_host` / `cosmos_port: 8001` / `cosmos_model: nvidia/cosmos-reason2-8b`
 - `embeddinghost` / `embeddingport: 8002` / `embeddingmodel: nvidia/cosmos-embed1`
 - `embeddingdimensions: 256` (required — Embed1 is **256-dim**, not 2048)
+- `yolo_infer_host` / `yolo_infer_port: 8003` (script default; templates may still show `8022`)
 
 Backend `backend-secret.yaml` must use the same embed host/port/model/dimensions for search.
 

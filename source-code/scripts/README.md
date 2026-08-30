@@ -10,17 +10,17 @@ Runnable from any working directory (scripts resolve `source-code/` automaticall
 
 ## Environment overrides
 
-Both build scripts accept:
+Both build scripts require `REGISTRY` (no default). `TAG` defaults to `v1`.
 
 | Variable | Default |
 |----------|---------|
-| `ECR` | `110450271409.dkr.ecr.eu-west-1.amazonaws.com/dev/solutions` |
-| `TAG` | `v2` |
+| `REGISTRY` | **required** — your registry prefix (e.g. `your.registry/vss`) |
+| `TAG` | `v1` |
 
 Example:
 
 ```bash
-ECR=your.registry/vss TAG=v3 source-code/scripts/build-retrieval-images.sh
+REGISTRY=your.registry/vss TAG=v3 source-code/scripts/build-retrieval-images.sh
 ```
 
 ## Retrieval image context

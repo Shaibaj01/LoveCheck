@@ -124,7 +124,7 @@ Tables include `vectors` / `vectors_visual`. Import `common/vastdb_patch.py` bef
 ## Pipeline YAML
 
 - Ingest: `deployments/dataengine-vss-ingest-pipeline/vss-ingest-pipeline-file.yaml`
-- Enrichment (scheduled): `deployments/dataengine-vss-enrichment-pipeline/vss-enrichment-pipeline-file.yaml`
+- Enrichment (scheduled): `deployments/dataengine-vss-ingest-pipeline/vss-enrichment-pipeline-file.yaml`
 - Pattern: `secrets: [vss2-secret]`, `function_deployments`, `links` (trigger → function), `triggers` with Schedule VRN.
 
 ## Reference implementations
