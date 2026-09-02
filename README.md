@@ -8,6 +8,10 @@ including Agentic & Serverless Event-based Compute Framework and VastDB Vector-S
 
 ---
 
+![Demo](./docs/demo.gif)
+
+---
+
 ## Overview
 
 The system has three main parts:
