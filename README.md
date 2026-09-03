@@ -8,7 +8,7 @@ including Agentic & Serverless Event-based Compute Framework and VastDB Vector-S
 
 ---
 
-![Demo](./docs/0902.gif)
+![Demo1](./docs/0902.gif)
 
 ---
 
