@@ -29,9 +29,6 @@ spec:
         - name: secret-volume
           mountPath: /etc/secrets
           readOnly: true
-        - name: frontend-config-volume
-          mountPath: /app/frontend-config
-          readOnly: true
         resources:
           requests:
             memory: "2Gi"
