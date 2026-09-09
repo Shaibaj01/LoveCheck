@@ -29,38 +29,29 @@ spec:
         - name: secret-volume
           mountPath: /etc/secrets
           readOnly: true
-        - name: frontend-config-volume
-          mountPath: /app/frontend-config
-          readOnly: true
         resources:
           requests:
-            memory: "2Gi"
-            cpu: "1"
+            memory: "512Mi"
+            cpu: "250m"
           limits:
-            memory: "4Gi"
-            cpu: "2"
+            memory: "1Gi"
+            cpu: "500m"
         livenessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 10
           periodSeconds: 30
-          timeoutSeconds: 10
-          failureThreshold: 5
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10
-          timeoutSeconds: 5
       volumes:
       - name: secret-volume
         secret:
           secretName: video-backend-secret
-      - name: frontend-config-volume
-        configMap:
-          name: video-frontend-config
 ---
 apiVersion: v1
 kind: Service
