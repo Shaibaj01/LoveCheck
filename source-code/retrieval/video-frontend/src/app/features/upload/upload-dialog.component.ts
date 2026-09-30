@@ -53,6 +53,9 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
                   @for (file of selectedFiles(); track file.name + '-' + file.size + '-' + $index) {
                     <li class="file-row">
                       <span class="file-name" [title]="file.name">{{ file.name }}</span>
+                      @if (streamId()) {
+                        <span class="chunk-num">Chunk {{ chunkNumberFor($index) }}</span>
+                      }
                       <span class="file-size">{{ formatFileSize(file.size) }}</span>
                       <button type="button" class="remove-file-btn" (click)="removeFile($index); $event.stopPropagation()" matTooltip="Remove">
                         <mat-icon>close</mat-icon>
@@ -72,6 +75,27 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
                      placeholder="demo, outdoor, test">
               <span class="field-hint">Add comma-separated tags to categorize your video</span>
             </div>
+
+            <div class="form-field-wrapper">
+              <label class="field-label">Stream ID</label>
+              <input type="text"
+                     class="custom-input"
+                     formControlName="stream_id"
+                     placeholder="game-2026-03-21">
+              <span class="field-hint">Optional. Use the same id on every chunk of one video so Explore lists them together.</span>
+            </div>
+
+            @if (streamId()) {
+              <div class="form-field-wrapper">
+                <label class="field-label">First chunk number</label>
+                <input type="number"
+                       class="custom-input"
+                       formControlName="chunk_start"
+                       min="1"
+                       step="1">
+                <span class="field-hint">Starts at 1. The next file in this upload is the next number. A later upload to the same stream continues from there.</span>
+              </div>
+            }
 
             <app-ingest-metadata-fields
               [form]="uploadForm"
@@ -119,10 +143,10 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
               </div>
             }
 
-            @if (error()) {
+            @if (error() || streamError()) {
               <div class="error-message">
                 <mat-icon>error_outline</mat-icon>
-                <span>{{ error() }}</span>
+                <span>{{ error() || streamError() }}</span>
               </div>
             }
           </form>
@@ -295,6 +319,16 @@ import { parseCommaList, pickIngestMetadataPayload } from '../../shared/utils/in
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .chunk-num {
+      flex-shrink: 0;
+      font-size: 0.7rem;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      color: var(--accent-primary);
+      border: 1px solid rgba(115, 200, 253, 0.35);
+      background: rgba(115, 200, 253, 0.12);
     }
 
     .file-size {
@@ -698,7 +732,9 @@ export class UploadDialogComponent {
     custom_prompt: [''],
     camera_id: [''],
     capture_type: [''],
-    location: ['']
+    location: [''],
+    stream_id: [''],
+    chunk_start: [1],
   });
 
   /** Max videos per batch; each file max {@link maxBytesPerFile}. */
@@ -815,13 +851,41 @@ export class UploadDialogComponent {
     this.error.set(null);
   }
 
+  streamId(): string {
+    return (this.uploadForm.get('stream_id')?.value || '').trim();
+  }
+
+  chunkNumberFor(index: number): number {
+    const start = Number(this.uploadForm.get('chunk_start')?.value);
+    const base = Number.isInteger(start) && start >= 1 ? start : 1;
+    return base + index;
+  }
+
+  streamError(): string | null {
+    const sid = this.streamId();
+    if (!sid) return null;
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(sid)) {
+      return 'Stream ID must start with a letter or number and use only letters, numbers, dots, underscores, or hyphens.';
+    }
+    const start = Number(this.uploadForm.get('chunk_start')?.value);
+    if (!Number.isInteger(start) || start < 1) {
+      return 'Chunk number starts at 1.';
+    }
+    return null;
+  }
+
   canUpload(): boolean {
-    return this.selectedFiles().length > 0 && this.uploadForm.valid;
+    return this.selectedFiles().length > 0 && this.uploadForm.valid && !this.streamError();
   }
 
   async upload() {
     const files = this.selectedFiles();
     if (!this.canUpload() || files.length === 0) return;
+    const streamError = this.streamError();
+    if (streamError) {
+      this.error.set(streamError);
+      return;
+    }
 
     this.uploading.set(true);
     this.uploadPhase.set('requesting');
@@ -834,11 +898,13 @@ export class UploadDialogComponent {
       const isPublic = !formValue.isPrivate;
       const meta = pickIngestMetadataPayload(formValue);
       const scenario = meta.scenario || '';
+      const streamId = this.streamId();
       const metadata = {
         camera_id: meta.camera_id,
         capture_type: meta.capture_type,
         location: meta.location,
         custom_prompt: meta.custom_prompt,
+        stream_id: streamId,
       };
 
       this.uploadPhase.set('uploading');
@@ -853,7 +919,10 @@ export class UploadDialogComponent {
           tags,
           allowedUsers,
           scenario,
-          metadata
+          {
+            ...metadata,
+            chunk_number: streamId ? this.chunkNumberFor(i) : undefined,
+          }
         ).toPromise();
       }
 

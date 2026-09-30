@@ -72,7 +72,9 @@ The system has three main parts:
 | **Custom AI Prompts** | Per-video custom prompts (max length in `ingest_metadata.py`) | [video-reasoner](source-code/ingest/video-reasoner/README.md#custom-prompts) |
 | **Metadata Filters** | Filter by camera_id, location, capture_type | [ingest](source-code/ingest/README.md) |
 | **Advanced Search & AI Settings** | Max clip cards, synthesis clip count, caption/video weight, similarity | [video-backend](source-code/retrieval/video-backend/README.md#gui-settings) |
-| **Explore mode** | Browse indexed uploads by day and location — no query; summarize any video on demand | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
+| **Explore mode** | Browse uploads by day and location — Complete or Incomplete; summarize or delete a chunk | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
+| **Stream chunks** | Same `stream_id` on upload, streaming, or batch sync; Explore plays chunk N/total with Previous/Next | [video-backend](source-code/retrieval/video-backend/README.md#upload-streams-and-delete) |
+| **Delete a video** | Explore delete, or `DELETE /api/v1/videos`, removes that upload’s S3 objects, VastDB rows, and sidecars | [video-backend](source-code/retrieval/video-backend/README.md#upload-streams-and-delete) |
 | **Data Dashboard** | VastDB stats, ingest health, S3 pipeline inventory, live key events | [video-frontend](source-code/retrieval/video-frontend/README.md#application-modes) |
 | **Search suggestions & key events** | Grounded ≤8-word rephrases of segment `reasoning_content` → `vss-prompts-events` | [prompt-suggester](source-code/enrichment/prompt-suggester/README.md) |
 | **Object detection counts** | YOLO peak concurrent per class (`object_counts`); UI chips + dashboard heatmap | [video-detector](source-code/ingest/video-detector/README.md) |

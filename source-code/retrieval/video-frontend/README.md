@@ -9,7 +9,7 @@ Three top-level modes share the same scope pills (**All Videos** / **My Videos**
 | Mode | Route | Purpose |
 |------|-------|---------|
 | **Search** | `/search` | Hybrid semantic search; clip cards with match timeline; Cosmos-Reason2 synthesis |
-| **Explore** | `/explore` | Browse fully indexed uploads by day and location; summarize on demand |
+| **Explore** | `/explore` | Browse uploads by day and location; stream chunks, delete, summarize on demand |
 | **Dashboard** | `/dashboard` | VastDB stats, ingest quality, object **instance** heatmap (peak count sums), grounded key events |
 
 ### Search
@@ -21,10 +21,13 @@ Three top-level modes share the same scope pills (**All Videos** / **My Videos**
 
 ### Explore
 
-- Hero: **Browse by upload date** — indexed clips day by day.
+- Hero: **Browse by upload date** — clips day by day.
 - **Date rail** and **location rail** filter the list.
-- Only **fully indexed** chunks appear (all segments present in VastDB).
-- Cards: upload time badge, segment timeline (jump to moment), metadata and object chips, **Play chunk N/M** and **Summarize** actions.
+- **Complete / Incomplete** pills. Complete is the default (`indexed=complete`): every segment slot is in VastDB. Incomplete (`indexed=partial`) shows chunks that are still missing slots, so they can be deleted or watched while indexing finishes. The card line reads `N of M segments` until the chunk is complete.
+- Cards: upload time badge, segment timeline (jump to moment), metadata and object chips, **Play chunk N/M**, **Summarize**, and **Delete**.
+- Files that share a `stream_id` are one stream. **Play chunk N/total** uses the 1-based chunk number. Total is the highest chunk number seen for that stream.
+- Previous and Next are inside the player, centered as **Previous · Chunk N/total · Next**. They load the neighbor with `GET /api/v1/videos/chunk`. The Explore grid does not show those buttons.
+- **Delete** confirms, then `DELETE /api/v1/videos?original_video=`. One card is one upload. Other chunks of the same stream stay.
 - Player plays the **full parent chunk** (`original_video`); segment timeline and bbox overlay (OFF/ON toggle in the timeline header).
 
 ### Video playback (Search + Explore)
@@ -45,6 +48,7 @@ Three top-level modes share the same scope pills (**All Videos** / **My Videos**
 ## Other Features
 
 - **Video Upload / Streaming / Batch Sync**: shared metadata form — `GET /api/v1/metadata/ingest-config` with defaults fallback ([`ingest_metadata.defaults.ts`](src/app/shared/utils/ingest-metadata.defaults.ts))
+- **Upload stream**: optional **Stream ID** plus **First chunk number** (default 1). Files in that dialog are numbered in list order (`start + position`). A later upload of the same id continues from the number you set. Up to 100 files per dialog. Explore uses that id for **Play chunk N/total** and Previous/Next.
 - **Authentication**: VAST username + password → app JWT
 - **Settings**: Advanced Search & AI, system prompt, streaming, batch sync
 - **Blueprint diagram**: Settings → Show Blueprint Diagram (`src/assets/blueprint.html`)

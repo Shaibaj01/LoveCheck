@@ -91,7 +91,20 @@ def build_stream_meta_by_video(rows_by_video: Dict[str, List[dict]]) -> Dict[str
             pending[ov] = {"stream_id": stream_id, "chunk_index": chunk_index}
             session_max[stream_id] = max(session_max[stream_id], chunk_index + 1)
 
-    return {
-        ov: {**meta, "stream_chunk_total": session_max[meta["stream_id"]]}
-        for ov, meta in pending.items()
-    }
+    by_stream: Dict[str, List[tuple]] = defaultdict(list)
+    for ov, meta in pending.items():
+        by_stream[str(meta["stream_id"])].append((int(meta["chunk_index"]), ov))
+
+    labeled: Dict[str, Dict[str, Any]] = {}
+    for ov, meta in pending.items():
+        sid = str(meta["stream_id"])
+        idx = int(meta["chunk_index"])
+        lower = [i for i, other in by_stream[sid] if other != ov and i < idx]
+        higher = [i for i, other in by_stream[sid] if other != ov and i > idx]
+        labeled[ov] = {
+            **meta,
+            "stream_chunk_total": session_max[sid],
+            "prev_chunk_index": max(lower) if lower else None,
+            "next_chunk_index": min(higher) if higher else None,
+        }
+    return labeled

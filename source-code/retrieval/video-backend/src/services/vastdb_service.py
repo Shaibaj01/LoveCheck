@@ -21,6 +21,7 @@ from src.utils.explore_index import (
     location_filter_options,
     uploads_by_day_counts,
 )
+from src.utils.stream_index import build_stream_meta_by_video
 from src.utils.segment_timeline import dedupe_by_segment_number, dedupe_segment_dicts
 
 # Import ADBC driver manager
@@ -1429,9 +1430,13 @@ class VastDBService:
         original_video: str,
         rows: List[dict],
         stream_meta: Optional[dict] = None,
+        *,
+        require_complete: bool = True,
     ) -> Optional[ChunkSearchResult]:
         """Build explore chunk from in-memory segment rows (no extra VastDB query)."""
-        segments = prepare_browse_segments(rows, original_video)
+        segments = prepare_browse_segments(
+            rows, original_video, require_complete=require_complete
+        )
         if not segments:
             return None
         chunk = self._build_browse_chunk_from_segments(original_video, segments)
@@ -1540,10 +1545,11 @@ class VastDBService:
         scope: str = "all",
         date: Optional[str] = None,
         location: Optional[str] = None,
+        indexed: str = "complete",
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
-        """Browse indexed parent videos by upload date and location (no vector search)."""
+        """Browse parent videos by upload date and location (no vector search)."""
         include_public = scope in ("all", "public")
         public_only = scope == "public"
 
@@ -1568,11 +1574,14 @@ class VastDBService:
             lambda row: self._user_has_access(row, user, include_public, public_only),
         )
         stream_meta_by_video, by_video, accessible_flat = build_explore_catalog(
-            rows_by_video, by_video
+            rows_by_video, by_video, indexed=indexed
         )
 
         if table_available and raw_rows and not by_video:
-            table_message = "Rows exist in VastDB but none are visible for the selected scope."
+            if indexed == "partial":
+                table_message = "No incomplete videos for the selected scope."
+            else:
+                table_message = "Rows exist in VastDB but none are visible for the selected scope."
 
         uploads_by_day = uploads_by_day_counts(by_video)
         locations = location_filter_options(accessible_flat, bool(by_video))
@@ -1597,6 +1606,7 @@ class VastDBService:
                 ov,
                 rows_by_video.get(ov, []),
                 stream_meta=stream_meta_by_video.get(ov),
+                require_complete=indexed != "partial",
             )
             if chunk:
                 chunks.append(chunk)
@@ -1612,11 +1622,44 @@ class VastDBService:
             "scope": scope,
             "selected_date": date,
             "selected_location": location,
+            "indexed": indexed,
             "limit": limit,
             "offset": offset,
             "table_available": table_available,
             "table_message": table_message,
         }
+
+    def get_stream_chunk(
+        self,
+        user: User,
+        stream_id: str,
+        chunk_index: int,
+        scope: str = "all",
+    ) -> Optional[ChunkSearchResult]:
+        """One browse card for a stream position, including its nearest neighbors."""
+        include_public = scope in ("all", "public")
+        public_only = scope == "public"
+        raw_rows = self._fetch_dashboard_rows_sdk()
+        rows_by_video, _by_video = group_accessible_rows(
+            raw_rows,
+            lambda row: self._user_has_access(row, user, include_public, public_only),
+        )
+        stream_meta_by_video = build_stream_meta_by_video(rows_by_video)
+        wanted = (stream_id or "").strip()
+        matches = [
+            ov
+            for ov, meta in stream_meta_by_video.items()
+            if str(meta.get("stream_id") or "") == wanted and int(meta.get("chunk_index")) == chunk_index
+        ]
+        if not matches:
+            return None
+        original_video = sorted(matches)[0]
+        return self.build_browse_chunk_from_rows(
+            original_video,
+            rows_by_video.get(original_video, []),
+            stream_meta=stream_meta_by_video.get(original_video),
+            require_complete=False,
+        )
 
     def get_table_schema(self):
         """
@@ -1697,6 +1740,48 @@ class VastDBService:
         except Exception as e:
             logger.error(f"[DISTINCT] Error getting distinct values for {column_name}: {e}")
             return []
+
+    def rows_for_video_delete(self, original_video: str) -> List[dict]:
+        """Segment rows needed to authorize and clean one parent upload."""
+        with self.client.transaction() as tx:
+            bucket = tx.bucket(self.settings.vdb_bucket)
+            db_schema = bucket.schema(self.settings.vdb_schema)
+            table = db_schema.table(self.settings.vdb_collection)
+            result = table.select(
+                predicate=(table["original_video"] == original_video),
+                columns=[
+                    "original_video",
+                    "source",
+                    "detection_sidecar_uri",
+                    "allowed_users",
+                    "is_public",
+                ],
+                internal_row_id=False,
+            )
+            arrow_table = result.read_all()
+        if arrow_table.num_rows == 0:
+            return []
+        return self._arrow_rows_to_dicts(arrow_table)
+
+    def delete_rows_by_column(self, table_name: str, column: str, value: str) -> int:
+        """Delete rows whose column equals value. Missing table returns 0."""
+        with self.client.transaction() as tx:
+            bucket = tx.bucket(self.settings.vdb_bucket)
+            db_schema = bucket.schema(self.settings.vdb_schema, fail_if_missing=False)
+            if db_schema is None:
+                return 0
+            table = db_schema.table(table_name, fail_if_missing=False)
+            if table is None:
+                return 0
+            batch = table.select(
+                predicate=(table[column] == value),
+                columns=[column],
+                internal_row_id=True,
+            ).read_all()
+            if batch.num_rows == 0:
+                return 0
+            table.delete(pa.table({"$row_id": batch.column("$row_id")}))
+            return batch.num_rows
 
 
 # Global VastDB service instance

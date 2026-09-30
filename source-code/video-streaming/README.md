@@ -62,6 +62,7 @@ Health check.
 - **Image**: `your.registry/vss-video-streaming:v1` — build from `source-code/` (see [shared README](../shared/README.md#docker-builds))
 - **Internal**: `video-stream-capture-service:5000`
 - **S3 metadata**: built via `build_s3_ingest_metadata()` from [`shared/ingest_metadata.py`](../shared/ingest_metadata.py)
+- **One capture is one stream**: each chunk object gets `stream_id`, 0-based `chunk_index`, and `ingest_kind=stream_chunk`. Explore lists them as **Play chunk N/total** with Previous/Next. Streaming does not record a username. Delete those chunks from Explore; an empty owner list is allowed.
 
 ### Optional env (streaming pod)
 

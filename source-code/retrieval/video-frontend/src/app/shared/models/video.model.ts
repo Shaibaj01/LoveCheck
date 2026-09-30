@@ -39,6 +39,8 @@ export interface ChunkSearchResult {
   stream_id?: string | null;
   chunk_index?: number | null;
   stream_chunk_total?: number | null;
+  prev_chunk_index?: number | null;
+  next_chunk_index?: number | null;
 }
 
 export interface VideoSearchResult {
@@ -152,10 +154,19 @@ export interface ExploreResponse {
   scope: VideoScope;
   selected_date?: string | null;
   selected_location?: string | null;
+  indexed?: 'complete' | 'partial';
   limit: number;
   offset: number;
   table_available?: boolean;
   table_message?: string | null;
+}
+
+export interface VideoDeleteResponse {
+  original_video: string;
+  segments_deleted: number;
+  prompts_deleted: number;
+  objects_deleted: number;
+  object_errors: string[];
 }
 
 export interface VideoSynthesizeRequest {

@@ -58,6 +58,29 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
         </app-scope-pills>
 
         <div class="date-rail">
+          <span class="date-label">Index:</span>
+          <div class="date-pills">
+            <button
+              type="button"
+              class="date-pill"
+              [class.active]="indexed() === 'complete'"
+              (click)="selectIndexed('complete')">
+              <mat-icon>check_circle</mat-icon>
+              <span>Complete</span>
+            </button>
+            <button
+              type="button"
+              class="date-pill"
+              [class.active]="indexed() === 'partial'"
+              (click)="selectIndexed('partial')"
+              matTooltip="Videos that have some segments indexed and are still missing others">
+              <mat-icon>hourglass_top</mat-icon>
+              <span>Incomplete</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="date-rail">
           <span class="date-label">Upload day:</span>
           <div class="date-pills">
             <button
@@ -114,6 +137,15 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
         }
       </section>
 
+      @if (deleteError()) {
+        <div class="access-warn-panel">
+          <mat-icon>warning_amber</mat-icon>
+          <div>
+            <p>{{ deleteError() }}</p>
+          </div>
+        </div>
+      }
+
       @if (accessWarning()) {
         <div class="access-warn-panel">
           <mat-icon>warning_amber</mat-icon>
@@ -137,8 +169,13 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
       } @else if (!accessWarning() && !chunks().length) {
         <div class="empty-state">
           <img src="assets/vast_logo.svg" alt="VAST" class="vast-logo-glow">
-          <h2>No videos to explore</h2>
-          <p>Upload videos or widen your browse scope to see indexed chunks here.</p>
+          @if (indexed() === 'partial') {
+            <h2>No incomplete videos</h2>
+            <p>Every video in this view has all of its segments indexed.</p>
+          } @else {
+            <h2>No videos to explore</h2>
+            <p>Upload videos or widen your browse scope to see indexed chunks here.</p>
+          }
         </div>
       } @else if (!accessWarning()) {
         <div class="results-header">
@@ -163,9 +200,12 @@ import { PageRefreshService } from '../../shared/services/page-refresh.service';
             <app-chunk-card
               mode="explore"
               [chunk]="chunk"
+              [deleting]="deletingVideo() === chunk.original_video"
               (open)="openChunk($event)"
               (jumpTo)="openChunkAt($event.chunk, $event.seekSec)"
-              (summarize)="summarizeChunk($event)">
+              (summarize)="summarizeChunk($event)"
+              (deleteVideo)="deleteChunk($event)"
+              (openStreamChunk)="openStreamChunk($event)">
             </app-chunk-card>
           }
         </div>
@@ -531,6 +571,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   private static readonly PAGE_SIZE = 24;
 
   scope = signal<VideoScope>('all');
+  indexed = signal<'complete' | 'partial'>('complete');
   selectedDate = signal<string | null>(null);
   selectedLocation = signal<string | null>(null);
   locationOptions = signal<{ label: string; chunk_count: number }[]>([]);
@@ -539,6 +580,9 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
   total = signal(0);
   offset = signal(0);
   loading = signal(true);
+  deletingVideo = signal<string | null>(null);
+  streamHopKey = signal<string | null>(null);
+  deleteError = signal<string | null>(null);
   accessWarning = signal<string | null>(null);
   tableInfoMessage = signal<string | null>(null);
 
@@ -571,6 +615,13 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
     this.load();
   }
 
+  selectIndexed(next: 'complete' | 'partial') {
+    if (this.indexed() === next) return;
+    this.indexed.set(next);
+    this.offset.set(0);
+    this.load();
+  }
+
   selectDate(date: string | null) {
     this.selectedDate.set(date);
     this.offset.set(0);
@@ -592,6 +643,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
         scope: this.scope(),
         date: this.selectedDate(),
         location: this.selectedLocation(),
+        indexed: this.indexed(),
         limit: ExplorePageComponent.PAGE_SIZE,
         offset: this.offset(),
       })
@@ -693,6 +745,7 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
         chunk,
         query: '',
         mode: 'explore',
+        scope: this.scope(),
         initialSeekSec: seekSec ?? 0,
       },
       width: '92vw',
@@ -702,8 +755,51 @@ export class ExplorePageComponent implements OnInit, OnDestroy {
     });
   }
 
+  openStreamChunk(event: { chunk: ChunkSearchResult; chunkIndex: number }) {
+    const streamId = event.chunk.stream_id;
+    if (!streamId || this.streamHopKey()) return;
+    this.streamHopKey.set(`${streamId}:${event.chunkIndex}`);
+    this.explore.getStreamChunk(streamId, event.chunkIndex, this.scope()).subscribe({
+      next: (next) => {
+        this.streamHopKey.set(null);
+        this.openChunk(next, 0);
+      },
+      error: () => {
+        this.streamHopKey.set(null);
+        this.deleteError.set('Could not open that stream chunk.');
+      },
+    });
+  }
+
   openChunkAt(chunk: ChunkSearchResult, seekSec: number) {
     this.openChunk(chunk, seekSec);
+  }
+
+  deleteChunk(chunk: ChunkSearchResult) {
+    if (this.deletingVideo()) return;
+    const name = chunk.filename || 'this video';
+    const confirmed = confirm(
+      `Delete ${name}? This removes the stored video, its segments, detection files, and index rows.`,
+    );
+    if (!confirmed) return;
+    this.deleteError.set(null);
+    this.deletingVideo.set(chunk.original_video);
+    this.explore.deleteVideo(chunk.original_video).subscribe({
+      next: (res) => {
+        this.deletingVideo.set(null);
+        if (res.object_errors?.length) {
+          this.deleteError.set(
+            `Deleted the index, but some files could not be removed: ${res.object_errors.join('; ')}`,
+          );
+        }
+        this.load();
+      },
+      error: (err) => {
+        this.deletingVideo.set(null);
+        const detail = err?.error?.detail;
+        this.deleteError.set(typeof detail === 'string' ? detail : 'Delete failed');
+      },
+    });
   }
 
   summarizeChunk(chunk: ChunkSearchResult) {

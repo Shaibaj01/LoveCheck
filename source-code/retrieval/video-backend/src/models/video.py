@@ -87,3 +87,5 @@ class ChunkSearchResult(BaseModel):
     stream_id: Optional[str] = None
     chunk_index: Optional[int] = None
     stream_chunk_total: Optional[int] = None
+    prev_chunk_index: Optional[int] = None
+    next_chunk_index: Optional[int] = None

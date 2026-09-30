@@ -45,6 +45,7 @@ Access via **S3 Batch Video Sync** in the toolbar:
    - Uploads each chunk to `vss-chunks` with ingest metadata, waiting `batch_size` seconds between chunks (mirrors live-stream pacing)
 3. When `chunk_duration_sec` is `0`, performs a server-side copy of the whole file instead
 4. The DataEngine ingest pipeline processes each uploaded chunk object
+5. Chunks of one source file share a `stream_id`. Explore shows them as one stream (**Play chunk N/total**, Previous/Next). Delete in Explore removes a single chunk, not the whole stream.
 
 ## Technical Notes
 

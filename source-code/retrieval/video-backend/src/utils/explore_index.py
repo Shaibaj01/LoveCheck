@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from src.utils.browse_chunk import fully_indexed_videos
+from src.utils.browse_chunk import fully_indexed_videos, incomplete_videos
 from src.utils.dashboard_stats import _metadata_label, _parse_upload_day, build_location_filter_options
 from src.utils.stream_index import build_stream_meta_by_video
 
@@ -53,16 +53,24 @@ def group_accessible_rows(
 def build_explore_catalog(
     rows_by_video: Dict[str, List[dict]],
     by_video: Dict[str, dict],
+    *,
+    indexed: str = "complete",
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, dict], List[dict]]:
     """
-    Filter to fully indexed chunks and derive stream labels plus flat rows.
+    Filter chunks and derive stream labels plus flat rows.
+
+    indexed="complete" keeps parents whose segment slots are all present.
+    indexed="partial" keeps parents that have rows but are still missing slots.
 
     Returns stream_meta_by_video, filtered by_video, accessible_flat rows.
     """
-    complete = fully_indexed_videos(rows_by_video)
-    filtered = {ov: entry for ov, entry in by_video.items() if ov in complete}
+    if indexed == "partial":
+        selected = incomplete_videos(rows_by_video)
+    else:
+        selected = fully_indexed_videos(rows_by_video)
+    filtered = {ov: entry for ov, entry in by_video.items() if ov in selected}
     stream_meta = build_stream_meta_by_video(rows_by_video)
-    accessible_flat = [row for ov in complete for row in rows_by_video[ov]]
+    accessible_flat = [row for ov in selected for row in rows_by_video[ov]]
     return stream_meta, filtered, accessible_flat
 
 

@@ -52,9 +52,16 @@ def row_to_browse_segment(row: dict, original_video: Optional[str] = None) -> di
     }
 
 
-def prepare_browse_segments(rows: List[dict], original_video: str) -> Optional[List[dict]]:
-    """Return deduped browse segments when the parent chunk is fully indexed."""
-    if not rows or not is_chunk_fully_indexed(rows):
+def prepare_browse_segments(
+    rows: List[dict],
+    original_video: str,
+    *,
+    require_complete: bool = True,
+) -> Optional[List[dict]]:
+    """Return deduped browse segments. Incomplete chunks are omitted unless requested."""
+    if not rows:
+        return None
+    if require_complete and not is_chunk_fully_indexed(rows):
         return None
     segments = [row_to_browse_segment(row, original_video) for row in rows]
     segments.sort(key=lambda seg: seg["segment_number"])
@@ -64,3 +71,12 @@ def prepare_browse_segments(rows: List[dict], original_video: str) -> Optional[L
 
 def fully_indexed_videos(rows_by_video: Dict[str, List[dict]]) -> Set[str]:
     return {ov for ov, rows in rows_by_video.items() if is_chunk_fully_indexed(rows)}
+
+
+def incomplete_videos(rows_by_video: Dict[str, List[dict]]) -> Set[str]:
+    """Parent videos that have indexed rows but are missing at least one segment slot."""
+    return {
+        ov
+        for ov, rows in rows_by_video.items()
+        if rows and not is_chunk_fully_indexed(rows)
+    }

@@ -14,9 +14,15 @@ from src.services.s3_service import (
     if_none_match_satisfied,
     parse_stream_range,
 )
+from src.models.video import ChunkSearchResult
 from src.services.vastdb_service import get_vastdb_service
 from src.config import get_settings
-from src.schemas.explore import ExploreResponse, VideoSynthesizeRequest, VideoSynthesizeResponse
+from src.schemas.explore import (
+    ExploreResponse,
+    VideoDeleteResponse,
+    VideoSynthesizeRequest,
+    VideoSynthesizeResponse,
+)
 from src.ingest_metadata import parse_comma_list, truncate_custom_prompt
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,8 @@ async def upload_video(
     camera_id: str = Form(""),
     capture_type: str = Form(""),
     location: str = Form(""),
+    stream_id: str = Form(""),
+    chunk_number: Optional[int] = Form(None),
     current_user: CurrentUser = None
 ):
     """
@@ -71,6 +79,8 @@ async def upload_video(
         camera_id: Camera identifier (optional metadata)
         capture_type: Capture type - traffic, streets, crowds, malls, etc. (optional metadata)
         location: Geographic area/location (optional metadata)
+        stream_id: Shared id for chunks of one video (optional)
+        chunk_number: 1-based position in that stream (required with stream_id)
         current_user: Current authenticated user
         
     Returns:
@@ -95,6 +105,11 @@ async def upload_video(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large. Max size: {settings.max_upload_size_mb}MB"
         )
+    try:
+        from src.utils.stream_upload import stream_s3_metadata
+        stream_meta = stream_s3_metadata(stream_id, chunk_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     # Queue: take a slot (wait if at capacity); always release in finally
     sem = await _get_upload_semaphore()
@@ -109,7 +124,7 @@ async def upload_video(
         capture_type_value = capture_type.strip() if capture_type else None
         location_value = location.strip() if location else None
         custom_prompt_value = truncate_custom_prompt(custom_prompt)
-        
+
         object_key = await s3_service.upload_file(
             file=file,
             user=current_user,
@@ -120,13 +135,16 @@ async def upload_video(
             custom_prompt=custom_prompt_value,
             camera_id=camera_id_value,
             capture_type=capture_type_value,
-            location=location_value
+            location=location_value,
+            extra_metadata=stream_meta or None,
         )
 
         logger.info(f"Video uploaded: {object_key}")
         return {
             "success": True,
             "object_key": object_key,
+            "stream_id": stream_meta.get("stream_id") or None,
+            "chunk_number": chunk_number if stream_meta else None,
             "message": "Video uploaded successfully and will be processed shortly"
         }
 
@@ -325,6 +343,135 @@ Rules:
 - Stay under ~250 words unless the user question requires more detail."""
 
 
+@router.delete("", response_model=VideoDeleteResponse)
+async def delete_video(
+    original_video: str = Query(..., min_length=1, description="Parent upload S3 URI"),
+    current_user: CurrentUser = None,
+):
+    """
+    Delete one explore video: source object, segments, detection sidecars,
+    collection rows, and prompt/event rows.
+
+    Only the uploader (allowed_users, or the S3 key prefix) can delete it.
+    """
+    from src.utils.row_cache import clear_read_caches
+    from src.utils.video_delete import (
+        allowed_delete_buckets,
+        plan_object_deletes,
+        user_can_delete_video,
+    )
+
+    parent = original_video.strip()
+    logger.info("Delete request from %s: video='%s'", current_user.username, parent)
+    vastdb = get_vastdb_service()
+    try:
+        rows = vastdb.rows_for_video_delete(parent)
+    except Exception as exc:
+        logger.error("Failed to load rows for delete %s: %s", parent, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load video rows: {exc}",
+        )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found",
+        )
+    if not user_can_delete_video(current_user.username, parent, rows):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only delete videos you uploaded",
+        )
+
+    buckets = allowed_delete_buckets(settings.s3_upload_bucket, settings.s3_segments_bucket)
+    keys, prefixes, skipped = plan_object_deletes(parent, rows, buckets)
+    s3 = get_s3_service()
+    object_errors = list(skipped)
+    for bucket, bucket_prefixes in prefixes.items():
+        for prefix in bucket_prefixes:
+            try:
+                for key in s3.list_keys(bucket, prefix):
+                    keys.setdefault(bucket, set()).add(key)
+            except Exception as exc:
+                logger.warning("Failed to list s3://%s/%s: %s", bucket, prefix, exc)
+                object_errors.append(f"s3://{bucket}/{prefix}: {exc}")
+
+    try:
+        prompts_deleted = vastdb.delete_rows_by_column(
+            settings.vdb_prompts_collection, "original_video", parent
+        )
+    except Exception as exc:
+        logger.error("Failed to delete prompt rows for %s: %s", parent, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete prompt rows: {exc}",
+        )
+    try:
+        segments_deleted = vastdb.delete_rows_by_column(
+            settings.vdb_collection, "original_video", parent
+        )
+    except Exception as exc:
+        logger.error("Failed to delete video rows for %s: %s", parent, exc)
+        clear_read_caches()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete index rows: {exc}",
+        )
+
+    objects_deleted = 0
+    for bucket, bucket_keys in keys.items():
+        deleted, errors = s3.delete_keys(bucket, bucket_keys)
+        objects_deleted += deleted
+        object_errors.extend(errors)
+
+    clear_read_caches()
+    logger.info(
+        "Deleted %s: segments=%s prompts=%s objects=%s errors=%s",
+        parent,
+        segments_deleted,
+        prompts_deleted,
+        objects_deleted,
+        len(object_errors),
+    )
+    return VideoDeleteResponse(
+        original_video=parent,
+        segments_deleted=segments_deleted,
+        prompts_deleted=prompts_deleted,
+        objects_deleted=objects_deleted,
+        object_errors=object_errors,
+    )
+
+
+@router.get("/chunk", response_model=ChunkSearchResult)
+async def get_stream_chunk(
+    current_user: CurrentUser,
+    stream_id: str = Query(..., min_length=1),
+    chunk_index: int = Query(..., ge=0),
+    scope: str = Query(default="all", pattern="^(all|mine|public)$"),
+):
+    """Return one stream chunk card so Explore can open the previous or next piece."""
+    logger.info(
+        "Stream chunk request from %s: stream_id=%s chunk_index=%s scope=%s",
+        current_user.username,
+        stream_id,
+        chunk_index,
+        scope,
+    )
+    try:
+        chunk = get_vastdb_service().get_stream_chunk(
+            current_user, stream_id, chunk_index, scope=scope
+        )
+    except Exception as exc:
+        logger.error("Failed to load stream chunk %s #%s: %s", stream_id, chunk_index, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load stream chunk: {exc}",
+        )
+    if chunk is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stream chunk not found")
+    return chunk
+
+
 @router.get("/explore", response_model=ExploreResponse)
 async def explore_videos(
     current_user: CurrentUser,
@@ -337,21 +484,33 @@ async def explore_videos(
         default=None,
         description="Filter chunks by upload metadata location label",
     ),
+    indexed: str = Query(
+        default="complete",
+        pattern="^(complete|partial)$",
+        description="complete = every segment indexed; partial = missing segments",
+    ),
     limit: int = Query(default=48, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
     """Browse indexed video chunks by upload date without a search query."""
     logger.info(
-        "Explore request from %s: scope=%s date=%s limit=%s offset=%s",
+        "Explore request from %s: scope=%s date=%s indexed=%s limit=%s offset=%s",
         current_user.username,
         scope,
         date,
+        indexed,
         limit,
         offset,
     )
     vastdb = get_vastdb_service()
     payload = vastdb.list_explore_chunks(
-        current_user, scope=scope, date=date, location=location, limit=limit, offset=offset
+        current_user,
+        scope=scope,
+        date=date,
+        location=location,
+        indexed=indexed,
+        limit=limit,
+        offset=offset,
     )
     return ExploreResponse(**payload)
 

@@ -52,6 +52,7 @@ See [`source-code/shared/README.md`](../shared/README.md) for Docker build conte
 - **`segment_start_sec`** / **`segment_end_sec`** - Position within the parent video (seconds from start)
 - **`original_video`** - Canonical parent video S3 URI (`s3://bucket/key` of the source upload), used to group all segments from one ingest
 - **`source`** - Segment clip S3 URI (unique per row)
+- **`extra_metadata`** - JSON. Stream chunks store `stream_id`, `chunk_index` (0-based), `ingest_kind` (`stream_chunk`), and when present `chunk_start_sec` / `stream_position_sec`. Explore uses these for **Play chunk N/total** and Previous/Next. One `original_video` is one chunk; delete removes that parent only.
 
 ## How It Works
 

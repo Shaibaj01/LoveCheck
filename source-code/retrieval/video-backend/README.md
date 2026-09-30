@@ -9,6 +9,7 @@ REST API for video search, explore browse, dashboard stats, suggestions, authent
 - [GUI Settings](#gui-settings)
 - [Custom AI Prompts](#custom-ai-prompts)
 - [Ingest Metadata API](#ingest-metadata-api)
+- [Upload, streams, and delete](#upload-streams-and-delete)
 - [Explore & Synthesize](#explore--synthesize)
 - [Suggestions & Dashboard](#suggestions--dashboard)
 - [Agent APIs](#agent-apis)
@@ -89,14 +90,59 @@ Source file: [`source-code/shared/ingest_metadata.py`](../../shared/ingest_metad
 
 ---
 
+## Upload, streams, and delete
+
+### `POST /api/v1/videos/upload`
+
+Multipart upload. Existing fields stay the same (`file`, `is_public`, `tags`, `allowed_users`, `scenario`, `custom_prompt`, `camera_id`, `capture_type`, `location`).
+
+Two optional form fields couple files into one stream, the same way streaming and batch sync already do:
+
+| Field | Rule |
+|-------|------|
+| `stream_id` | Shared id for every chunk of one video. Starts with a letter or number; then letters, numbers, `.`, `_`, `-`; max 128 characters. |
+| `chunk_number` | 1-based position in that stream. Required when `stream_id` is set, and `stream_id` is required when `chunk_number` is set. |
+
+Stored S3 metadata is `stream_id`, `chunk_index` (`chunk_number - 1`), and `ingest_kind=stream_chunk`. The segmenter copies those onto each segment. VastDB keeps them in `extra_metadata`.
+
+The response adds `stream_id` and `chunk_number` when they were set. Explore labels the card **Play chunk {chunk_number}/{max chunk_number}**. The total is the highest `chunk_index` in that stream plus one, so a later batch can continue at chunk 4 and the label becomes `N/4` once that file is indexed.
+
+There is no folder upload. Send the files with the same `stream_id` and sequential `chunk_number` values. The upload dialog does that from **First chunk number** (default 1) in the order the files are listed.
+
+### `DELETE /api/v1/videos?original_video=`
+
+Deletes one Explore card (one parent upload), not the rest of its `stream_id`.
+
+Removes, in order:
+
+1. Key-event rows in `vss-prompts-events` for that `original_video`
+2. Collection rows for that `original_video` (reasoning, embeddings, tags, metadata)
+3. The source object, its segment objects, and detection sidecars (`detections/…`)
+
+Allowed buckets are the upload bucket, the segments bucket, and `{upload}-segments`. The response is `VideoDeleteResponse`: `segments_deleted`, `prompts_deleted`, `objects_deleted`, `object_errors`.
+
+| Result | When |
+|--------|------|
+| `404` | No VastDB rows for that `original_video` (the S3 source is left in place) |
+| `403` | `allowed_users` names owners and the caller is not one of them, and the object key does not start with `{username}/` |
+| `200` | Rows and objects removed. `object_errors` lists S3 leftovers; retry the same delete to finish them |
+
+Uploads record the uploader in `allowed_users`. Streaming captures do not record a username (`allowed_users` empty, keys under `captures/`). An empty `allowed_users` list means no owner was stored, so a caller who can see the row may delete it.
+
+---
+
 ## Explore & Synthesize
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/v1/videos/explore` | Browse parent videos by upload date and **location** (`scope`, `date`, `location`, `limit`, `offset`) |
+| `GET /api/v1/videos/explore` | Browse parent videos by upload date and **location** (`scope`, `date`, `location`, `indexed`, `limit`, `offset`) |
+| `GET /api/v1/videos/chunk` | One stream chunk for Previous/Next (`stream_id`, `chunk_index` 0-based, `scope`) |
 | `POST /api/v1/videos/synthesize` | On-demand Cosmos-Reason2 summary over all segments for one `original_video` |
+| `DELETE /api/v1/videos` | Delete one parent video (`original_video`) |
 
-Explore returns chunk cards (same shape as search `chunk_results`) without vector scores. Only **fully indexed** parents are listed (`segment count == total_segments`). Response includes `uploads_by_day`, `locations[]`, `selected_location`, and `table_available` / `table_message` when VastDB is empty or unreadable.
+`indexed=complete` (default) lists parents whose segment rows cover every slot `1..total_segments`. `indexed=partial` lists parents that have some rows and are still missing slots. Response field `indexed` echoes the filter. Other fields: `uploads_by_day`, `locations[]`, `selected_location`, and `table_available` / `table_message` when VastDB is empty or unreadable.
+
+Stream cards include `stream_id`, `chunk_index`, `stream_chunk_total`, `prev_chunk_index`, and `next_chunk_index`. Neighbors are the nearest lower and higher index in the same stream; gaps are skipped. `GET /videos/chunk` reads that neighbor, including incomplete chunks, so Previous/Next still works from the Incomplete view.
 
 Explore list building uses a **single cached VastDB scan** per TTL window and builds chunk cards in memory (`build_browse_chunk_from_rows`) to avoid N+1 segment queries per video.
 

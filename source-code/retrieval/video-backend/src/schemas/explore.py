@@ -25,6 +25,7 @@ class ExploreResponse(BaseModel):
     scope: str
     selected_date: Optional[str] = None
     selected_location: Optional[str] = None
+    indexed: str = "complete"
     limit: int
     offset: int
     table_available: bool = True
@@ -39,6 +40,14 @@ class VideoSynthesizeRequest(BaseModel):
     )
     max_segments: int = Field(default=50, ge=1, le=100)
     system_prompt: Optional[str] = None
+
+
+class VideoDeleteResponse(BaseModel):
+    original_video: str
+    segments_deleted: int
+    prompts_deleted: int
+    objects_deleted: int
+    object_errors: List[str] = Field(default_factory=list)
 
 
 class VideoSynthesizeResponse(BaseModel):

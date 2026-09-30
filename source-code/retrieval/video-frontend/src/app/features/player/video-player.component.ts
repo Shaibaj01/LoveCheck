@@ -15,7 +15,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { DomSanitizer, SafeHtml, SafeResourceUrl } from '@angular/platform-browser';
-import { ChunkSearchResult, TimelineSegment, VideoSearchResult } from '../../shared/models/video.model';
+import { ChunkSearchResult, TimelineSegment, VideoScope, VideoSearchResult } from '../../shared/models/video.model';
 import { VideoService } from '../../shared/services/video.service';
 import {
   extractHighlightTerms,
@@ -34,6 +34,7 @@ import {
   writeDetectionOverlayPref,
 } from '../../shared/utils/detection-overlay.util';
 import { VideoSummarizeDialogComponent } from '../explore/components/video-summarize-dialog.component';
+import { ExploreService } from '../explore/services/explore.service';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { firstValueFrom } from 'rxjs';
 
@@ -43,6 +44,7 @@ export interface VideoPlayerData {
   query?: string;
   initialSeekSec?: number;
   mode?: 'search' | 'explore';
+  scope?: VideoScope;
 }
 
 @Component({
@@ -66,7 +68,18 @@ export interface VideoPlayerData {
             <h2>{{ title() }}</h2>
             @if (chunk(); as c) {
               @if (isExplore()) {
-                <p class="subtitle">Full chunk · {{ formatTime(c.chunk_duration_sec) }} · {{ c.total_segments }} segments</p>
+                <p class="subtitle">
+                  @if (!c.stream_id && c.chunk_index != null) {
+                    Chunk {{ c.chunk_index + 1 }}@if (c.stream_chunk_total) {/{{ c.stream_chunk_total }}}
+                    ·
+                  }
+                  {{ formatTime(c.chunk_duration_sec) }} ·
+                  @if (c.timeline.length < c.total_segments) {
+                    {{ c.timeline.length }} of {{ c.total_segments }} segments
+                  } @else {
+                    {{ c.total_segments }} segments
+                  }
+                </p>
               } @else {
                 <p class="subtitle">
                   Best match {{ formatTime(c.best_match_start_sec) }}–{{ formatTime(c.best_match_end_sec) }}
@@ -84,13 +97,43 @@ export interface VideoPlayerData {
         </button>
       </div>
 
-      @if (chunk() && isExplore()) {
+      @if (isExplore() && chunk(); as c) {
         <div class="explore-actions-bar">
+          @if (c.stream_id) {
+            <div class="stream-hop">
+              <button
+                mat-stroked-button
+                type="button"
+                class="stream-nav-btn"
+                (click)="hopStream('prev')"
+                [disabled]="c.prev_chunk_index == null || streamHop()">
+                <mat-icon>skip_previous</mat-icon>
+                Previous
+              </button>
+              @if (c.chunk_index != null) {
+                <span class="stream-chunk-label">
+                  Chunk {{ c.chunk_index + 1 }}@if (c.stream_chunk_total) {/{{ c.stream_chunk_total }}}
+                </span>
+              }
+              <button
+                mat-stroked-button
+                type="button"
+                class="stream-nav-btn"
+                (click)="hopStream('next')"
+                [disabled]="c.next_chunk_index == null || streamHop()">
+                Next
+                <mat-icon>skip_next</mat-icon>
+              </button>
+            </div>
+          }
           <button mat-raised-button color="primary" class="summarize-btn" (click)="summarizeVideo()">
             <mat-icon>auto_awesome</mat-icon>
             Summarize Video
           </button>
         </div>
+        @if (streamHopError()) {
+          <p class="stream-hop-error">{{ streamHopError() }}</p>
+        }
       }
 
       <div class="video-section">
@@ -253,18 +296,19 @@ export interface VideoPlayerData {
 
       h2 {
         margin: 0;
-        font-size: 1rem;
-        font-weight: 600;
-        max-width: 520px;
+        font-size: 1.45rem;
+        font-weight: 650;
+        max-width: 720px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       .subtitle {
-        margin: 0.15rem 0 0;
-        font-size: 0.78rem;
-        color: var(--text-muted);
+        margin: 0.3rem 0 0;
+        font-size: 1.12rem;
+        font-weight: 600;
+        color: var(--text-primary);
       }
 
       .video-icon { color: var(--accent-primary); }
@@ -272,14 +316,61 @@ export interface VideoPlayerData {
 
     .explore-actions-bar {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: flex-end;
-      padding: 0.55rem 1rem;
+      gap: 0.75rem;
+      padding: 0.85rem 1rem;
       background: rgba(115, 200, 253, 0.08);
       border-bottom: 1px solid rgba(115, 200, 253, 0.22);
     }
 
+    .stream-hop {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      width: 100%;
+      margin: 0;
+    }
+
+    .stream-chunk-label {
+      min-width: 9rem;
+      text-align: center;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: #f4fbff;
+    }
+
+    :host ::ng-deep .stream-nav-btn {
+      min-width: 148px;
+      color: #f4fbff !important;
+      border-color: #8fd4ff !important;
+      background: rgba(115, 200, 253, 0.28) !important;
+      font-weight: 650;
+    }
+
+    :host ::ng-deep .stream-nav-btn .mdc-button__label,
+    :host ::ng-deep .stream-nav-btn mat-icon {
+      color: #f4fbff !important;
+    }
+
+    :host ::ng-deep .stream-nav-btn:disabled,
+    :host ::ng-deep .stream-nav-btn:disabled .mdc-button__label,
+    :host ::ng-deep .stream-nav-btn:disabled mat-icon {
+      color: rgba(244, 251, 255, 0.45) !important;
+      border-color: rgba(143, 212, 255, 0.35) !important;
+    }
+
+    .stream-hop-error {
+      margin: 0;
+      padding: 0.35rem 1rem 0.55rem;
+      color: #f87171;
+      font-size: 0.85rem;
+    }
+
     .summarize-btn {
+      align-self: flex-end;
       background: var(--button-bg-primary) !important;
       color: var(--button-text) !important;
 
@@ -627,6 +718,7 @@ export interface VideoPlayerData {
 })
 export class VideoPlayerComponent implements OnInit {
   private videoService = inject(VideoService);
+  private explore = inject(ExploreService);
   private sanitizer = inject(DomSanitizer);
   private dialogRef = inject(MatDialogRef<VideoPlayerComponent>);
   private dialog = inject(MatDialog);
@@ -654,6 +746,9 @@ export class VideoPlayerComponent implements OnInit {
   private loadedSegmentSource = '';
   private loadedDetectionSource = '';
   private detectionLoadToken = 0;
+
+  streamHop = signal(false);
+  streamHopError = signal<string | null>(null);
 
   title = computed(() => this.chunk()?.filename ?? this.legacyVideo()?.filename ?? 'Video');
 
@@ -1054,6 +1149,26 @@ export class VideoPlayerComponent implements OnInit {
 
   isExplore(): boolean {
     return this.mode() === 'explore';
+  }
+
+  async hopStream(direction: 'prev' | 'next') {
+    const current = this.chunk();
+    if (!current?.stream_id || this.streamHop()) return;
+    const index = direction === 'prev' ? current.prev_chunk_index : current.next_chunk_index;
+    if (index == null) return;
+    this.streamHop.set(true);
+    this.streamHopError.set(null);
+    try {
+      const next = await firstValueFrom(
+        this.explore.getStreamChunk(current.stream_id, index, this.data.scope ?? 'all'),
+      );
+      this.chunk.set(next);
+      this.beginSegmentPlayback(next, 0);
+    } catch {
+      this.streamHopError.set('Could not open that stream chunk.');
+    } finally {
+      this.streamHop.set(false);
+    }
   }
 
   summarizeVideo() {

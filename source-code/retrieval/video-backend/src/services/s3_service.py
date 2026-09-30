@@ -6,7 +6,7 @@ import boto3
 import re
 from botocore.exceptions import ClientError
 from dataclasses import dataclass
-from typing import Dict, Iterator, Optional, Tuple, Union, Literal
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union, Literal
 import uuid
 from datetime import datetime
 from urllib.parse import unquote
@@ -178,7 +178,8 @@ class S3Service:
         custom_prompt: Optional[str] = None,
         camera_id: Optional[str] = None,
         capture_type: Optional[str] = None,
-        location: Optional[str] = None
+        location: Optional[str] = None,
+        extra_metadata: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Upload file directly to S3 (backend proxy)
@@ -231,6 +232,7 @@ class S3Service:
                 camera_id=camera_id,
                 capture_type=capture_type,
                 location=location,
+                extra=extra_metadata,
             )
             
             logger.info(f"Uploading {file.filename} to s3://{self.settings.s3_upload_bucket}/{object_key}")
@@ -342,6 +344,48 @@ class S3Service:
         except ClientError as e:
             logger.error(f"Error streaming video from S3: {str(e)}")
             raise
+
+    def list_keys(self, bucket: str, prefix: str, limit: int = 500) -> List[str]:
+        """List object keys under a prefix. Used to catch segment leftovers of one upload."""
+        if not prefix:
+            return []
+        keys: List[str] = []
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj.get("Key")
+                if key:
+                    keys.append(key)
+                if len(keys) >= limit:
+                    return keys
+        return keys
+
+    def delete_keys(self, bucket: str, keys: Iterable[str]) -> Tuple[int, List[str]]:
+        """Delete keys in one bucket. Missing keys are not errors. Returns (deleted, errors)."""
+        unique = [key for key in dict.fromkeys(keys) if key]
+        deleted = 0
+        errors: List[str] = []
+        for start in range(0, len(unique), 1000):
+            chunk = unique[start:start + 1000]
+            try:
+                response = self.client.delete_objects(
+                    Bucket=bucket,
+                    Delete={"Objects": [{"Key": key} for key in chunk], "Quiet": True},
+                )
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code", "ClientError")
+                errors.append(f"s3://{bucket}: {code}")
+                continue
+            failed = set()
+            for err in response.get("Errors") or []:
+                code = err.get("Code") or "Error"
+                key = err.get("Key") or ""
+                if code in ("NoSuchKey", "404", "NotFound"):
+                    continue
+                failed.add(key)
+                errors.append(f"s3://{bucket}/{key}: {code}")
+            deleted += len(chunk) - len(failed)
+        return deleted, errors
 
     def get_object_bytes(self, bucket: str, key: str) -> bytes:
         """Download full object bytes (e.g. gzipped detection sidecar)."""

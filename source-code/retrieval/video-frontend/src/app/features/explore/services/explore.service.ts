@@ -3,7 +3,9 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import {
+  ChunkSearchResult,
   ExploreResponse,
+  VideoDeleteResponse,
   VideoScope,
   VideoSynthesizeRequest,
   VideoSynthesizeResponse,
@@ -17,11 +19,13 @@ export class ExploreService {
     scope: VideoScope;
     date?: string | null;
     location?: string | null;
+    indexed?: 'complete' | 'partial';
     limit?: number;
     offset?: number;
   }): Observable<ExploreResponse> {
     let httpParams = new HttpParams()
       .set('scope', params.scope)
+      .set('indexed', params.indexed ?? 'complete')
       .set('limit', String(params.limit ?? 48))
       .set('offset', String(params.offset ?? 0));
     if (params.date) {
@@ -40,5 +44,22 @@ export class ExploreService {
       `${environment.apiUrl}/videos/synthesize`,
       body
     );
+  }
+
+  getStreamChunk(
+    streamId: string,
+    chunkIndex: number,
+    scope: VideoScope = 'all',
+  ): Observable<ChunkSearchResult> {
+    const params = new HttpParams()
+      .set('stream_id', streamId)
+      .set('chunk_index', String(chunkIndex))
+      .set('scope', scope);
+    return this.http.get<ChunkSearchResult>(`${environment.apiUrl}/videos/chunk`, { params });
+  }
+
+  deleteVideo(originalVideo: string): Observable<VideoDeleteResponse> {
+    const params = new HttpParams().set('original_video', originalVideo);
+    return this.http.delete<VideoDeleteResponse>(`${environment.apiUrl}/videos`, { params });
   }
 }

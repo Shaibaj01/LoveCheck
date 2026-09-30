@@ -80,7 +80,7 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
 
       <mat-card-content>
         <div class="title-row">
-          <h3 class="chunk-title">{{ chunk.filename }}</h3>
+          <h3 class="chunk-title" [class.explore-title]="mode === 'explore'">{{ chunk.filename }}</h3>
           <span class="duration-chip">{{ formatTime(chunk.chunk_duration_sec) }}</span>
         </div>
 
@@ -96,8 +96,21 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         } @else {
           <p class="match-line explore-line">
             <mat-icon>movie</mat-icon>
-            {{ chunk.total_segments }} segment{{ chunk.total_segments === 1 ? '' : 's' }}
-            · {{ formatTime(chunk.chunk_duration_sec) }} total
+            @if (chunk.chunk_index != null) {
+              Chunk {{ chunk.chunk_index + 1 }}@if (chunk.stream_chunk_total) {/{{ chunk.stream_chunk_total }}}
+              · {{ formatTime(chunk.chunk_duration_sec) }}
+              ·
+              @if (chunk.timeline.length < chunk.total_segments) {
+                {{ chunk.timeline.length }} of {{ chunk.total_segments }} segments
+              } @else {
+                {{ chunk.total_segments }} segment{{ chunk.total_segments === 1 ? '' : 's' }}
+              }
+            } @else if (chunk.timeline.length < chunk.total_segments) {
+              {{ chunk.timeline.length }} of {{ chunk.total_segments }} segments indexed
+            } @else {
+              {{ chunk.total_segments }} segment{{ chunk.total_segments === 1 ? '' : 's' }}
+              · {{ formatTime(chunk.chunk_duration_sec) }} total
+            }
           </p>
         }
 
@@ -191,6 +204,15 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
           <button mat-stroked-button class="action-btn action-secondary" (click)="onSummarize($event)">
             <mat-icon>auto_awesome</mat-icon>
             Summarize
+          </button>
+          <button
+            mat-icon-button
+            type="button"
+            class="action-delete"
+            (click)="onDelete($event)"
+            [disabled]="deleting"
+            matTooltip="Delete this video">
+            <mat-icon>delete</mat-icon>
           </button>
         </div>
         }
@@ -327,6 +349,10 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
       flex: 1;
     }
 
+    .chunk-title.explore-title {
+      font-size: 1.28rem;
+    }
+
     .duration-chip {
       font-size: 0.75rem;
       color: var(--text-secondary);
@@ -349,6 +375,9 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         display: flex;
         align-items: center;
         gap: 0.35rem;
+        font-size: 1.08rem;
+        font-weight: 600;
+        color: var(--text-primary);
 
         mat-icon {
           font-size: 1rem;
@@ -651,6 +680,24 @@ import { playHoverPreview, stopHoverPreview, claimHoverPreview, releaseHoverPrev
         color: var(--accent-primary) !important;
       }
     }
+
+    .stream-hop {
+      flex: 0 0 auto;
+      color: var(--accent-primary) !important;
+
+      mat-icon {
+        color: var(--accent-primary) !important;
+      }
+    }
+
+    .action-delete {
+      flex: 0 0 auto;
+      color: #f87171 !important;
+
+      mat-icon {
+        color: #f87171 !important;
+      }
+    }
   `],
 })
 export class ChunkCardComponent implements OnChanges {
@@ -660,9 +707,12 @@ export class ChunkCardComponent implements OnChanges {
 
   @Input({ required: true }) chunk!: ChunkSearchResult;
   @Input() mode: 'search' | 'explore' = 'search';
+  @Input() deleting = false;
   @Output() open = new EventEmitter<ChunkSearchResult>();
   @Output() jumpTo = new EventEmitter<{ chunk: ChunkSearchResult; seekSec: number }>();
   @Output() summarize = new EventEmitter<ChunkSearchResult>();
+  @Output() deleteVideo = new EventEmitter<ChunkSearchResult>();
+  @Output() openStreamChunk = new EventEmitter<{ chunk: ChunkSearchResult; chunkIndex: number }>();
 
   @ViewChild('videoElement') videoElement?: ElementRef<HTMLVideoElement>;
 
@@ -712,6 +762,19 @@ export class ChunkCardComponent implements OnChanges {
   toggleExpand(event: Event) {
     event.stopPropagation();
     this.isExpanded = !this.isExpanded;
+  }
+
+  onStreamHop(event: Event, direction: 'prev' | 'next') {
+    event.stopPropagation();
+    const index = direction === 'prev' ? this.chunk.prev_chunk_index : this.chunk.next_chunk_index;
+    if (index == null || !this.chunk.stream_id) return;
+    this.openStreamChunk.emit({ chunk: this.chunk, chunkIndex: index });
+  }
+
+  onDelete(event?: Event) {
+    event?.stopPropagation();
+    if (this.deleting) return;
+    this.deleteVideo.emit(this.chunk);
   }
 
   onOpen(event?: Event) {
