@@ -12,6 +12,7 @@ Date: 2024
 import time
 import os
 import json
+import shutil
 import threading
 import logging
 import subprocess
@@ -125,16 +126,38 @@ def youtube_is_live_stream(video_info: dict) -> bool:
     return str(video_info.get("live_status") or "").lower() == "is_live"
 
 
+def ytdlp_runtime_flags() -> list:
+    """
+    Recent yt-dlp only enables Deno unless a runtime is passed with an absolute path.
+    The warning "Only deno is enabled by default" means neither deno nor node was found.
+    """
+    flags = []
+    deno = shutil.which("deno")
+    if deno:
+        flags.extend(["--js-runtimes", f"deno:{deno}"])
+    for name in ("node", "nodejs"):
+        path = shutil.which(name)
+        if path:
+            flags.extend(["--js-runtimes", f"node:{path}"])
+            break
+    if not flags:
+        logger.error(
+            "No deno or node binary on PATH — YouTube extraction will fail. "
+            "Rebuild the streaming image (Deno and Node are installed in the Dockerfile)."
+        )
+    return flags
+
+
 def build_ytdlp_cmd(args: list) -> list:
     """
-    Build argv for yt-dlp: JS runtime (Node) + optional Netscape cookies.
+    Build argv for yt-dlp: JS runtime + YouTube EJS challenge solver + optional cookies.
 
     YouTube often returns "Sign in to confirm you're not a bot" for datacenter IPs.
     Export cookies from a logged-in browser to a file, then set:
       YTDLP_COOKIES_FILE=/path/to/cookies.txt
     (Netscape format; e.g. browser extension, or: yt-dlp --cookies-from-browser chrome --print-to-file ...)
     """
-    cmd = ["yt-dlp", "--js-runtimes", "node"]
+    cmd = ["yt-dlp", "--remote-components", "ejs:github", *ytdlp_runtime_flags()]
     cookies_path = os.environ.get("YTDLP_COOKIES_FILE") or os.environ.get("YT_DLP_COOKIES_FILE")
     if cookies_path:
         if os.path.isfile(cookies_path):
@@ -375,43 +398,14 @@ class VideoCaptureService:
         logger.info(f"Testing stream: {stream_url}")
         
         if self.is_youtube_url(stream_url):
-            logger.info("Detected YouTube URL, testing with yt-dlp")
-            direct_url = self.get_youtube_stream_url(stream_url)
-            if direct_url:
-                # Try OpenCV first
-                logger.info("Testing extracted URL with OpenCV...")
-                cap = cv2.VideoCapture(direct_url)
-                if cap.isOpened():
-                    ret, frame = cap.read()
-                    cap.release()
-                    if ret and frame is not None:
-                        logger.info(f"✓ YouTube stream verified with OpenCV")
-                        return True
-                    else:
-                        logger.warning("OpenCV opened stream but couldn't read frames")
-                else:
-                    logger.warning("OpenCV couldn't open stream directly")
-                
-                # Try with FFmpeg backend explicitly
-                logger.info("Trying FFmpeg backend for OpenCV...")
-                cap = cv2.VideoCapture(direct_url, cv2.CAP_FFMPEG)
-                if cap.isOpened():
-                    ret, frame = cap.read()
-                    cap.release()
-                    if ret and frame is not None:
-                        logger.info(f"✓ YouTube stream verified with FFmpeg backend")
-                        return True
-                
-                # Last resort: trust yt-dlp succeeded and skip OpenCV test
-                # Some YouTube URLs have complex query parameters that OpenCV can't parse
-                # but the actual streaming may still work, or we'll use yt-dlp download fallback
-                logger.warning("OpenCV test failed, but yt-dlp extracted URL successfully")
-                logger.info("Proceeding anyway - will use yt-dlp download fallback if streaming fails")
-                return True  # Trust yt-dlp, let actual capture try with fallback
-            else:
-                logger.error(f"Cannot extract YouTube stream URL: {stream_url}")
-                return False
-        
+            # Capture uses yt-dlp downloads, not OpenCV on a googlevideo URL.
+            # A failed direct-URL probe must not reject POST /start.
+            logger.info(
+                "YouTube URL: skipping direct-URL/OpenCV probe (yt-dlp %s)",
+                " ".join(ytdlp_runtime_flags()) or "NO JS RUNTIME",
+            )
+            return True
+
         # Handle regular streams
         cap = cv2.VideoCapture(stream_url)
         
@@ -595,13 +589,19 @@ class VideoCaptureService:
         except subprocess.TimeoutExpired:
             logger.error("Full VOD download timed out after %ss", timeout_sec)
             return False
+        ok = os.path.exists(output_path) and os.path.getsize(output_path) > 0
         if result.returncode != 0:
-            logger.error(
-                "Full VOD download failed: %s",
-                (result.stderr or result.stdout or "")[:400],
-            )
+            detail = (result.stderr or result.stdout or "")[:800]
+            if ok:
+                logger.warning(
+                    "yt-dlp exited %s but wrote a file; continuing. %s",
+                    result.returncode,
+                    detail,
+                )
+                return True
+            logger.error("Full VOD download failed: %s", detail)
             return False
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        return ok
 
     def _download_youtube_segment_chunk(
         self,
@@ -661,12 +661,18 @@ class VideoCaptureService:
                     max_retries + 1,
                 )
                 continue
-            if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                if result.returncode != 0:
+                    logger.warning(
+                        "yt-dlp segment exited %s but wrote a file (start=%ss); using it",
+                        result.returncode,
+                        segment_start,
+                    )
                 return True
             logger.warning(
                 "yt-dlp segment failed (start=%ss): %s",
                 segment_start,
-                (result.stderr or "")[:200] or "unknown error",
+                (result.stderr or "")[:400] or "unknown error",
             )
         return False
 
@@ -804,7 +810,23 @@ class VideoCaptureService:
 
         try:
             if not self._download_youtube_full_vod(youtube_url, full_path, duration):
-                return 0
+                logger.warning(
+                    "Full VOD download failed; falling back to per-chunk yt-dlp downloads"
+                )
+                return self._capture_ytdlp_live_chunks(
+                    config,
+                    capture_interval,
+                    bucket_name,
+                    s3_prefix,
+                    camera_id,
+                    capture_type,
+                    location,
+                    scenario,
+                    custom_prompt,
+                    max_duration,
+                    youtube_url,
+                    duration,
+                )
 
             effective_end = min(duration, float(max_duration))
             segment_start = 0.0
@@ -1409,4 +1431,5 @@ def get_status():
 
 if __name__ == '__main__':
     logger.info("Starting Video Capture Web Service")
+    logger.info("yt-dlp JS runtimes: %s", " ".join(ytdlp_runtime_flags()) or "NONE")
     app.run(host='0.0.0.0', port=5000, debug=False)
