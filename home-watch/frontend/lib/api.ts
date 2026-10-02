@@ -8,6 +8,7 @@ export type Camera = {
   camera_id: string;
   source: string;
   start_sec: number;
+  duration_sec?: number;
   reasoning: string;
   ok: boolean;
 };
@@ -17,9 +18,17 @@ export type AlertItem = {
   kind: string;
   label: string;
   card_id: string;
+  camera_id: string;
+  site: string;
+  camera_label: string;
+  title: string;
   summary: string;
   source: string;
   start_sec: number;
+  end_sec: number;
+  duration_sec: number;
+  score: number;
+  upload_timestamp: string;
 };
 
 export type FeedSummary = {
@@ -37,13 +46,16 @@ export function clipUrl(source: string): string {
   return apiUrl(`/api/clip?source=${encodeURIComponent(source)}`);
 }
 
-export function withWindow(path: string, timeFilter: TimeFilter, date: string): string {
-  const q = new URLSearchParams();
-  if (date) {
-    q.set("date", date);
-  } else {
-    q.set("time_filter", timeFilter);
-  }
-  const qs = q.toString();
+export function withWindow(
+  path: string,
+  timeFilter: TimeFilter,
+  date: string,
+  q?: string
+): string {
+  const params = new URLSearchParams();
+  if (date) params.set("date", date);
+  else params.set("time_filter", timeFilter);
+  if (q) params.set("q", q);
+  const qs = params.toString();
   return apiUrl(`${path}${qs ? `?${qs}` : ""}`);
 }

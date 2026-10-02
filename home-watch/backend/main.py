@@ -49,9 +49,19 @@ CAMERAS = [
 
 ALERT_SEARCHES = [
     {
+        "kind": "workplace",
+        "card_id": "indoor",
+        "label": "Workplace",
+        "camera_id": "smartspace_cam-1",
+        "query": (
+            "forklift, worker in an aisle, person near moving equipment, "
+            "warehouse safety hazard, pedestrian lane"
+        ),
+    },
+    {
         "kind": "house",
         "card_id": "house",
-        "label": "House",
+        "label": "Surroundings",
         "camera_id": "neighborhood_cam-1",
         "query": (
             "person, dog, or vehicle at the driveway or sidewalk "
@@ -61,7 +71,7 @@ ALERT_SEARCHES = [
     {
         "kind": "car",
         "card_id": "dashcam",
-        "label": "Car",
+        "label": "Traffic",
         "camera_id": "pie_cam-3",
         "query": (
             "pedestrian in the roadway, brake lights, road work, sudden stop, "
@@ -69,6 +79,12 @@ ALERT_SEARCHES = [
         ),
     },
 ]
+
+SITE = {
+    "indoor": ("Workplace", "warehouse cam"),
+    "house": ("Surroundings", "neighborhood cam"),
+    "dashcam": ("Traffic", "Toronto dashcam"),
+}
 
 HOP_BY_HOP = {
     "connection",
@@ -175,6 +191,7 @@ def _empty_camera(cam: dict) -> dict:
         "clip_url": "",
         "filename": cam["seed"],
         "start_sec": 0,
+        "duration_sec": 0,
         "reasoning": "",
         "ok": False,
     }
@@ -215,6 +232,44 @@ def _pick_source(chunk: dict, start_sec: Optional[float] = None) -> str:
         if best:
             return best
     return (chunk.get("preview_source") or "").strip()
+
+
+def _title(text: str) -> str:
+    one = " ".join((text or "").split())
+    if not one:
+        return "Untitled event"
+    head = one.split(". ")[0].strip()
+    if len(head) > 72:
+        head = head[:69].rstrip() + "…"
+    return head[:1].upper() + head[1:] if head else "Untitled event"
+
+
+def _alert_row(spec: dict, chunk: dict) -> Optional[dict]:
+    start = float(chunk.get("best_match_start_sec") or 0)
+    source = _pick_source(chunk, start)
+    if not source:
+        return None
+    summary = _summary(chunk)
+    site, cam_label = SITE.get(spec["card_id"], ("Site", spec["camera_id"]))
+    return {
+        "id": f"{spec['kind']}:{chunk.get('original_video')}:{chunk.get('best_segment_number')}",
+        "kind": spec["kind"],
+        "label": spec["label"],
+        "card_id": spec["card_id"],
+        "camera_id": spec["camera_id"],
+        "site": site,
+        "camera_label": cam_label,
+        "title": _title(summary),
+        "summary": summary,
+        "source": source,
+        "clip_url": clip_url(source),
+        "filename": (chunk.get("filename") or "").split("/")[-1],
+        "start_sec": start,
+        "end_sec": float(chunk.get("best_match_end_sec") or start),
+        "duration_sec": float(chunk.get("chunk_duration_sec") or 0),
+        "score": round(_chunk_score(chunk), 4),
+        "upload_timestamp": str(chunk.get("upload_timestamp") or ""),
+    }
 
 
 def _summary(chunk: dict) -> str:
@@ -348,6 +403,7 @@ def _camera_payload(
             "clip_url": clip_url(source) if source else "",
             "filename": (chunk.get("filename") or cam["seed"]).split("/")[-1],
             "start_sec": float(chunk.get("best_match_start_sec") or 0),
+            "duration_sec": float(chunk.get("chunk_duration_sec") or 0),
             "reasoning": _summary(chunk),
             "ok": bool(source),
         }
@@ -360,9 +416,10 @@ def _search_alerts(
     time_filter: str,
     custom_start: Optional[str],
     custom_end: Optional[str],
+    query: Optional[str] = None,
 ) -> dict:
     payload: dict[str, Any] = {
-        "query": spec["query"],
+        "query": (query or spec["query"]).strip(),
         "top_k": 8,
         "llm_top_n": 3,
         "include_public": True,
@@ -380,26 +437,9 @@ def _search_alerts(
         synthesis = (llm.get("response") or "").strip()
     alerts = []
     for chunk in data.get("chunk_results") or []:
-        start = float(chunk.get("best_match_start_sec") or 0)
-        source = _pick_source(chunk, start)
-        if not source:
-            continue
-        alerts.append(
-            {
-                "id": f"{spec['kind']}:{chunk.get('original_video')}:{chunk.get('best_segment_number')}",
-                "kind": spec["kind"],
-                "label": spec["label"],
-                "card_id": spec["card_id"],
-                "camera_id": spec["camera_id"],
-                "summary": _summary(chunk),
-                "source": source,
-                "clip_url": clip_url(source),
-                "filename": (chunk.get("filename") or "").split("/")[-1],
-                "start_sec": start,
-                "end_sec": float(chunk.get("best_match_end_sec") or start),
-                "score": round(_chunk_score(chunk), 4),
-            }
-        )
+        row = _alert_row(spec, chunk)
+        if row:
+            alerts.append(row)
     if not alerts:
         synthesis = ""
     elif not synthesis:
@@ -455,15 +495,16 @@ def api_cameras():
 @app.get("/api/alerts")
 def api_alerts():
     day = (request.args.get("date") or "").strip() or None
+    ask = (request.args.get("q") or "").strip() or None
     time_filter, custom_start, custom_end = _window(
         (request.args.get("time_filter") or "24h").strip(),
         day,
     )
     merged: list[dict] = []
     summaries: list[dict] = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futs = [
-            pool.submit(_search_alerts, spec, time_filter, custom_start, custom_end)
+            pool.submit(_search_alerts, spec, time_filter, custom_start, custom_end, ask)
             for spec in ALERT_SEARCHES
         ]
         for fut in as_completed(futs):
@@ -494,6 +535,7 @@ def api_alerts():
             "team": VSS_USERNAME or "unknown",
             "time_filter": time_filter,
             "date": day,
+            "ask": ask,
             "summaries": summaries,
             "alerts": uniq[:12],
         }
