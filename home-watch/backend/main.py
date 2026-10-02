@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -54,9 +56,11 @@ ALERT_SEARCHES = [
         "label": "Workplace",
         "camera_id": "smartspace_cam-1",
         "query": (
-            "forklift, worker in an aisle, person near moving equipment, "
-            "warehouse safety hazard, pedestrian lane"
+            "forklift moving toward a pedestrian in a warehouse aisle, "
+            "worker walking in the path of a forklift or robot"
         ),
+        "fallback_title": "Person near moving warehouse equipment",
+        "why_hint": "a worker may be in the path of moving equipment",
     },
     {
         "kind": "house",
@@ -64,9 +68,11 @@ ALERT_SEARCHES = [
         "label": "Surroundings",
         "camera_id": "neighborhood_cam-1",
         "query": (
-            "person, dog, or vehicle at the driveway or sidewalk "
-            "outside the house, someone walking a dog, parked or approaching car"
+            "person or dog on the sidewalk or driveway in front of the house, "
+            "stranger approaching the property, car pulling up at night"
         ),
+        "fallback_title": "Activity at the house",
+        "why_hint": "someone or a vehicle is at the property edge",
     },
     {
         "kind": "car",
@@ -74,11 +80,72 @@ ALERT_SEARCHES = [
         "label": "Traffic",
         "camera_id": "pie_cam-3",
         "query": (
-            "pedestrian in the roadway, brake lights, road work, sudden stop, "
-            "hazard while driving, SUV braking for a person crossing"
+            "pedestrian stepping into the roadway, vehicle braking hard, "
+            "person in a crosswalk in front of the car"
         ),
+        "fallback_title": "Road conflict ahead",
+        "why_hint": "another road user may be in the vehicle's path",
     },
 ]
+
+TITLE_RULES = {
+    "workplace": [
+        (
+            ["forklift"],
+            "Worker in a forklift path",
+            "a person is sharing an aisle with a moving forklift",
+        ),
+        (
+            ["robot", "agv", "amr"],
+            "Person near a moving warehouse robot",
+            "people and a moving robot are on the same floor",
+        ),
+        (
+            ["pallet"],
+            "Worker near a pallet mover",
+            "a worker is next to equipment carrying a load",
+        ),
+        (
+            ["aisle", "pedestrian", "worker"],
+            "Person in an active warehouse aisle",
+            "someone is walking where equipment is operating",
+        ),
+    ],
+    "house": [
+        (
+            ["dog"],
+            "Dog walker outside the house",
+            "a person with a dog is at the sidewalk or driveway",
+        ),
+        (
+            ["person", "pedestrian", "someone", "man", "woman"],
+            "Person at the property edge",
+            "someone is at the driveway or sidewalk in front of the house",
+        ),
+        (
+            ["car", "vehicle", "suv", "truck"],
+            "Vehicle at the house",
+            "a vehicle is at the curb or driveway in front of the house",
+        ),
+    ],
+    "car": [
+        (
+            ["pedestrian", "crosswalk", "crossing"],
+            "Pedestrian in the roadway",
+            "a person is in or entering the vehicle's path",
+        ),
+        (
+            ["brake", "braking"],
+            "Hard brake in traffic",
+            "the vehicle is braking hard with other road users ahead",
+        ),
+        (
+            ["intersection"],
+            "Conflict at an intersection",
+            "other traffic is crossing directly in front of the car",
+        ),
+    ],
+}
 
 SITE = {
     "indoor": ("Workplace", "warehouse cam"),
@@ -149,9 +216,10 @@ def vss_json(method: str, path: str, **kwargs: Any) -> Any:
     timeout = kwargs.pop("timeout", 90)
     extra_headers = kwargs.pop("headers", {})
     last_err: Optional[Exception] = None
-    for attempt, force in enumerate((False, True)):
+    force_login = False
+    for attempt in range(4):
         try:
-            token = _token(force=force)
+            token = _token(force=force_login)
             r = _http.request(
                 method,
                 _vss(path),
@@ -159,16 +227,27 @@ def vss_json(method: str, path: str, **kwargs: Any) -> Any:
                 timeout=timeout,
                 **kwargs,
             )
-            if r.status_code == 401 and attempt == 0:
+            if r.status_code == 401 and not force_login:
                 log.info("vss 401 on %s %s; re-login", method, path)
+                force_login = True
+                continue
+            if r.status_code in (502, 503) and attempt < 3:
+                log.warning("vss %s on %s %s; retry", r.status_code, method, path)
+                time.sleep(1.2 * (attempt + 1))
                 continue
             r.raise_for_status()
             if not r.content:
                 return None
             return r.json()
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_err = exc
+            log.warning("vss unreachable on %s %s (%s); retry", method, path, exc.__class__.__name__)
+            time.sleep(1.2 * (attempt + 1))
+            continue
         except requests.HTTPError as exc:
             last_err = exc
-            if exc.response is not None and exc.response.status_code == 401 and attempt == 0:
+            if exc.response is not None and exc.response.status_code == 401 and not force_login:
+                force_login = True
                 continue
             raise
     if last_err:
@@ -192,6 +271,7 @@ def _empty_camera(cam: dict) -> dict:
         "filename": cam["seed"],
         "start_sec": 0,
         "duration_sec": 0,
+        "window_duration_sec": 0,
         "reasoning": "",
         "ok": False,
     }
@@ -234,14 +314,34 @@ def _pick_source(chunk: dict, start_sec: Optional[float] = None) -> str:
     return (chunk.get("preview_source") or "").strip()
 
 
-def _title(text: str) -> str:
-    one = " ".join((text or "").split())
-    if not one:
-        return "Untitled event"
-    head = one.split(". ")[0].strip()
-    if len(head) > 72:
-        head = head[:69].rstrip() + "…"
-    return head[:1].upper() + head[1:] if head else "Untitled event"
+def _clip_family(uri: str) -> str:
+    name = (uri or "").split("/")[-1]
+    name = re.sub(r"^\d{8}_\d{6}_", "", name)
+    name = re.sub(r"_segment_\d+_of_\d+", "", name)
+    name = re.sub(r"_chunk_\d+", "", name)
+    name = re.sub(r"_Camera_\d+", "_Camera", name, flags=re.I)
+    return re.sub(r"\.(mp4|mkv|mov)$", "", name, flags=re.I)
+
+
+def _incident(spec: dict, reasoning: str) -> tuple[str, str]:
+    blob = reasoning.lower()
+    for keys, title, why in TITLE_RULES.get(spec["kind"], []):
+        if any(k in blob for k in keys):
+            return title, f"Flagged because {why}."
+    return (
+        spec.get("fallback_title") or "Needs a look",
+        f"Flagged because {spec.get('why_hint') or 'this clip matched a safety search'}.",
+    )
+
+
+def _caption(chunk: dict) -> str:
+    text = (chunk.get("reasoning_content") or "").strip()
+    if not text:
+        return (chunk.get("filename") or chunk.get("original_video") or "clip").split("/")[-1]
+    one = " ".join(text.split())
+    if len(one) > 280:
+        one = one[:277].rstrip() + "…"
+    return one
 
 
 def _alert_row(spec: dict, chunk: dict) -> Optional[dict]:
@@ -249,8 +349,10 @@ def _alert_row(spec: dict, chunk: dict) -> Optional[dict]:
     source = _pick_source(chunk, start)
     if not source:
         return None
-    summary = _summary(chunk)
+    caption = _caption(chunk)
+    title, why = _incident(spec, caption)
     site, cam_label = SITE.get(spec["card_id"], ("Site", spec["camera_id"]))
+    original = str(chunk.get("original_video") or chunk.get("filename") or source)
     return {
         "id": f"{spec['kind']}:{chunk.get('original_video')}:{chunk.get('best_segment_number')}",
         "kind": spec["kind"],
@@ -259,11 +361,13 @@ def _alert_row(spec: dict, chunk: dict) -> Optional[dict]:
         "camera_id": spec["camera_id"],
         "site": site,
         "camera_label": cam_label,
-        "title": _title(summary),
-        "summary": summary,
+        "title": title,
+        "why": why,
+        "summary": caption,
         "source": source,
         "clip_url": clip_url(source),
         "filename": (chunk.get("filename") or "").split("/")[-1],
+        "family": _clip_family(original),
         "start_sec": start,
         "end_sec": float(chunk.get("best_match_end_sec") or start),
         "duration_sec": float(chunk.get("chunk_duration_sec") or 0),
@@ -273,13 +377,26 @@ def _alert_row(spec: dict, chunk: dict) -> Optional[dict]:
 
 
 def _summary(chunk: dict) -> str:
-    text = (chunk.get("reasoning_content") or "").strip()
-    if not text:
-        return (chunk.get("filename") or chunk.get("original_video") or "clip").split("/")[-1]
-    one = " ".join(text.split())
-    if len(one) > 160:
-        one = one[:157].rstrip() + "…"
-    return one
+    return _caption(chunk)
+
+
+def _collapse_alerts(items: list[dict]) -> list[dict]:
+    by_family: dict[tuple, dict] = {}
+    for item in sorted(items, key=lambda a: a.get("score") or 0, reverse=True):
+        key = (item.get("kind"), item.get("family") or item.get("source"))
+        if key in by_family:
+            continue
+        by_family[key] = item
+    collapsed = list(by_family.values())
+    seen_kind: set[str] = set()
+    out: list[dict] = []
+    for item in collapsed:
+        kind = str(item.get("kind") or "")
+        if kind in seen_kind:
+            continue
+        seen_kind.add(kind)
+        out.append(item)
+    return out[:3]
 
 
 def _matches_camera(chunk: dict, cam: dict) -> bool:
@@ -343,13 +460,13 @@ def _in_window(
     return parsed >= datetime.now(timezone.utc) - delta
 
 
-def _latest_chunk(
+def _window_chunks(
     cam: dict,
     day: Optional[str] = None,
     time_filter: str = "all",
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
-) -> Optional[dict]:
+) -> list[dict]:
     extra: dict[str, Any] = {}
     if day:
         extra["date"] = day
@@ -377,8 +494,8 @@ def _latest_chunk(
         ]
         if pool:
             pool.sort(key=lambda c: str(c.get("upload_timestamp") or ""), reverse=True)
-            return pool[0]
-    return None
+            return pool
+    return []
 
 
 def _camera_payload(
@@ -390,13 +507,20 @@ def _camera_payload(
 ) -> dict:
     out = _empty_camera(cam)
     try:
-        chunk = _latest_chunk(cam, day, time_filter, custom_start, custom_end)
+        pool = _window_chunks(cam, day, time_filter, custom_start, custom_end)
     except Exception:
         log.exception("explore failed for camera_id=%s", cam["camera_id"])
         return out
-    if not chunk:
+    if not pool:
         return out
+    chunk = pool[0]
     source = _pick_source(chunk, 0)
+    window_dur = 0.0
+    for item in pool:
+        try:
+            window_dur += float(item.get("chunk_duration_sec") or 0)
+        except (TypeError, ValueError):
+            pass
     out.update(
         {
             "source": source,
@@ -404,7 +528,8 @@ def _camera_payload(
             "filename": (chunk.get("filename") or cam["seed"]).split("/")[-1],
             "start_sec": float(chunk.get("best_match_start_sec") or 0),
             "duration_sec": float(chunk.get("chunk_duration_sec") or 0),
-            "reasoning": _summary(chunk),
+            "window_duration_sec": window_dur,
+            "reasoning": _caption(chunk),
             "ok": bool(source),
         }
     )
@@ -420,11 +545,11 @@ def _search_alerts(
 ) -> dict:
     payload: dict[str, Any] = {
         "query": (query or spec["query"]).strip(),
-        "top_k": 8,
-        "llm_top_n": 3,
+        "top_k": 6,
+        "llm_top_n": 1,
         "include_public": True,
         "time_filter": time_filter,
-        "min_similarity": 0.12,
+        "min_similarity": 0.18,
         "metadata_filters": {"camera_id": spec["camera_id"]},
     }
     if time_filter == "custom":
@@ -522,14 +647,7 @@ def api_alerts():
             except Exception:
                 log.exception("alert search failed")
     summaries.sort(key=lambda s: 0 if s.get("kind") == "house" else 1)
-    seen = set()
-    uniq = []
-    for item in sorted(merged, key=lambda a: a.get("score") or 0, reverse=True):
-        key = (item.get("kind"), item.get("source"), round(item.get("start_sec") or 0, 1))
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(item)
+    uniq = _collapse_alerts(merged)
     return jsonify(
         {
             "team": VSS_USERNAME or "unknown",
@@ -537,7 +655,7 @@ def api_alerts():
             "date": day,
             "ask": ask,
             "summaries": summaries,
-            "alerts": uniq[:12],
+            "alerts": uniq,
         }
     )
 

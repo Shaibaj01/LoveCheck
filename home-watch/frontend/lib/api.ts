@@ -9,6 +9,7 @@ export type Camera = {
   source: string;
   start_sec: number;
   duration_sec?: number;
+  window_duration_sec?: number;
   reasoning: string;
   ok: boolean;
 };
@@ -22,6 +23,7 @@ export type AlertItem = {
   site: string;
   camera_label: string;
   title: string;
+  why?: string;
   summary: string;
   source: string;
   start_sec: number;

@@ -35,6 +35,13 @@ function severity(score: number): "high" | "medium" {
   return score >= 0.28 ? "high" : "medium";
 }
 
+function fmtReviewed(sec: number): string {
+  if (!sec) return "—";
+  if (sec < 60) return `${Math.round(sec)} sec`;
+  if (sec < 3600) return `${(sec / 60).toFixed(sec < 600 ? 1 : 0)} min`;
+  return `${(sec / 3600).toFixed(1)} hrs`;
+}
+
 function titleCaseSite(cardId: string, fallback: string): string {
   if (cardId === "indoor") return "Workplace";
   if (cardId === "house") return "Surroundings";
@@ -118,6 +125,9 @@ export function Board() {
         if (cancelled) return;
         setTeam(cams.team || "team");
         setCameras(cams.cameras || []);
+        if (cams.healthy === false) {
+          setError("Cosmos video search was unreachable. Run scan again in a few seconds.");
+        }
       } catch {
         if (!cancelled) setError("Could not load cameras.");
       }
@@ -149,7 +159,10 @@ export function Board() {
     return live.filter((a) => a.card_id === tab);
   }, [tab, live, rejectedItems]);
 
-  const hours = cameras.reduce((n, c) => n + (c.duration_sec || 0), 0) / 3600;
+  const reviewedSec = cameras.reduce(
+    (n, c) => n + (c.window_duration_sec || c.duration_sec || 0),
+    0
+  );
   const open = visible.find((a) => a.id === openId) || visible[0] || null;
 
   function clockLabel(a: AlertItem): string {
@@ -226,7 +239,7 @@ export function Board() {
         <Card className="p-4">
           <div className="text-xs text-muted-foreground">Video reviewed</div>
           <div className="mt-1 text-3xl font-semibold">
-            {hours > 0 ? `${hours.toFixed(1)} hrs` : "—"}
+            {fmtReviewed(reviewedSec)}
           </div>
         </Card>
         <Card className="p-4">
@@ -302,9 +315,7 @@ export function Board() {
                     <Badge variant="safe">Not a risk</Badge>
                     <span className="font-semibold">{a.title}</span>
                   </div>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Cosmos check: {a.summary}
-                  </p>
+                  <p className="mt-2 text-sm">{a.why || a.summary}</p>
                 </Card>
               );
             }
@@ -319,9 +330,14 @@ export function Board() {
                   }}
                   className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left"
                 >
-                  <span className="flex items-center gap-2">
-                    <Badge variant={sev}>{sev.toUpperCase()}</Badge>
-                    <span className="font-semibold">{a.title}</span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <Badge variant={sev}>{sev.toUpperCase()}</Badge>
+                      <span className="font-semibold">{a.title}</span>
+                    </span>
+                    <span className="mt-1 block text-sm text-muted-foreground">
+                      {a.why || a.summary}
+                    </span>
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">{clockLabel(a)}</span>
                 </button>
@@ -368,33 +384,16 @@ export function Board() {
                   playsInline
                 />
                 <p className="mt-3 text-sm">
-                  <span className="font-medium">Cosmos check:</span> {a.summary}
+                  <span className="font-medium">Why flagged:</span> {a.why || a.summary}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Cosmos caption: {a.summary}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Recommended action: review this clip on {titleCaseSite(a.card_id, a.site).toLowerCase()}{" "}
                   and confirm whether anyone is at risk.
                 </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const body = `${a.title}\n${clockLabel(a)}\n\nCosmos check: ${a.summary}\n`;
-                      navigator.clipboard.writeText(body).catch(() => undefined);
-                    }}
-                  >
-                    View incident report
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const body = `LoveCheck incident\n${a.title}\n${clockLabel(a)}\n${a.summary}`;
-                      navigator.clipboard.writeText(body).catch(() => undefined);
-                    }}
-                  >
-                    Send to manager
-                  </Button>
+                <div className="mt-3">
                   <Button
                     variant="ghost"
                     size="sm"
