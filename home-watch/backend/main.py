@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import quote, urljoin
 
@@ -245,7 +246,55 @@ def _window(time_filter: str, day: Optional[str]) -> tuple[str, Optional[str], O
     return tf, None, None
 
 
-def _latest_chunk(cam: dict, day: Optional[str] = None) -> Optional[dict]:
+def _parse_ts(value: Any) -> Optional[datetime]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _in_window(
+    ts: Any,
+    time_filter: str,
+    custom_start: Optional[str],
+    custom_end: Optional[str],
+) -> bool:
+    if time_filter == "all":
+        return True
+    parsed = _parse_ts(ts)
+    if parsed is None:
+        return False
+    if time_filter == "custom":
+        start = _parse_ts(custom_start)
+        end = _parse_ts(custom_end)
+        if not start or not end:
+            return False
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        return start <= parsed <= end
+    delta = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7)}.get(
+        time_filter
+    )
+    if not delta:
+        return True
+    return parsed >= datetime.now(timezone.utc) - delta
+
+
+def _latest_chunk(
+    cam: dict,
+    day: Optional[str] = None,
+    time_filter: str = "all",
+    custom_start: Optional[str] = None,
+    custom_end: Optional[str] = None,
+) -> Optional[dict]:
     extra: dict[str, Any] = {}
     if day:
         extra["date"] = day
@@ -266,16 +315,27 @@ def _latest_chunk(cam: dict, day: Optional[str] = None) -> Optional[dict]:
             for c in chunks
             if (c.get("location") or "").strip().lower() == cam["location"].lower()
         ]
+        pool = [
+            c
+            for c in pool
+            if _in_window(c.get("upload_timestamp"), time_filter, custom_start, custom_end)
+        ]
         if pool:
             pool.sort(key=lambda c: str(c.get("upload_timestamp") or ""), reverse=True)
             return pool[0]
     return None
 
 
-def _camera_payload(cam: dict, day: Optional[str] = None) -> dict:
+def _camera_payload(
+    cam: dict,
+    day: Optional[str] = None,
+    time_filter: str = "all",
+    custom_start: Optional[str] = None,
+    custom_end: Optional[str] = None,
+) -> dict:
     out = _empty_camera(cam)
     try:
-        chunk = _latest_chunk(cam, day)
+        chunk = _latest_chunk(cam, day, time_filter, custom_start, custom_end)
     except Exception:
         log.exception("explore failed for camera_id=%s", cam["camera_id"])
         return out
@@ -340,7 +400,9 @@ def _search_alerts(
                 "score": round(_chunk_score(chunk), 4),
             }
         )
-    if not synthesis and alerts:
+    if not alerts:
+        synthesis = ""
+    elif not synthesis:
         synthesis = alerts[0]["summary"]
     return {
         "kind": spec["kind"],
@@ -360,10 +422,17 @@ def health():
 @app.get("/api/cameras")
 def api_cameras():
     day = (request.args.get("date") or "").strip() or None
+    time_filter, custom_start, custom_end = _window(
+        (request.args.get("time_filter") or "all").strip(),
+        day,
+    )
     errors = 0
     by_id: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futs = {pool.submit(_camera_payload, cam, day): cam for cam in CAMERAS}
+        futs = {
+            pool.submit(_camera_payload, cam, day, time_filter, custom_start, custom_end): cam
+            for cam in CAMERAS
+        }
         for fut in as_completed(futs):
             cam = futs[fut]
             try:

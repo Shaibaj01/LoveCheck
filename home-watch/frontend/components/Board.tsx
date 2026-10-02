@@ -25,10 +25,28 @@ const WINDOWS: { id: TimeFilter; label: string }[] = [
   { id: "all", label: "All" },
 ];
 
-const CAM_META: Record<string, { icon: typeof Home; blurb: string }> = {
-  indoor: { icon: Video, blurb: "Ceiling — display only" },
-  dashcam: { icon: CarFront, blurb: "In the car" },
-  house: { icon: Home, blurb: "Outside the house" },
+const CAM_META: Record<
+  string,
+  { icon: typeof Home; blurb: string; attention: string; pane: string }
+> = {
+  indoor: {
+    icon: Video,
+    blurb: "Ceiling — display only",
+    attention: "Indoor has no occupancy alerts in v1. Watch the clip only.",
+    pane: "bg-sky-500/5",
+  },
+  dashcam: {
+    icon: CarFront,
+    blurb: "In the car",
+    attention: "Hazards in this window for the dashcam.",
+    pane: "bg-amber-500/5",
+  },
+  house: {
+    icon: Home,
+    blurb: "Outside the house",
+    attention: "Presence at the house in this window.",
+    pane: "bg-emerald-500/5",
+  },
 };
 
 function fmtTime(sec: number): string {
@@ -58,6 +76,9 @@ export function Board() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const selected = cameras.find((c) => c.id === selectedId) || cameras[0];
+  const selectedMeta = CAM_META[selectedId] || CAM_META.house;
+  const visibleAlerts = (alerts || []).filter((a) => a.card_id === selectedId);
+  const visibleSummaries = summaries.filter((s) => s.card_id === selectedId);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,12 +93,12 @@ export function Board() {
         setHealthy(!!cams.healthy);
         const list: Camera[] = cams.cameras || [];
         setCameras(list);
-        const first = list.find((c) => c.id === "house") || list[0];
-        setPlayer((cur) => {
-          if (cur) return cur;
-          if (first?.source) return { source: first.source, start: first.start_sec || 0 };
-          return cur;
-        });
+        const current = list.find((c) => c.id === selectedId) || list[0];
+        if (current?.source) {
+          setPlayer({ source: current.source, start: current.start_sec || 0 });
+        } else {
+          setPlayer(null);
+        }
       } catch {
         if (!cancelled) {
           setHealthy(false);
@@ -107,11 +128,12 @@ export function Board() {
     setPlayer({ source, start: startSec });
   }
 
-  function selectCamera(id: string, playDefault = true) {
+  function selectCamera(id: string) {
     setSelectedId(id);
     setActiveAlert(null);
     const cam = cameras.find((c) => c.id === id);
-    if (playDefault && cam?.source) playClip(cam.source, cam.start_sec || 0);
+    if (cam?.source) playClip(cam.source, cam.start_sec || 0);
+    else setPlayer(null);
   }
 
   function onAlert(a: AlertItem) {
@@ -177,7 +199,11 @@ export function Board() {
                   <Button
                     key={cam.id}
                     variant={on ? "default" : "outline"}
-                    className="h-auto w-full justify-start py-2"
+                    aria-current={on ? "page" : undefined}
+                    className={cn(
+                      "h-auto w-full justify-start py-2",
+                      on && "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                    )}
                     onClick={() => selectCamera(cam.id)}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
@@ -201,7 +227,7 @@ export function Board() {
               </span>
             </div>
             <Card className="overflow-hidden">
-              {player?.source ? (
+              {player?.source && selected?.ok ? (
                 <video
                   ref={videoRef}
                   className="aspect-video w-full bg-black"
@@ -218,12 +244,12 @@ export function Board() {
                   }}
                 />
               ) : (
-                <div className="flex aspect-video items-center justify-center text-sm text-muted-foreground">
-                  {error || "No indexed clip for this camera."}
+                <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                  {error || "Nothing in this time window for this camera."}
                 </div>
               )}
             </Card>
-            {selected?.reasoning ? (
+            {selected?.ok && selected?.reasoning ? (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-muted-foreground">Camera summary</CardTitle>
@@ -234,55 +260,71 @@ export function Board() {
           </div>
         </section>
 
-        <aside className="border-t border-border lg:border-l lg:border-t-0">
+        <aside
+          className={cn(
+            "border-t border-border lg:border-l lg:border-t-0",
+            selectedMeta.pane
+          )}
+        >
           <div className="p-3">
-            <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              Needs attention
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              House presence and dashcam hazards in this window. Indoor is watch-only.
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Needs attention
+              </h3>
+              <Badge variant={kindVariant(selectedId === "dashcam" ? "car" : selectedId)}>
+                {selected?.label || selectedId}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{selectedMeta.attention}</p>
           </div>
           <Separator />
           <ScrollArea className="h-[calc(100vh-11rem)]">
             <div className="space-y-3 p-3">
-              {summaries.map((s) => (
-                <Card key={s.kind}>
-                  <CardHeader className="flex-row items-center justify-between space-y-0">
-                    <CardTitle>{s.label} summary</CardTitle>
-                    <Badge variant={kindVariant(s.kind)}>{s.label}</Badge>
-                  </CardHeader>
-                  <CardContent className="text-sm leading-relaxed text-muted-foreground">
-                    {s.text || "No synthesis for this window."}
-                  </CardContent>
-                </Card>
-              ))}
-              {alerts === null ? (
+              {selectedId === "indoor" ? (
+                <p className="text-sm text-muted-foreground">{selectedMeta.attention}</p>
+              ) : alerts === null ? (
                 <p className="text-sm text-muted-foreground">Loading alerts…</p>
-              ) : alerts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Nothing ranked in this window for house or dashcam.
-                </p>
               ) : (
-                alerts.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => onAlert(a)}
-                    className={cn(
-                      "w-full rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary",
-                      activeAlert === a.id && "border-primary"
-                    )}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <Badge variant={kindVariant(a.kind)}>{a.label}</Badge>
-                      <span className="text-[11px] text-muted-foreground">
-                        {fmtTime(a.start_sec)} · clip
-                      </span>
-                    </div>
-                    <div className="text-sm leading-snug">{a.summary}</div>
-                  </button>
-                ))
+                <>
+                  {visibleSummaries
+                    .filter((s) => s.text)
+                    .map((s) => (
+                      <Card key={s.kind} className="border-primary/40">
+                        <CardHeader className="flex-row items-center justify-between space-y-0">
+                          <CardTitle>{s.label} summary</CardTitle>
+                          <Badge variant={kindVariant(s.kind)}>{s.label}</Badge>
+                        </CardHeader>
+                        <CardContent className="text-sm leading-relaxed text-muted-foreground">
+                          {s.text}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  {visibleAlerts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Nothing in this time window for {selected?.label || "this camera"}.
+                    </p>
+                  ) : (
+                    visibleAlerts.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => onAlert(a)}
+                        className={cn(
+                          "w-full rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary",
+                          activeAlert === a.id && "border-primary ring-2 ring-primary/60"
+                        )}
+                      >
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <Badge variant={kindVariant(a.kind)}>{a.label}</Badge>
+                          <span className="text-[11px] text-muted-foreground">
+                            {fmtTime(a.start_sec)} · clip
+                          </span>
+                        </div>
+                        <div className="text-sm leading-snug">{a.summary}</div>
+                      </button>
+                    ))
+                  )}
+                </>
               )}
             </div>
           </ScrollArea>
