@@ -4,13 +4,13 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Home Watch",
-  description: "Three-camera attention board",
+  description: "Jump to the clip that needs a look — house and dashcam, not three live feeds.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className="dark">
+      <body className="min-h-screen">{children}</body>
     </html>
   );
 }

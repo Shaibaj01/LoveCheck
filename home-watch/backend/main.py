@@ -237,10 +237,21 @@ def _matches_camera(chunk: dict, cam: dict) -> bool:
     return cam["seed"] in blob
 
 
-def _latest_chunk(cam: dict) -> Optional[dict]:
+def _window(time_filter: str, day: Optional[str]) -> tuple[str, Optional[str], Optional[str]]:
+    allowed = {"all", "1h", "24h", "7d", "custom"}
+    if day:
+        return "custom", f"{day}T00:00:00", f"{day}T23:59:59"
+    tf = time_filter if time_filter in allowed else "all"
+    return tf, None, None
+
+
+def _latest_chunk(cam: dict, day: Optional[str] = None) -> Optional[dict]:
+    extra: dict[str, Any] = {}
+    if day:
+        extra["date"] = day
     tries = [
-        {"location": cam["location"], "limit": 48},
-        {"limit": 48},
+        {"location": cam["location"], "limit": 48, **extra},
+        {"limit": 48, **extra},
     ]
     for params in tries:
         data = vss_json(
@@ -261,10 +272,10 @@ def _latest_chunk(cam: dict) -> Optional[dict]:
     return None
 
 
-def _camera_payload(cam: dict) -> dict:
+def _camera_payload(cam: dict, day: Optional[str] = None) -> dict:
     out = _empty_camera(cam)
     try:
-        chunk = _latest_chunk(cam)
+        chunk = _latest_chunk(cam, day)
     except Exception:
         log.exception("explore failed for camera_id=%s", cam["camera_id"])
         return out
@@ -284,21 +295,29 @@ def _camera_payload(cam: dict) -> dict:
     return out
 
 
-def _search_alerts(spec: dict) -> list[dict]:
-    data = vss_json(
-        "POST",
-        "/api/v1/search",
-        json={
-            "query": spec["query"],
-            "top_k": 8,
-            "llm_top_n": 1,
-            "include_public": True,
-            "time_filter": "all",
-            "min_similarity": 0.12,
-            "metadata_filters": {"camera_id": spec["camera_id"]},
-        },
-        timeout=120,
-    ) or {}
+def _search_alerts(
+    spec: dict,
+    time_filter: str,
+    custom_start: Optional[str],
+    custom_end: Optional[str],
+) -> dict:
+    payload: dict[str, Any] = {
+        "query": spec["query"],
+        "top_k": 8,
+        "llm_top_n": 3,
+        "include_public": True,
+        "time_filter": time_filter,
+        "min_similarity": 0.12,
+        "metadata_filters": {"camera_id": spec["camera_id"]},
+    }
+    if time_filter == "custom":
+        payload["custom_start_date"] = custom_start
+        payload["custom_end_date"] = custom_end
+    data = vss_json("POST", "/api/v1/search", json=payload, timeout=120) or {}
+    llm = data.get("llm_synthesis") or {}
+    synthesis = ""
+    if isinstance(llm, dict):
+        synthesis = (llm.get("response") or "").strip()
     alerts = []
     for chunk in data.get("chunk_results") or []:
         start = float(chunk.get("best_match_start_sec") or 0)
@@ -321,7 +340,15 @@ def _search_alerts(spec: dict) -> list[dict]:
                 "score": round(_chunk_score(chunk), 4),
             }
         )
-    return alerts
+    if not synthesis and alerts:
+        synthesis = alerts[0]["summary"]
+    return {
+        "kind": spec["kind"],
+        "label": spec["label"],
+        "card_id": spec["card_id"],
+        "text": synthesis,
+        "alerts": alerts,
+    }
 
 
 @app.get("/health")
@@ -332,10 +359,11 @@ def health():
 
 @app.get("/api/cameras")
 def api_cameras():
+    day = (request.args.get("date") or "").strip() or None
     errors = 0
     by_id: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futs = {pool.submit(_camera_payload, cam): cam for cam in CAMERAS}
+        futs = {pool.submit(_camera_payload, cam, day): cam for cam in CAMERAS}
         for fut in as_completed(futs):
             cam = futs[fut]
             try:
@@ -357,14 +385,33 @@ def api_cameras():
 
 @app.get("/api/alerts")
 def api_alerts():
+    day = (request.args.get("date") or "").strip() or None
+    time_filter, custom_start, custom_end = _window(
+        (request.args.get("time_filter") or "24h").strip(),
+        day,
+    )
     merged: list[dict] = []
+    summaries: list[dict] = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futs = [pool.submit(_search_alerts, spec) for spec in ALERT_SEARCHES]
+        futs = [
+            pool.submit(_search_alerts, spec, time_filter, custom_start, custom_end)
+            for spec in ALERT_SEARCHES
+        ]
         for fut in as_completed(futs):
             try:
-                merged.extend(fut.result())
+                pack = fut.result()
+                summaries.append(
+                    {
+                        "kind": pack["kind"],
+                        "label": pack["label"],
+                        "card_id": pack["card_id"],
+                        "text": pack["text"],
+                    }
+                )
+                merged.extend(pack["alerts"])
             except Exception:
                 log.exception("alert search failed")
+    summaries.sort(key=lambda s: 0 if s.get("kind") == "house" else 1)
     seen = set()
     uniq = []
     for item in sorted(merged, key=lambda a: a.get("score") or 0, reverse=True):
@@ -373,7 +420,15 @@ def api_alerts():
             continue
         seen.add(key)
         uniq.append(item)
-    return jsonify({"team": VSS_USERNAME or "unknown", "alerts": uniq[:12]})
+    return jsonify(
+        {
+            "team": VSS_USERNAME or "unknown",
+            "time_filter": time_filter,
+            "date": day,
+            "summaries": summaries,
+            "alerts": uniq[:12],
+        }
+    )
 
 
 @app.get("/api/clip")
