@@ -6,24 +6,28 @@ Work out of `home-watch/` in this repo. Do **not** modify the official Angular r
 
 ```mermaid
 flowchart LR
-  UI[HomeWatch_page]
-  App[Flask_home-watch]
+  UI[Next.js_frontend]
+  App[Flask_backend]
   VSS[Team_VSS]
-  UI -->|GET /api/cameras /api/alerts /api/clip| App
+  UI -->|GET /app/api/cameras /alerts /clip| App
   App -->|login explore search stream JWT| VSS
 ```
 
+## Layout
+
+- `home-watch/backend/` — Flask API (`main.py`). Does not serve UI.
+- `home-watch/frontend/` — Next.js App Router (`basePath: /app`). Local `next dev` rewrites `/app/api/*` and `/app/health` to Flask on `:8080`.
+
 ## Backend
 
-Flask (`main.py`) on `0.0.0.0:$PORT`. Env: `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`. Cache a JWT; re-login on 401. Do not log tokens or passwords.
+Flask (`backend/main.py`) on `0.0.0.0:$PORT`. Env: `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`. Cache a JWT; re-login on 401. Do not log tokens or passwords.
 
 | Route | Behavior |
 |-------|----------|
-| `GET /` | Static ops board |
 | `GET /health` | Liveness |
-| `GET /api/cameras` | Latest indexed clip per pinned `camera_id` via Explore; returns labels + `/api/clip?...` playback src |
+| `GET /api/cameras` | Latest indexed clip per pinned `camera_id` via Explore; returns labels + clip source |
 | `GET /api/alerts` | Two VSS searches, merged: house presence (`neighborhood_cam-1`), dashcam hazard (`pie_cam-3`) |
-| `GET /api/clip` | Redirect or proxy `GET /api/v1/videos/stream?source=…&token=JWT` so the `<video>` tag never calls VSS with a raw token |
+| `GET /api/clip` | Proxy `GET /api/v1/videos/stream?source=…&token=JWT` so the `<video>` tag never calls VSS with a raw token |
 
 There is no VSS `/alerts` route. Alerts are our ranking of search `chunk_results` (`reasoning_content`, timestamps, camera, clip). JWT stays on the server (clip URL is our route).
 
@@ -60,7 +64,7 @@ Alert queries (server-side):
 
 ## Deploy
 
-Follow the deploy-app-no-registry skill: ConfigMap of `home-watch/`, Secret from `/config/team-44.config`, Deployment `python:3.12-slim`, Ingress `/app` on `video-lab-team-44.cosmos.vastdata.com`. Namespace `team-44`. Kubeconfig: `/config/team-44-k8s.yaml`. Locate `kubectl` before apply. Keep the app under ~1 MiB. Flask + `requests` only.
+Follow the deploy-app-no-registry skill. Backend: ConfigMap of `home-watch/backend/`, Secret from `/config/team-44.config`, Deployment `python:3.12-slim`. Frontend: Next.js (`node:22-slim`) with Ingress `/app` on `video-lab-team-44.cosmos.vastdata.com`. Namespace `team-44`. Kubeconfig: `/config/team-44-k8s.yaml`. Locate `kubectl` before apply. Do not put `node_modules` or `.next` in a ConfigMap. Flask + `requests` on the API; Next.js is the UI.
 
 Public URL: `http://video-lab-team-44.cosmos.vastdata.com/app`
 
